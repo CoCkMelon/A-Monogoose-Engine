@@ -10,6 +10,7 @@
 #else
 #include <GL/gl.h>
 #endif
+#include <stddef.h>
 
 // Minimal set of OpenGL 4.5 function pointers we need
 // We keep prototypes compatible with GL core profile
