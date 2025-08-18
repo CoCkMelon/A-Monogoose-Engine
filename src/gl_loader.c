@@ -32,15 +32,27 @@ PFNGLUSEPROGRAMPROC glUseProgram_ = NULL;
 
 PFNGLGETUNIFORMLOCATIONPROC glGetUniformLocation_ = NULL;
 PFNGLUNIFORMMATRIX4FVPROC glUniformMatrix4fv_ = NULL;
+PFNGLUNIFORM1FPROC glUniform1f_ = NULL;
+PFNGLUNIFORM2FPROC glUniform2f_ = NULL;
+PFNGLUNIFORM3FPROC glUniform3f_ = NULL;
 PFNGLUNIFORM4FPROC glUniform4f_ = NULL;
+PFNGLUNIFORM1IPROC glUniform1i_ = NULL;
 
 PFNGLVERTEXATTRIBPOINTERPROC glVertexAttribPointer_ = NULL;
 PFNGLENABLEVERTEXATTRIBARRAYPROC glEnableVertexAttribArray_ = NULL;
+PFNGLDISABLEVERTEXATTRIBARRAYPROC glDisableVertexAttribArray_ = NULL;
 
 PFNGLBINDVERTEXBUFFERPROC glBindVertexBuffer_ = NULL;
 
 PFNGLGETINTEGERVPROC glGetIntegerv_ = NULL;
 PFNGLPOLYGONMODEPROC glPolygonMode_ = NULL;
+
+PFNGLGENTEXTURESPROC glGenTextures_ = NULL;
+PFNGLDELETETEXTURESPROC glDeleteTextures_ = NULL;
+PFNGLBINDTEXTUREPROC glBindTexture_ = NULL;
+PFNGLTEXPARAMETERIPROC glTexParameteri_ = NULL;
+PFNGLTEXIMAGE2DPROC glTexImage2D_ = NULL;
+PFNGLACTIVETEXTUREPROC glActiveTexture_ = NULL;
 
 bool gl_load_all(SDL_FunctionPointer (*get_proc)(const char*)) {
     (void)get_proc; // We will use SDL_GL_GetProcAddress directly
@@ -68,16 +80,29 @@ bool gl_load_all(SDL_FunctionPointer (*get_proc)(const char*)) {
     LOAD(glUseProgram);
 
     LOAD(glGetUniformLocation);
-    LOAD(glUniformMatrix4fv);
-    LOAD(glUniform4f);
+LOAD(glUniformMatrix4fv);
+LOAD(glUniform1f);
+LOAD(glUniform2f);
+LOAD(glUniform3f);
+LOAD(glUniform4f);
+LOAD(glUniform1i);
 
     LOAD(glVertexAttribPointer);
     LOAD(glEnableVertexAttribArray);
+    LOAD(glDisableVertexAttribArray);
 
     LOAD(glBindVertexBuffer);
 
     LOAD(glGetIntegerv);
     LOAD(glPolygonMode);
+
+    // Textures
+    LOAD(glGenTextures);
+    LOAD(glDeleteTextures);
+    LOAD(glBindTexture);
+    LOAD(glTexParameteri);
+    LOAD(glTexImage2D);
+    LOAD(glActiveTexture);
 
     // Minimal validation: ensure a few critical pointers are loaded
     return glGenVertexArrays_ && glCreateShader_ && glCreateProgram_ && glBufferData_ && glVertexAttribPointer_;

@@ -11,8 +11,7 @@ find_package(SDL3 REQUIRED)
 find_package(OpenGL REQUIRED)
 find_package(Threads REQUIRED)
 find_package(PkgConfig REQUIRED)
-# SDL3_TTF is optional, only needed for some examples
-pkg_check_modules(SDL3_TTF SDL3_ttf)
+find_package(SDL3_ttf REQUIRED)
 
 # Bring in the sibling asyncinput library for examples
 add_subdirectory(${CMAKE_CURRENT_LIST_DIR}/../asyncinput ${CMAKE_CURRENT_BINARY_DIR}/asyncinput_build)
@@ -62,7 +61,7 @@ add_executable(raymarch_arcade
 )
 
 # Example: text_editor (requires SDL3_ttf)
-if(SDL3_TTF_FOUND)
+#if(SDL3_TTF_FOUND)
     add_executable(text_editor
         examples/text_editor/main.c
     )
@@ -73,13 +72,12 @@ if(SDL3_TTF_FOUND)
         target_link_libraries(text_editor PRIVATE GL)
     endif()
 
-    target_include_directories(text_editor PRIVATE ${SDL3_TTF_INCLUDE_DIRS})
-    target_link_libraries(text_editor PRIVATE SDL3::SDL3 Threads::Threads ame ${SDL3_TTF_LIBRARIES})
+    target_link_libraries(text_editor PRIVATE SDL3::SDL3 Threads::Threads ame SDL3_ttf::SDL3_ttf)
 
     if(UNIX AND NOT APPLE)
         target_link_libraries(text_editor PRIVATE dl)
     endif()
-endif()
+    #endif()
 
 # Prefer the shared lib if enabled, fall back to static otherwise
 if(TARGET asyncinput_shared)

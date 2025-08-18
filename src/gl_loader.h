@@ -40,16 +40,29 @@ typedef void (APIENTRYP PFNGLUSEPROGRAMPROC)(GLuint program);
 
 typedef GLint (APIENTRYP PFNGLGETUNIFORMLOCATIONPROC)(GLuint program, const char* name);
 typedef void (APIENTRYP PFNGLUNIFORMMATRIX4FVPROC)(GLint location, GLsizei count, GLboolean transpose, const float* value);
+typedef void (APIENTRYP PFNGLUNIFORM1FPROC)(GLint location, float v0);
+typedef void (APIENTRYP PFNGLUNIFORM2FPROC)(GLint location, float v0, float v1);
+typedef void (APIENTRYP PFNGLUNIFORM3FPROC)(GLint location, float v0, float v1, float v2);
 typedef void (APIENTRYP PFNGLUNIFORM4FPROC)(GLint location, float v0, float v1, float v2, float v3);
+typedef void (APIENTRYP PFNGLUNIFORM1IPROC)(GLint location, int v0);
 
 typedef void (APIENTRYP PFNGLVERTEXATTRIBPOINTERPROC)(GLuint index, GLint size, GLenum type, GLboolean normalized, GLsizei stride, const void* pointer);
 typedef void (APIENTRYP PFNGLENABLEVERTEXATTRIBARRAYPROC)(GLuint index);
+typedef void (APIENTRYP PFNGLDISABLEVERTEXATTRIBARRAYPROC)(GLuint index);
 
 typedef void (APIENTRYP PFNGLBINDVERTEXBUFFERPROC)(GLuint bindingindex, GLuint buffer, ptrdiff_t offset, GLsizei stride);
 
 typedef void (APIENTRYP PFNGLGETINTEGERVPROC)(GLenum pname, GLint* data);
 
 typedef void (APIENTRYP PFNGLPOLYGONMODEPROC)(GLenum face, GLenum mode);
+
+// Texture functions
+typedef void (APIENTRYP PFNGLGENTEXTURESPROC)(GLsizei n, GLuint* textures);
+typedef void (APIENTRYP PFNGLDELETETEXTURESPROC)(GLsizei n, const GLuint* textures);
+typedef void (APIENTRYP PFNGLBINDTEXTUREPROC)(GLenum target, GLuint texture);
+typedef void (APIENTRYP PFNGLTEXPARAMETERIPROC)(GLenum target, GLenum pname, GLint param);
+typedef void (APIENTRYP PFNGLTEXIMAGE2DPROC)(GLenum target, GLint level, GLint internalformat, GLsizei width, GLsizei height, GLint border, GLenum format, GLenum type, const void* pixels);
+typedef void (APIENTRYP PFNGLACTIVETEXTUREPROC)(GLenum texture);
 
 typedef void* (APIENTRYP PFNGLGETPROCADDRESS)(const char*);
 
@@ -78,15 +91,27 @@ extern PFNGLUSEPROGRAMPROC glUseProgram_;
 
 extern PFNGLGETUNIFORMLOCATIONPROC glGetUniformLocation_;
 extern PFNGLUNIFORMMATRIX4FVPROC glUniformMatrix4fv_;
+extern PFNGLUNIFORM1FPROC glUniform1f_;
+extern PFNGLUNIFORM2FPROC glUniform2f_;
+extern PFNGLUNIFORM3FPROC glUniform3f_;
 extern PFNGLUNIFORM4FPROC glUniform4f_;
+extern PFNGLUNIFORM1IPROC glUniform1i_;
 
 extern PFNGLVERTEXATTRIBPOINTERPROC glVertexAttribPointer_;
 extern PFNGLENABLEVERTEXATTRIBARRAYPROC glEnableVertexAttribArray_;
+extern PFNGLDISABLEVERTEXATTRIBARRAYPROC glDisableVertexAttribArray_;
 
 extern PFNGLBINDVERTEXBUFFERPROC glBindVertexBuffer_;
 
 extern PFNGLGETINTEGERVPROC glGetIntegerv_;
 extern PFNGLPOLYGONMODEPROC glPolygonMode_;
+
+extern PFNGLGENTEXTURESPROC glGenTextures_;
+extern PFNGLDELETETEXTURESPROC glDeleteTextures_;
+extern PFNGLBINDTEXTUREPROC glBindTexture_;
+extern PFNGLTEXPARAMETERIPROC glTexParameteri_;
+extern PFNGLTEXIMAGE2DPROC glTexImage2D_;
+extern PFNGLACTIVETEXTUREPROC glActiveTexture_;
 
 bool gl_load_all(SDL_FunctionPointer (*get_proc)(const char*));
 

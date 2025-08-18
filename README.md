@@ -21,6 +21,9 @@ Running
 From the build directory:
 ./curve_paint
 
+Roadmap
+See docs/ROADMAP.md for the long-term plan and the current short-term focus on exploring gameplay without scene files or physics.
+
 Notes
 - Mirrors SDL3 callback style (SDL_AppInit/Event/Iterate/Quit) similar to asyncinput/examples/sdl3_clear.c.
 - Uses asyncinput (../asyncinput) as a subdirectory build and links against it.
