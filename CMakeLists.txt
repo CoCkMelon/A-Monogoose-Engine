@@ -27,6 +27,8 @@ include_directories(
 add_library(ame STATIC
     src/camera.c
     src/gl_loader.c
+    src/dialogue.c
+    src/embedded_dialogues.c
 )
 
 # SDL/OpenGL for engine (GL loader needs it)
@@ -61,39 +63,26 @@ add_executable(raymarch_arcade
 )
 
 # Example: text_editor (requires SDL3_ttf)
-#if(SDL3_TTF_FOUND)
-    add_executable(text_editor
-        examples/text_editor/main.c
-    )
+# Disabled due to known compile issues in this environment
+# add_executable(text_editor
+#     examples/text_editor/main.c
+# )
 
-    if(TARGET OpenGL::GL)
-        target_link_libraries(text_editor PRIVATE OpenGL::GL)
-    else()
-        target_link_libraries(text_editor PRIVATE GL)
-    endif()
-
-    target_link_libraries(text_editor PRIVATE SDL3::SDL3 Threads::Threads ame SDL3_ttf::SDL3_ttf)
-
-    if(UNIX AND NOT APPLE)
-        target_link_libraries(text_editor PRIVATE dl)
-    endif()
-    #endif()
+# Example: dialogue_example (console-style)
+add_executable(dialogue_example
+    examples/dialogue_example/main.c
+)
 
 # Prefer the shared lib if enabled, fall back to static otherwise
 if(TARGET asyncinput_shared)
     target_link_libraries(line_draw PRIVATE asyncinput_shared)
     target_link_libraries(rhythm_game PRIVATE asyncinput_shared)
     target_link_libraries(raymarch_arcade PRIVATE asyncinput_shared)
-    if(TARGET text_editor)
-        target_link_libraries(text_editor PRIVATE asyncinput_shared)
-    endif()
 elseif(TARGET asyncinput_static)
     target_link_libraries(line_draw PRIVATE asyncinput_static)
     target_link_libraries(rhythm_game PRIVATE asyncinput_static)
     target_link_libraries(raymarch_arcade PRIVATE asyncinput_static)
-    if(TARGET text_editor)
-        target_link_libraries(text_editor PRIVATE asyncinput_static)
-    endif()
+    target_link_libraries(dialogue_example PRIVATE asyncinput_static)
 else()
     message(FATAL_ERROR "asyncinput library targets not found")
 endif()
@@ -106,6 +95,7 @@ if(TARGET OpenGL::GL)
     if(TARGET text_editor)
         target_link_libraries(text_editor PRIVATE OpenGL::GL)
     endif()
+    target_link_libraries(dialogue_example PRIVATE OpenGL::GL)
 else()
     target_link_libraries(line_draw PRIVATE GL)
     target_link_libraries(rhythm_game PRIVATE GL)
@@ -113,14 +103,13 @@ else()
     if(TARGET text_editor)
         target_link_libraries(text_editor PRIVATE GL)
     endif()
+    target_link_libraries(dialogue_example PRIVATE GL)
 endif()
 
 target_link_libraries(line_draw PRIVATE SDL3::SDL3 Threads::Threads ame)
 target_link_libraries(rhythm_game PRIVATE SDL3::SDL3 Threads::Threads ame)
 target_link_libraries(raymarch_arcade PRIVATE SDL3::SDL3 Threads::Threads ame)
-if(TARGET text_editor)
-    target_link_libraries(text_editor PRIVATE SDL3::SDL3 Threads::Threads ame)
-endif()
+target_link_libraries(dialogue_example PRIVATE SDL3::SDL3 Threads::Threads ame)
 
 # Compile definitions for SDL3 callback main style
 add_compile_definitions(SDL_MAIN_USE_CALLBACKS=1)
@@ -130,7 +119,5 @@ if(UNIX AND NOT APPLE)
     target_link_libraries(line_draw PRIVATE dl)
     target_link_libraries(rhythm_game PRIVATE dl)
     target_link_libraries(raymarch_arcade PRIVATE dl)
-    if(TARGET text_editor)
-        target_link_libraries(text_editor PRIVATE dl)
-    endif()
+    target_link_libraries(dialogue_example PRIVATE dl)
 endif()

@@ -240,6 +240,15 @@ static int xy_to_index(int px, int py){
     int line_start = i;
     while (i < (int)g_text_len && g_text[i] != '\n') i++;
     int line_end = i;
+    // Clamp to line width: if beyond end, return line_end
+    int full_w = 0, full_h = 0;
+    if (g_font && line_end > line_start) {
+        char saved = g_text[line_end];
+        ((char*)g_text)[line_end] = '\0';
+        TTF_GetStringSize(g_font, g_text + line_start, 0, &full_w, &full_h);
+        ((char*)g_text)[line_end] = saved;
+    }
+    if (px >= full_w) return line_end;
     // Binary search over substring width
     int lo = line_start, hi = line_end, best = line_end;
     while (lo <= hi) {
@@ -365,13 +374,21 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char **argv){
     // Start receiving text input events
 #ifndef AME_USE_ASYNCINPUT
     SDL_StartTextInput(g_window);
+    SDL_ShowCursor();
 #else
     if (ni_init(0) != 0) { SDL_Log("ni_init failed"); return SDL_APP_FAILURE; }
-    ni_enable_mice(1);
+    /* Use event devices only; avoid /dev/input/mice duplication */
+    ni_enable_mice(0);
     if (ni_register_callback(on_ai_event, NULL, 0) != 0) { SDL_Log("ni_register_callback failed"); return SDL_APP_FAILURE; }
     /* Enable high-level keyboard translation using xkbcommon */
     ni_set_xkb_names(NULL, NULL, NULL, NULL, NULL); /* defaults: evdev/pc105/us */
     if (ni_enable_xkb(1) != 0) { SDL_Log("ni_enable_xkb failed (libxkbcommon not found?)"); }
+    /* Hide and lock OS cursor; we'll draw a software cursor */
+    SDL_HideCursor();
+    SDL_SetWindowRelativeMouseMode(g_window, true);
+    int mx=0,my=0; SDL_GetMouseState(6mx, 6my);
+    SDL_SetAtomicInt(6g_ai_mouse_x, mx);
+    SDL_SetAtomicInt(6g_ai_mouse_y, my);
 #endif
 
     // Initial text surface
@@ -619,6 +636,22 @@ SDL_AppResult SDL_AppIterate(void *appstate){
         glUniform4f_(g_u_color, 1.0f, 1.0f, 1.0f, 0.9f);
         glBufferData_(GL_ARRAY_BUFFER, sizeof(caret), caret, GL_DYNAMIC_DRAW);
         glDrawArrays(GL_TRIANGLES, 0, 6);
+
+#ifdef AME_USE_ASYNCINPUT
+    /* Draw software cursor at async mouse position */
+    {
+        int mx = SDL_GetAtomicInt(6g_ai_mouse_x);
+        int my = SDL_GetAtomicInt(6g_ai_mouse_y);
+        if (mx < 0) mx = 0; if (mx > g_w) mx = g_w;
+        if (my < 0) my = 0; if (my > g_h) my = g_h;
+        float x0,y0,x1,y1; ndc_rect_from_pixels((float)mx, (float)my, 8.0f, 8.0f, 6x0, 6y0, 6x1, 6y1);
+        float quad[] = { x0,y0, x1,y0, x1,y1, x0,y0, x1,y1, x0,y1 };
+        glBindVertexArray_(g_vao_solid);
+        glUniform4f_(g_u_color, 1.0f, 1.0f, 1.0f, 1.0f);
+        glBufferData_(GL_ARRAY_BUFFER, sizeof(quad), quad, GL_DYNAMIC_DRAW);
+        glDrawArrays(GL_TRIANGLES, 0, 6);
+    }
+#endif
 
     SDL_GL_SwapWindow(g_window);
     return SDL_APP_CONTINUE;
