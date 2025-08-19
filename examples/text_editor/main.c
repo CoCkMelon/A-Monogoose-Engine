@@ -9,9 +9,11 @@
 
 #include "gl_loader.h"
 
-// #define AME_USE_ASYNCINPUT
+#define AME_USE_ASYNCINPUT
 #ifdef AME_USE_ASYNCINPUT
 #include "asyncinput.h"
+/* For keysym constants like XKB_KEY_Left, XKB_KEY_Return */
+#include <xkbcommon/xkbcommon-keysyms.h>
 #endif
 
 static SDL_Window* g_window = NULL;
@@ -367,6 +369,9 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char **argv){
     if (ni_init(0) != 0) { SDL_Log("ni_init failed"); return SDL_APP_FAILURE; }
     ni_enable_mice(1);
     if (ni_register_callback(on_ai_event, NULL, 0) != 0) { SDL_Log("ni_register_callback failed"); return SDL_APP_FAILURE; }
+    /* Enable high-level keyboard translation using xkbcommon */
+    ni_set_xkb_names(NULL, NULL, NULL, NULL, NULL); /* defaults: evdev/pc105/us */
+    if (ni_enable_xkb(1) != 0) { SDL_Log("ni_enable_xkb failed (libxkbcommon not found?)"); }
 #endif
 
     // Initial text surface
@@ -460,6 +465,40 @@ SDL_AppResult SDL_AppIterate(void *appstate){
             g_mouse_y = SDL_GetAtomicInt(&g_ai_mouse_y);
             g_caret = xy_to_index(g_mouse_x, g_mouse_y);
             g_sel_end = g_caret; g_sel_active = 1;
+        }
+        /* Poll translated key events and update text/navigation */
+        struct ni_key_event kev[32];
+        int kn = ni_poll_key_events(kev, 32);
+        for (int i = 0; i < kn; i++) {
+            if (kev[i].down) {
+                if (kev[i].text[0] != '\0') {
+                    /* Insert UTF-8 text */
+                    text_insert(kev[i].text);
+                } else {
+                    switch (kev[i].keysym) {
+                        case XKB_KEY_BackSpace: text_backspace(); break;
+                        case XKB_KEY_Left:
+                            if (g_caret > 0) { g_caret--; clear_selection(); }
+                            break;
+                        case XKB_KEY_Right:
+                            if (g_caret < (int)g_text_len) { g_caret++; clear_selection(); }
+                            break;
+                        case XKB_KEY_Home:
+                            g_caret = 0; clear_selection();
+                            break;
+                        case XKB_KEY_End:
+                            g_caret = (int)g_text_len; clear_selection();
+                            break;
+                        case XKB_KEY_Return:
+                        case XKB_KEY_KP_Enter:
+                            text_insert("\n");
+                            break;
+                        case XKB_KEY_Escape:
+                            return SDL_APP_SUCCESS;
+                        default: break;
+                    }
+                }
+            }
         }
     }
 #endif
