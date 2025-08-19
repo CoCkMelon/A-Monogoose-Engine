@@ -471,32 +471,106 @@ SDL_AppResult SDL_AppIterate(void *appstate){
         int kn = ni_poll_key_events(kev, 32);
         for (int i = 0; i < kn; i++) {
             if (kev[i].down) {
-                if (kev[i].text[0] != '\0') {
-                    /* Insert UTF-8 text */
-                    text_insert(kev[i].text);
-                } else {
-                    switch (kev[i].keysym) {
-                        case XKB_KEY_BackSpace: text_backspace(); break;
-                        case XKB_KEY_Left:
-                            if (g_caret > 0) { g_caret--; clear_selection(); }
-                            break;
-                        case XKB_KEY_Right:
-                            if (g_caret < (int)g_text_len) { g_caret++; clear_selection(); }
-                            break;
-                        case XKB_KEY_Home:
-                            g_caret = 0; clear_selection();
-                            break;
-                        case XKB_KEY_End:
-                            g_caret = (int)g_text_len; clear_selection();
-                            break;
-                        case XKB_KEY_Return:
-                        case XKB_KEY_KP_Enter:
-                            text_insert("\n");
-                            break;
-                        case XKB_KEY_Escape:
-                            return SDL_APP_SUCCESS;
-                        default: break;
+                /* Handle control keys by keysym first to avoid inserting control chars from kev.text */
+                switch (kev[i].keysym) {
+                    case XKB_KEY_Return:
+                    case XKB_KEY_KP_Enter:
+                        text_insert("\n");
+                        continue;
+                    case XKB_KEY_BackSpace:
+                        text_backspace();
+                        continue;
+                    default: break;
+                }
+                /* Navigation and editing with modifiers */
+                int with_shift = (kev[i].mods & NI_KMOD_SHIFT) != 0;
+                int with_ctrl  = (kev[i].mods & NI_KMOD_CTRL) != 0;
+                switch (kev[i].keysym) {
+                    case XKB_KEY_Left: {
+                        if (with_ctrl) {
+                            /* move to previous word */
+                            int j = g_caret;
+                            if (j > 0) j--;
+                            while (j > 0 && (g_text[j] == ' ' || g_text[j] == '\n' || g_text[j] == '\t')) j--;
+                            while (j > 0) {
+                                char c = g_text[j-1];
+                                if (!((c >= '0' && c <= '9') || (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || c == '_')) break;
+                                j--;
+                            }
+                            g_caret = j;
+                        } else {
+                            if (g_caret > 0) g_caret--;
+                        }
+                        if (with_shift) { g_sel_active = 1; g_sel_end = g_caret; }
+                        else { clear_selection(); }
+                        continue;
                     }
+                    case XKB_KEY_Right: {
+                        if (with_ctrl) {
+                            /* move to next word */
+                            int n = (int)g_text_len;
+                            int j = g_caret;
+                            while (j < n && (g_text[j] == ' ' || g_text[j] == '\n' || g_text[j] == '\t')) j++;
+                            while (j < n) {
+                                char c = g_text[j];
+                                if (!((c >= '0' && c <= '9') || (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || c == '_')) break;
+                                j++;
+                            }
+                            g_caret = j;
+                        } else {
+                            if (g_caret < (int)g_text_len) g_caret++;
+                        }
+                        if (with_shift) { g_sel_active = 1; g_sel_end = g_caret; }
+                        else { clear_selection(); }
+                        continue;
+                    }
+                    case XKB_KEY_Home:
+                        g_caret = 0; if (with_shift) { g_sel_active = 1; g_sel_end = g_caret; } else { clear_selection(); } continue;
+                    case XKB_KEY_End:
+                        g_caret = (int)g_text_len; if (with_shift) { g_sel_active = 1; g_sel_end = g_caret; } else { clear_selection(); } continue;
+                    case XKB_KEY_Escape:
+                        return SDL_APP_SUCCESS;
+                    case XKB_KEY_c:
+                    case XKB_KEY_C:
+                        if (with_ctrl) {
+                            if (g_sel_active && g_sel_start != g_sel_end) {
+                                int s = g_sel_start, e = g_sel_end; if (s > e) { int t=s; s=e; e=t; }
+                                int len = e - s; if (len < 0) len = 0; if (len > 0) {
+                                    char *tmp = (char*)SDL_malloc((size_t)len + 1);
+                                    if (tmp) { memcpy(tmp, g_text + s, (size_t)len); tmp[len] = '\0'; SDL_SetClipboardText(tmp); SDL_free(tmp); }
+                                }
+                            }
+                            continue;
+                        }
+                        break;
+                    case XKB_KEY_x:
+                    case XKB_KEY_X:
+                        if (with_ctrl) {
+                            if (g_sel_active && g_sel_start != g_sel_end) {
+                                int s = g_sel_start, e = g_sel_end; if (s > e) { int t=s; s=e; e=t; }
+                                int len = e - s; if (len > 0) {
+                                    char *tmp = (char*)SDL_malloc((size_t)len + 1);
+                                    if (tmp) { memcpy(tmp, g_text + s, (size_t)len); tmp[len] = '\0'; SDL_SetClipboardText(tmp); SDL_free(tmp); }
+                                    text_delete_selection();
+                                }
+                            }
+                            continue;
+                        }
+                        break;
+                    case XKB_KEY_v:
+                    case XKB_KEY_V: {
+                        if (with_ctrl) {
+                            char *clip = SDL_GetClipboardText();
+                            if (clip) { if (g_sel_active && g_sel_start != g_sel_end) text_delete_selection(); text_insert(clip); SDL_free(clip); }
+                            continue;
+                        }
+                        break;
+                    }
+                    default: break;
+                }
+                /* Insert printable text only when Ctrl is not held */
+                if ((kev[i].mods & NI_KMOD_CTRL) == 0 && kev[i].text[0] != '\0') {
+                    text_insert(kev[i].text);
                 }
             }
         }
