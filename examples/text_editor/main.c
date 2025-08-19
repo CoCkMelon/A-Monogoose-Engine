@@ -9,7 +9,7 @@
 
 #include "gl_loader.h"
 
-#define AME_USE_ASYNCINPUT
+// #define AME_USE_ASYNCINPUT
 #ifdef AME_USE_ASYNCINPUT
 #include "asyncinput.h"
 #endif
