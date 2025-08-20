@@ -106,16 +106,14 @@ bool ame_tilemap_load_tmj(const char* path, AmeTilemap* out) {
     if (cols > 0) ts.columns = cols;
     if (imgw > 0) ts.image_width = imgw;
     if (imgh > 0) ts.image_height = imgh;
-    if (ts.columns > 0 && ts.tilecount > 0) {
-        // If columns missing but image size known, compute
-        if (ts.columns == 0 && ts.image_width > ts.tile_width) {
-            ts.columns = ts.image_width / ts.tile_width;
-        }
-        // Fallback: try to pick a reasonable columns count (square-ish)
-        if (ts.columns == 0 && ts.tilecount > 0) {
-            int c = 1; while ((c+1)*(c+1) <= ts.tilecount) c++;
-            ts.columns = c;
-        }
+    // If columns missing but image size known, compute
+    if (ts.columns == 0 && ts.image_width > ts.tile_width && ts.tile_width > 0) {
+        ts.columns = ts.image_width / ts.tile_width;
+    }
+    // Fallback: try to pick a reasonable columns count (square-ish)
+    if (ts.columns == 0 && ts.tilecount > 0) {
+        int c = 1; while ((c+1)*(c+1) <= ts.tilecount) c++;
+        ts.columns = c;
     }
 
     out->width = width;

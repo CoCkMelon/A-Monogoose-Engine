@@ -14,6 +14,8 @@
 #include "ame/tilemap.h"
 #include "ame/physics.h"
 #include "ame/camera.h"
+#include "ame/audio.h"
+#include "ame/audio_ray.h"
 #include "asyncinput.h"
 
 // Game state
@@ -23,12 +25,15 @@ static int g_w = 1280, g_h = 720;
 
 // Rendering state  
 static GLuint g_prog = 0, g_vao = 0;
-static GLuint g_vbo_pos = 0, g_vbo_col = 0, g_vbo_uv = 0;
+static GLuint g_vbo_pos = 0, g_vbo_col = 0, g_vbo_uv = 0; // dynamic buffers (player and uploads)
+static GLuint g_tile_vbo_pos = 0, g_tile_vbo_uv = 0;      // static buffers for tilemap
 static GLint u_res = -1, u_camera = -1, u_use_tex = -1, u_tex = -1;
 
 // Game systems
 static AmeTilemap g_map;
-static AmeTilemapMesh g_mesh;
+static AmeTilemapMesh g_mesh; // colored mesh (legacy)
+static AmeTilemapUvMesh g_uvmesh; // uv mesh for textured tiles
+static GLuint g_tile_atlas_tex = 0;
 static AmeEcsWorld* g_world = NULL;
 static AmePhysicsWorld* g_physics = NULL;
 
@@ -50,6 +55,14 @@ static AmeCamera g_camera = {0};
 static GLuint g_player_textures[4] = {0,0,0,0};
 static int g_player_frame = 0;
 static float g_anim_time = 0.0f;
+
+// Audio
+static AmeAudioSource g_music;
+static AmeAudioSource g_ambient;
+static AmeAudioSource g_jump_sfx;
+static float g_ambient_x = 360.0f; // arbitrary position in world space
+static float g_ambient_y = 180.0f;
+static float g_ambient_base_gain = 0.8f;
 
 // Timing
 static uint64_t g_start_ns = 0;
@@ -145,6 +158,8 @@ static int init_gl(void) {
     glGenBuffers(1, &g_vbo_pos);
     glGenBuffers(1, &g_vbo_col);
     glGenBuffers(1, &g_vbo_uv);
+    glGenBuffers(1, &g_tile_vbo_pos);
+    glGenBuffers(1, &g_tile_vbo_uv);
 
     u_res = glGetUniformLocation(g_prog, "u_res");
     u_camera = glGetUniformLocation(g_prog, "u_camera");
@@ -164,6 +179,9 @@ static void shutdown_gl(void) {
     if (g_vbo_pos) { GLuint b = g_vbo_pos; glDeleteBuffers(1, &b); g_vbo_pos = 0; }
     if (g_vbo_col) { GLuint b = g_vbo_col; glDeleteBuffers(1, &b); g_vbo_col = 0; }
     if (g_vbo_uv)  { GLuint b = g_vbo_uv;  glDeleteBuffers(1, &b); g_vbo_uv = 0; }
+    if (g_tile_vbo_pos) { GLuint b = g_tile_vbo_pos; glDeleteBuffers(1, &b); g_tile_vbo_pos = 0; }
+    if (g_tile_vbo_uv)  { GLuint b = g_tile_vbo_uv;  glDeleteBuffers(1, &b); g_tile_vbo_uv = 0; }
+    if (g_tile_atlas_tex) { GLuint t = g_tile_atlas_tex; glDeleteTextures(1, &t); g_tile_atlas_tex = 0; }
     for (int i=0;i<4;i++){ if (g_player_textures[i]) { GLuint t=g_player_textures[i]; glDeleteTextures(1,&t); g_player_textures[i]=0; } }
     if (g_vao) { GLuint a = g_vao; glDeleteVertexArrays(1, &a); g_vao = 0; }
     if (g_gl) { SDL_GL_DestroyContext(g_gl); g_gl = NULL; }
@@ -358,6 +376,14 @@ static void draw_rect(float x, float y, float w, float h, float r, float g, floa
     glDrawArrays(GL_TRIANGLES, 0, 6);
 }
 
+// Try to load a RGBA8 texture. Placeholder returns 0 to trigger procedural fallback.
+static GLuint load_texture_rgba8(const char* path)
+{
+    (void)path;
+    // TODO: integrate stb_image or SDL_image to actually load PNGs.
+    return 0; // cause fallback to procedural atlas
+}
+
 static SDL_AppResult init_world(void) {
     g_world = ame_ecs_world_create();
     if (!g_world) return SDL_APP_FAILURE;
@@ -385,7 +411,59 @@ static SDL_AppResult init_world(void) {
     
     upload_mesh();
 
+    // Build textured UV mesh and atlas for tiles
+    // If your TMJ doesn't contain full tileset info, provide sensible defaults for the Kenney atlas
+    g_map.tileset.firstgid = (g_map.tileset.firstgid > 0 ? g_map.tileset.firstgid : 1);
+    g_map.tileset.tile_width = g_map.tile_width;
+    g_map.tileset.tile_height = g_map.tile_height;
+    if (g_map.tileset.columns == 0) g_map.tileset.columns = 20; // tilemap_packed.png has 20 columns (360/18)
+    if (g_map.tileset.tilecount == 0) g_map.tileset.tilecount = 180;
+
+    if (ame_tilemap_build_uv_mesh(&g_map, &g_uvmesh)) {
+        glBindBuffer(GL_ARRAY_BUFFER, g_tile_vbo_pos);
+        glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)(g_uvmesh.vert_count * 2 * sizeof(float)), g_uvmesh.vertices, GL_STATIC_DRAW);
+        glBindBuffer(GL_ARRAY_BUFFER, g_tile_vbo_uv);
+        glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)(g_uvmesh.vert_count * 2 * sizeof(float)), g_uvmesh.uvs, GL_STATIC_DRAW);
+    }
+
+    // Try to load real atlas from disk; fallback to procedural if it fails
+    extern GLuint load_texture_rgba8(const char* path);
+    g_tile_atlas_tex = load_texture_rgba8("examples/kenney_pixel-platformer/Tilemap/tilemap_packed.png");
+    if (!g_tile_atlas_tex) {
+        g_tile_atlas_tex = ame_tilemap_make_test_atlas_texture(&g_map);
+    }
+
     init_player_sprites();
+
+    // Audio setup: music, ambient, sfx
+    if (!ame_audio_init(48000)) { SDL_Log("Audio init failed"); return SDL_APP_FAILURE; }
+
+    // Music
+    if (!ame_audio_source_load_opus_file(&g_music, "examples/kenney_pixel-platformer/brackeys_platformer_assets/music/time_for_adventure.opus", true)) {
+        SDL_Log("Failed to load music");
+    } else {
+        g_music.gain = 0.3f;
+        g_music.pan = 0.0f;
+        g_music.playing = true;
+    }
+
+    // Ambient looping sound somewhere in the level
+    if (!ame_audio_source_load_opus_file(&g_ambient, "examples/kenney_pixel-platformer/brackeys_platformer_assets/sounds/power_up.opus", true)) {
+        SDL_Log("Failed to load ambient sound");
+    } else {
+        g_ambient.gain = g_ambient_base_gain;
+        g_ambient.pan = 0.0f;
+        g_ambient.playing = true;
+    }
+
+    // Jump one-shot
+    if (!ame_audio_source_load_opus_file(&g_jump_sfx, "examples/kenney_pixel-platformer/brackeys_platformer_assets/sounds/jump.opus", false)) {
+        SDL_Log("Failed to load jump sfx");
+    } else {
+        g_jump_sfx.gain = 0.6f;
+        g_jump_sfx.pan = 0.0f;
+        g_jump_sfx.playing = false;
+    }
 
     // Create physics collision from tilemap
     ame_physics_create_tilemap_collision(g_physics, g_map.layer0.data, 
@@ -445,10 +523,12 @@ static void update_game(float dt) {
     bool jump_pressed_edge = (jump_down && !prev_jump_down);
     if (jump_pressed_edge) jump_buffer = 0.12f; else jump_buffer = fmaxf(0.0f, jump_buffer - dt);
 
+    bool did_jump = false;
     if (jump_buffer > 0.0f && (g_on_ground || coyote_timer > 0.0f)) {
         vy = -320.0f;
         jump_buffer = 0.0f;
         coyote_timer = 0.0f;
+        did_jump = true;
     }
     prev_jump_down = jump_down;
     
@@ -456,6 +536,36 @@ static void update_game(float dt) {
     
     // Step physics
     ame_physics_world_step(g_physics);
+
+    // Audio: update ambient routing using audio ray
+    {
+        AmeAudioRayParams rp;
+        rp.listener_x = g_player_x;
+        rp.listener_y = g_player_y;
+        rp.source_x = g_ambient_x;
+        rp.source_y = g_ambient_y;
+        rp.min_distance = 32.0f;
+        rp.max_distance = 600.0f;
+        rp.occlusion_db = 8.0f;
+        rp.air_absorption_db_per_meter = 0.01f;
+        float gl = 0.0f, gr = 0.0f;
+        if (ame_audio_ray_compute(g_physics, &rp, &gl, &gr)) {
+            float sum = gl + gr;
+            float pan = 0.0f;
+            if (sum > 0.0001f) pan = (gr - gl) / sum; // crude mapping to [-1,1]
+            float total = (gl > gr ? gl : gr);
+            g_ambient.pan = pan;
+            g_ambient.gain = g_ambient_base_gain * total;
+            g_ambient.playing = true;
+        }
+    }
+
+    // Trigger jump sfx
+    if (did_jump) {
+        g_jump_sfx.u.pcm.cursor = 0;
+        g_jump_sfx.playing = true;
+        g_jump_sfx.pan = 0.0f;
+    }
     
     // Update camera to follow player
     ame_camera_set_target(&g_camera, g_player_x, g_player_y);
@@ -533,11 +643,32 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
     
     glBindVertexArray(g_vao);
     glClear(GL_COLOR_BUFFER_BIT);
+
+    // Sync audio sources once per frame
+    {
+        AmeAudioSourceRef refs[3];
+        refs[0].src = &g_music;   refs[0].stable_id = 1;
+        refs[1].src = &g_ambient; refs[1].stable_id = 2;
+        refs[2].src = &g_jump_sfx; refs[2].stable_id = 3;
+        ame_audio_sync_sources_refs(refs, 3);
+    }
     
-    // Draw tilemap
-    if (g_mesh.vert_count > 0) {
-        upload_mesh(); // Re-upload in case it changed
-        glDrawArrays(GL_TRIANGLES, 0, (GLsizei)g_mesh.vert_count);
+    // Draw tilemap (textured)
+    if (g_uvmesh.vert_count > 0 && g_tile_atlas_tex != 0) {
+        if (u_use_tex >= 0) glUniform1i(u_use_tex, 1);
+        glActiveTexture(GL_TEXTURE0);
+        if (u_tex >= 0) glUniform1i(u_tex, 0);
+        glBindTexture(GL_TEXTURE_2D, g_tile_atlas_tex);
+
+        glEnableVertexAttribArray(0);
+        glBindBuffer(GL_ARRAY_BUFFER, g_tile_vbo_pos);
+        glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, sizeof(float)*2, (void*)0);
+
+        glEnableVertexAttribArray(2);
+        glBindBuffer(GL_ARRAY_BUFFER, g_tile_vbo_uv);
+        glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, sizeof(float)*2, (void*)0);
+
+        glDrawArrays(GL_TRIANGLES, 0, (GLsizei)g_uvmesh.vert_count);
     }
     
     // Draw player
@@ -573,5 +704,6 @@ void SDL_AppQuit(void *appstate, SDL_AppResult result) {
     
     ni_shutdown();
     shutdown_gl();
+    ame_audio_shutdown();
     SDL_Quit();
 }

@@ -347,7 +347,7 @@ static void update_audio_spatial(void) {
 SDL_AppResult SDL_AppInit(void **appstate, int argc, char **argv) {
     (void)argc; (void)argv; (void)appstate;
     SDL_SetAppMetadata("AME - Audio Ray Example", "0.1", "com.example.ame.audio_ray");
-    if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO)) { 
+    if (!SDL_Init(SDL_INIT_VIDEO)) {
         SDL_Log("SDL_Init failed: %s", SDL_GetError()); 
         return SDL_APP_FAILURE; 
     }
