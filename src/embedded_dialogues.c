@@ -1,5 +1,8 @@
 #include "ame_dialogue.h"
 #include <string.h>
+#ifdef AME_HAVE_GENERATED_DIALOGUES
+#include "ame_dialogue_generated.h"
+#endif
 
 // A tiny embedded database of dialogues. In a real pipeline, this would be generated.
 
@@ -34,15 +37,29 @@ const AmeDialogueScene *ame_dialogue_load_embedded(const char *name) {
             return g_embedded_scenes[i];
         }
     }
+#ifdef AME_HAVE_GENERATED_DIALOGUES
+    for (size_t i = 0; i < ame__generated_scenes_count; ++i) {
+        if (ame__generated_scenes[i] && ame__generated_scenes[i]->scene && strcmp(ame__generated_scenes[i]->scene, name) == 0) {
+            return ame__generated_scenes[i];
+        }
+    }
+#endif
     return NULL;
 }
 
 const char **ame_dialogue_list_embedded(size_t *count) {
-    static const char *names[sizeof(g_embedded_scenes)/sizeof(g_embedded_scenes[0])];
+    // Collect into a static buffer; up to base + generated
+    static const char *names[256];
+    size_t n = 0;
     for (size_t i = 0; i < sizeof(g_embedded_scenes)/sizeof(g_embedded_scenes[0]); ++i) {
-        names[i] = g_embedded_scenes[i]->scene;
+        if (g_embedded_scenes[i] && g_embedded_scenes[i]->scene) names[n++] = g_embedded_scenes[i]->scene;
     }
-    if (count) *count = sizeof(g_embedded_scenes)/sizeof(g_embedded_scenes[0]);
+#ifdef AME_HAVE_GENERATED_DIALOGUES
+    for (size_t i = 0; i < ame__generated_scenes_count && n < (sizeof(names)/sizeof(names[0])); ++i) {
+        if (ame__generated_scenes[i] && ame__generated_scenes[i]->scene) names[n++] = ame__generated_scenes[i]->scene;
+    }
+#endif
+    if (count) *count = n;
     return names;
 }
 

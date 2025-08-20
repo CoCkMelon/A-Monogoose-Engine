@@ -1,0 +1,18 @@
+title: "Sample Greeting"
+lines:
+  - id: start
+    speaker: Guide
+    text: "Welcome to A Mongoose Engine!"
+  - speaker: Guide
+    text: "Would you like to hear about controls?"
+    options:
+      - choice: "Yes, please"
+        next: explain
+      - choice: "No, thanks"
+        next: end
+  - id: explain
+    speaker: Guide
+    text: "Use mouse to draw in the line_draw example."
+  - id: end
+    speaker: Guide
+    text: "Okay, have fun!"
