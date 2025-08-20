@@ -17,6 +17,9 @@ find_package(SDL3_ttf REQUIRED)
 add_library(glad STATIC third_party/glad/src/gl.c)
 target_include_directories(glad PUBLIC third_party/glad/include)
 
+# Flecs ECS
+add_subdirectory(third_party/flecs)
+
 # Bring in the sibling asyncinput library for examples
 add_subdirectory(${CMAKE_CURRENT_LIST_DIR}/../asyncinput ${CMAKE_CURRENT_BINARY_DIR}/asyncinput_build)
 
@@ -33,6 +36,7 @@ add_library(ame STATIC
     src/gl_loader.c
     src/dialogue.c
     src/embedded_dialogues.c
+    src/ecs.c
 )
 
 # If generated dialogues are present, compile them and enable the macro
@@ -52,7 +56,7 @@ endif()
 target_link_libraries(ame PUBLIC SDL3::SDL3)
 
 # Link vendored glad
-target_link_libraries(ame PUBLIC glad)
+target_link_libraries(ame PUBLIC glad flecs)
 
 # Link math library where needed (Linux)
 if(UNIX AND NOT APPLE)
@@ -96,17 +100,26 @@ add_executable(dialogue_ui_example
     examples/dialogue_ui_example/main.c
 )
 
+# Example: flecs_scene (interactive ECS scene)
+add_executable(flecs_scene
+    examples/flecs_scene/main.c
+)
+
 # Prefer the shared lib if enabled, fall back to static otherwise
 if(TARGET asyncinput_shared)
     target_link_libraries(line_draw PRIVATE asyncinput_shared)
     target_link_libraries(rhythm_game PRIVATE asyncinput_shared)
     target_link_libraries(raymarch_arcade PRIVATE asyncinput_shared)
+    target_link_libraries(dialogue_example PRIVATE asyncinput_shared)
+    target_link_libraries(dialogue_ui_example PRIVATE asyncinput_shared)
+    target_link_libraries(flecs_scene PRIVATE asyncinput_shared)
 elseif(TARGET asyncinput_static)
     target_link_libraries(line_draw PRIVATE asyncinput_static)
     target_link_libraries(rhythm_game PRIVATE asyncinput_static)
     target_link_libraries(raymarch_arcade PRIVATE asyncinput_static)
     target_link_libraries(dialogue_example PRIVATE asyncinput_static)
     target_link_libraries(dialogue_ui_example PRIVATE asyncinput_static)
+    target_link_libraries(flecs_scene PRIVATE asyncinput_static)
 else()
     message(FATAL_ERROR "asyncinput library targets not found")
 endif()
@@ -117,19 +130,21 @@ if(TARGET OpenGL::GL)
     target_link_libraries(rhythm_game PRIVATE OpenGL::GL)
     target_link_libraries(raymarch_arcade PRIVATE OpenGL::GL)
     if(TARGET text_editor)
-        target_link_libraries(text_editor PRIVATE OpenGL::GL)
+    target_link_libraries(text_editor PRIVATE OpenGL::GL)
     endif()
     target_link_libraries(dialogue_example PRIVATE OpenGL::GL)
     target_link_libraries(dialogue_ui_example PRIVATE OpenGL::GL)
+    target_link_libraries(flecs_scene PRIVATE OpenGL::GL)
 else()
     target_link_libraries(line_draw PRIVATE GL)
     target_link_libraries(rhythm_game PRIVATE GL)
     target_link_libraries(raymarch_arcade PRIVATE GL)
     if(TARGET text_editor)
-        target_link_libraries(text_editor PRIVATE GL)
+    target_link_libraries(text_editor PRIVATE GL)
     endif()
     target_link_libraries(dialogue_example PRIVATE GL)
     target_link_libraries(dialogue_ui_example PRIVATE GL)
+    target_link_libraries(flecs_scene PRIVATE GL)
 endif()
 
 target_link_libraries(line_draw PRIVATE SDL3::SDL3 Threads::Threads ame)
@@ -147,6 +162,8 @@ target_link_libraries(rhythm_game PRIVATE SDL3::SDL3 Threads::Threads ame)
     endif()
  endif()
 target_link_libraries(dialogue_ui_example PRIVATE SDL3::SDL3 Threads::Threads ame SDL3_ttf::SDL3_ttf glad)
+# Link flecs example
+target_link_libraries(flecs_scene PRIVATE SDL3::SDL3 Threads::Threads ame)
 
 # Compile definitions for SDL3 callback main style
 add_compile_definitions(SDL_MAIN_USE_CALLBACKS=1)
@@ -158,4 +175,5 @@ if(UNIX AND NOT APPLE)
     target_link_libraries(raymarch_arcade PRIVATE dl)
     target_link_libraries(dialogue_example PRIVATE dl)
     target_link_libraries(dialogue_ui_example PRIVATE dl)
+    target_link_libraries(flecs_scene PRIVATE dl)
 endif()
