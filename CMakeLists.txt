@@ -39,6 +39,7 @@ add_library(ame STATIC
     src/story_route.c
     src/ecs.c
     src/tilemap.c
+    src/audio.c
 )
 
 # If generated dialogues are present, compile them and enable the macro
@@ -59,6 +60,12 @@ target_link_libraries(ame PUBLIC SDL3::SDL3)
 
 # Link vendored glad
 target_link_libraries(ame PUBLIC glad flecs)
+
+# Audio dependencies via pkg-config
+pkg_check_modules(PORTAUDIO REQUIRED IMPORTED_TARGET portaudio-2.0)
+pkg_check_modules(OPUSFILE REQUIRED IMPORTED_TARGET opusfile)
+
+target_link_libraries(ame PUBLIC PkgConfig::PORTAUDIO PkgConfig::OPUSFILE)
 
 # Link math library where needed (Linux)
 if(UNIX AND NOT APPLE)
@@ -115,6 +122,11 @@ add_executable(tilemap_render
     examples/tilemap_render/main.c
 )
 
+# Example: audio panning with ECS-controlled source
+add_executable(audio_pan_example
+    examples/audio_pan_example/main.c
+)
+
 # Prefer the shared lib if enabled, fall back to static otherwise
 if(TARGET asyncinput_shared)
     target_link_libraries(line_draw PRIVATE asyncinput_shared)
@@ -130,6 +142,7 @@ elseif(TARGET asyncinput_static)
     target_link_libraries(dialogue_ui_example PRIVATE asyncinput_static)
     target_link_libraries(flecs_scene PRIVATE asyncinput_static)
     target_link_libraries(tilemap_render PRIVATE asyncinput_static)
+    target_link_libraries(audio_pan_example PRIVATE asyncinput_static)
 else()
     message(FATAL_ERROR "asyncinput library targets not found")
 endif()
@@ -146,6 +159,7 @@ if(TARGET OpenGL::GL)
     target_link_libraries(dialogue_ui_example PRIVATE OpenGL::GL)
     target_link_libraries(flecs_scene PRIVATE OpenGL::GL)
     target_link_libraries(tilemap_render PRIVATE OpenGL::GL)
+    target_link_libraries(audio_pan_example PRIVATE OpenGL::GL)
 else()
     target_link_libraries(line_draw PRIVATE GL)
     target_link_libraries(rhythm_game PRIVATE GL)
@@ -157,6 +171,7 @@ else()
     target_link_libraries(dialogue_ui_example PRIVATE GL)
     target_link_libraries(flecs_scene PRIVATE GL)
     target_link_libraries(tilemap_render PRIVATE GL)
+    target_link_libraries(audio_pan_example PRIVATE GL)
 endif()
 
 target_link_libraries(line_draw PRIVATE SDL3::SDL3 Threads::Threads ame)
@@ -178,6 +193,8 @@ target_link_libraries(dialogue_ui_example PRIVATE SDL3::SDL3 Threads::Threads am
 target_link_libraries(flecs_scene PRIVATE SDL3::SDL3 Threads::Threads ame flecs)
 # Link tilemap example
 target_link_libraries(tilemap_render PRIVATE SDL3::SDL3 Threads::Threads ame flecs)
+# Link audio example
+target_link_libraries(audio_pan_example PRIVATE SDL3::SDL3 Threads::Threads ame)
 
 # Compile definitions for SDL3 callback main style
 add_compile_definitions(SDL_MAIN_USE_CALLBACKS=1)
@@ -191,4 +208,5 @@ if(UNIX AND NOT APPLE)
     target_link_libraries(dialogue_ui_example PRIVATE dl)
     target_link_libraries(flecs_scene PRIVATE dl)
     target_link_libraries(tilemap_render PRIVATE dl)
+    target_link_libraries(audio_pan_example PRIVATE dl)
 endif()

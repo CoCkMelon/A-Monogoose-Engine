@@ -20,11 +20,23 @@ typedef struct AmeTilemapLayer {
     int32_t *data;
 } AmeTilemapLayer;
 
+typedef struct AmeTilesetInfo {
+    int firstgid;
+    int tilecount;
+    int tile_width;
+    int tile_height;
+    int columns;        // tiles per row in the atlas
+    int image_width;    // pixels (optional; 0 if unknown)
+    int image_height;   // pixels (optional; 0 if unknown)
+} AmeTilesetInfo;
+
 typedef struct AmeTilemap {
     int width;      // tiles
     int height;     // tiles
     int tile_width; // pixels
     int tile_height;// pixels
+
+    AmeTilesetInfo tileset; // single tileset for now
 
     // For now support one layer (extend as needed)
     AmeTilemapLayer layer0;
@@ -47,8 +59,22 @@ typedef struct AmeTilemapMesh {
     size_t vert_count;
 } AmeTilemapMesh;
 
+typedef struct AmeTilemapUvMesh {
+    float *vertices;    // size = vert_count * 2
+    float *uvs;         // size = vert_count * 2
+    size_t vert_count;
+} AmeTilemapUvMesh;
+
 bool ame_tilemap_build_mesh(const AmeTilemap* m, AmeTilemapMesh* mesh);
 void ame_tilemap_free_mesh(AmeTilemapMesh* mesh);
+
+// Build a UV mesh based on tileset grid layout. Non-zero gids become quads with UVs into an atlas.
+bool ame_tilemap_build_uv_mesh(const AmeTilemap* m, AmeTilemapUvMesh* mesh);
+void ame_tilemap_free_uv_mesh(AmeTilemapUvMesh* mesh);
+
+// Create a simple procedural RGBA atlas texture where each tile index gets a solid unique color.
+// Returns OpenGL texture id (GLuint). The atlas layout matches m->tileset.columns and tile size.
+unsigned int ame_tilemap_make_test_atlas_texture(const AmeTilemap* m);
 
 #ifdef __cplusplus
 }
