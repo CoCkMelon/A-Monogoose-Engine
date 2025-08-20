@@ -13,6 +13,10 @@ find_package(Threads REQUIRED)
 find_package(PkgConfig REQUIRED)
 find_package(SDL3_ttf REQUIRED)
 
+# Vendored glad
+add_library(glad STATIC third_party/glad/src/gl.c)
+target_include_directories(glad PUBLIC third_party/glad/include)
+
 # Bring in the sibling asyncinput library for examples
 add_subdirectory(${CMAKE_CURRENT_LIST_DIR}/../asyncinput ${CMAKE_CURRENT_BINARY_DIR}/asyncinput_build)
 
@@ -31,6 +35,13 @@ add_library(ame STATIC
     src/embedded_dialogues.c
 )
 
+# If generated dialogues are present, compile them and enable the macro
+if(EXISTS ${CMAKE_CURRENT_LIST_DIR}/src/embedded_dialogues_gen.c)
+    target_sources(ame PRIVATE src/embedded_dialogues_gen.c)
+    target_compile_definitions(ame PRIVATE AME_HAVE_GENERATED_DIALOGUES=1)
+    target_include_directories(ame PUBLIC ${CMAKE_CURRENT_LIST_DIR}/include)
+endif()
+
 # SDL/OpenGL for engine (GL loader needs it)
 if(TARGET OpenGL::GL)
     target_link_libraries(ame PUBLIC OpenGL::GL)
@@ -39,6 +50,9 @@ else()
 endif()
 
 target_link_libraries(ame PUBLIC SDL3::SDL3)
+
+# Link vendored glad
+target_link_libraries(ame PUBLIC glad)
 
 # Link math library where needed (Linux)
 if(UNIX AND NOT APPLE)
@@ -63,14 +77,23 @@ add_executable(raymarch_arcade
 )
 
 # Example: text_editor (requires SDL3_ttf)
-# Disabled due to known compile issues in this environment
-# add_executable(text_editor
-#     examples/text_editor/main.c
-# )
+option(AME_TEXT_EDITOR_USE_ASYNCINPUT "Build text_editor using asyncinput backend (defines AME_USE_ASYNCINPUT)" OFF)
+add_executable(text_editor
+    examples/text_editor/main.c
+)
+if(AME_TEXT_EDITOR_USE_ASYNCINPUT)
+    target_compile_definitions(text_editor PRIVATE AME_USE_ASYNCINPUT=1)
+endif()
+# Link ttf and glad already via ame
 
 # Example: dialogue_example (console-style)
 add_executable(dialogue_example
     examples/dialogue_example/main.c
+)
+
+# Example: dialogue_ui_example (OpenGL + SDL3_ttf)
+add_executable(dialogue_ui_example
+    examples/dialogue_ui_example/main.c
 )
 
 # Prefer the shared lib if enabled, fall back to static otherwise
@@ -83,6 +106,7 @@ elseif(TARGET asyncinput_static)
     target_link_libraries(rhythm_game PRIVATE asyncinput_static)
     target_link_libraries(raymarch_arcade PRIVATE asyncinput_static)
     target_link_libraries(dialogue_example PRIVATE asyncinput_static)
+    target_link_libraries(dialogue_ui_example PRIVATE asyncinput_static)
 else()
     message(FATAL_ERROR "asyncinput library targets not found")
 endif()
@@ -96,6 +120,7 @@ if(TARGET OpenGL::GL)
         target_link_libraries(text_editor PRIVATE OpenGL::GL)
     endif()
     target_link_libraries(dialogue_example PRIVATE OpenGL::GL)
+    target_link_libraries(dialogue_ui_example PRIVATE OpenGL::GL)
 else()
     target_link_libraries(line_draw PRIVATE GL)
     target_link_libraries(rhythm_game PRIVATE GL)
@@ -104,12 +129,17 @@ else()
         target_link_libraries(text_editor PRIVATE GL)
     endif()
     target_link_libraries(dialogue_example PRIVATE GL)
+    target_link_libraries(dialogue_ui_example PRIVATE GL)
 endif()
 
 target_link_libraries(line_draw PRIVATE SDL3::SDL3 Threads::Threads ame)
 target_link_libraries(rhythm_game PRIVATE SDL3::SDL3 Threads::Threads ame)
-target_link_libraries(raymarch_arcade PRIVATE SDL3::SDL3 Threads::Threads ame)
-target_link_libraries(dialogue_example PRIVATE SDL3::SDL3 Threads::Threads ame)
+ target_link_libraries(raymarch_arcade PRIVATE SDL3::SDL3 Threads::Threads ame)
+ target_link_libraries(dialogue_example PRIVATE SDL3::SDL3 Threads::Threads ame)
+ if(TARGET text_editor)
+    target_link_libraries(text_editor PRIVATE SDL3::SDL3 Threads::Threads ame SDL3_ttf::SDL3_ttf)
+ endif()
+target_link_libraries(dialogue_ui_example PRIVATE SDL3::SDL3 Threads::Threads ame SDL3_ttf::SDL3_ttf glad)
 
 # Compile definitions for SDL3 callback main style
 add_compile_definitions(SDL_MAIN_USE_CALLBACKS=1)
@@ -120,4 +150,5 @@ if(UNIX AND NOT APPLE)
     target_link_libraries(rhythm_game PRIVATE dl)
     target_link_libraries(raymarch_arcade PRIVATE dl)
     target_link_libraries(dialogue_example PRIVATE dl)
+    target_link_libraries(dialogue_ui_example PRIVATE dl)
 endif()

@@ -9,7 +9,6 @@
 
 #include "gl_loader.h"
 
-#define AME_USE_ASYNCINPUT
 #ifdef AME_USE_ASYNCINPUT
 #include "asyncinput.h"
 /* For keysym constants like XKB_KEY_Left, XKB_KEY_Return */
@@ -383,12 +382,12 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char **argv){
     /* Enable high-level keyboard translation using xkbcommon */
     ni_set_xkb_names(NULL, NULL, NULL, NULL, NULL); /* defaults: evdev/pc105/us */
     if (ni_enable_xkb(1) != 0) { SDL_Log("ni_enable_xkb failed (libxkbcommon not found?)"); }
-    /* Hide and lock OS cursor; we'll draw a software cursor */
+    /* Hide OS cursor; we'll draw a software cursor */
     SDL_HideCursor();
-    SDL_SetWindowRelativeMouseMode(g_window, true);
-    int mx=0,my=0; SDL_GetMouseState(6mx, 6my);
-    SDL_SetAtomicInt(6g_ai_mouse_x, mx);
-    SDL_SetAtomicInt(6g_ai_mouse_y, my);
+    int mx = 0, my = 0;
+    SDL_GetMouseState(&mx, &my);
+    SDL_SetAtomicInt(&g_ai_mouse_x, mx);
+    SDL_SetAtomicInt(&g_ai_mouse_y, my);
 #endif
 
     // Initial text surface
@@ -469,8 +468,8 @@ SDL_AppResult SDL_AppIterate(void *appstate){
             int down = SDL_GetAtomicInt(&g_ai_btn_left);
             if (down) {
                 g_mouse_left_down = 1;
-                g_mouse_x = SDL_GetAtomicInt(&g_ai_mouse_x);
-                g_mouse_y = SDL_GetAtomicInt(&g_ai_mouse_y);
+            g_mouse_x = SDL_GetAtomicInt(&g_ai_mouse_x);
+            g_mouse_y = SDL_GetAtomicInt(&g_ai_mouse_y);
                 g_caret = xy_to_index(g_mouse_x, g_mouse_y);
                 g_sel_anchor = g_caret; g_sel_start = g_caret; g_sel_end = g_caret; g_sel_active = 1;
             } else {
@@ -640,11 +639,12 @@ SDL_AppResult SDL_AppIterate(void *appstate){
 #ifdef AME_USE_ASYNCINPUT
     /* Draw software cursor at async mouse position */
     {
-        int mx = SDL_GetAtomicInt(6g_ai_mouse_x);
-        int my = SDL_GetAtomicInt(6g_ai_mouse_y);
+        int mx = SDL_GetAtomicInt(&g_ai_mouse_x);
+        int my = SDL_GetAtomicInt(&g_ai_mouse_y);
         if (mx < 0) mx = 0; if (mx > g_w) mx = g_w;
         if (my < 0) my = 0; if (my > g_h) my = g_h;
-        float x0,y0,x1,y1; ndc_rect_from_pixels((float)mx, (float)my, 8.0f, 8.0f, 6x0, 6y0, 6x1, 6y1);
+        float x0, y0, x1, y1;
+        ndc_rect_from_pixels((float)mx, (float)my, 8.0f, 8.0f, &x0, &y0, &x1, &y1);
         float quad[] = { x0,y0, x1,y0, x1,y1, x0,y0, x1,y1, x0,y1 };
         glBindVertexArray_(g_vao_solid);
         glUniform4f_(g_u_color, 1.0f, 1.0f, 1.0f, 1.0f);
