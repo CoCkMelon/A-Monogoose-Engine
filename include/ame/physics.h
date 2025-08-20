@@ -83,6 +83,9 @@ void ame_physics_destroy_body(AmePhysicsWorld* world, b2Body* body);
 void ame_physics_get_position(b2Body* body, float* x, float* y);
 void ame_physics_set_position(b2Body* body, float x, float y);
 
+// Set body rotation angle (radians)
+void ame_physics_set_angle(b2Body* body, float angle);
+
 // Get/set body velocity
 void ame_physics_get_velocity(b2Body* body, float* vx, float* vy);
 void ame_physics_set_velocity(b2Body* body, float vx, float vy);

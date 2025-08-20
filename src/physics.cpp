@@ -172,6 +172,12 @@ void ame_physics_set_velocity(b2Body* body, float vx, float vy) {
     body->SetLinearVelocity(b2Vec2(vx, vy));
 }
 
+void ame_physics_set_angle(b2Body* body, float angle) {
+    if (!body) return;
+    b2Vec2 pos = body->GetPosition();
+    body->SetTransform(pos, angle);
+}
+
 AmeRaycastHit ame_physics_raycast(AmePhysicsWorld* world, 
                                   float start_x, float start_y,
                                   float end_x, float end_y) {

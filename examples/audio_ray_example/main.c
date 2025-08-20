@@ -29,6 +29,8 @@ static ecs_entity_t g_source   = 0;
 static AmePhysicsWorld* g_phys = NULL;
 static b2Body* g_wall1 = NULL;
 static b2Body* g_wall2 = NULL;
+static b2Body* g_wall3 = NULL;
+static bool g_debug_draw = true;
 
 static SDL_AppResult init_scene(void) {
     g_world = ame_ecs_world_create();
@@ -55,8 +57,13 @@ static SDL_AppResult init_scene(void) {
     static const AmeAcousticMaterial kRightMat  = AME_MAT_STEEL;    // low attenuation, better transmission
     // Wall 1 at center
     g_wall1 = ame_physics_create_body(g_phys, g_w*0.5f, g_h*0.5f, 40.0f, 200.0f, AME_BODY_STATIC, false, (void*)&kCenterMat);
-    // Wall 2 near right
+// Wall 2 near right
     g_wall2 = ame_physics_create_body(g_phys, g_w*0.75f, g_h*0.5f, 40.0f, 200.0f, AME_BODY_STATIC, false, (void*)&kRightMat);
+
+    // Wall 3 below, rotated 90 degrees (horizontal)
+    static const AmeAcousticMaterial kBottomMat = AME_MAT_WOOD;
+    g_wall3 = ame_physics_create_body(g_phys, g_w*0.5f, g_h*0.8f, 200.0f, 40.0f, AME_BODY_STATIC, false, (void*)&kBottomMat);
+    ame_physics_set_angle(g_wall3, (float)M_PI * 0.5f);
 
     // Listener on the left-center
     g_listener = ecs_entity_init(w, &(ecs_entity_desc_t){0});
@@ -91,6 +98,27 @@ static void update_audio_spatial(void) {
 
     float gl=0.0f, gr=0.0f;
     ame_audio_ray_compute(g_phys, &rp, &gl, &gr);
+
+    // Terminal debug every ~15 frames
+    static int frame = 0; frame = (frame + 1) % 15;
+    if (frame == 0) {
+        AmeRaycastMultiHit mh = ame_physics_raycast_all(g_phys, rp.listener_x, rp.listener_y, rp.source_x, rp.source_y, 16);
+        float sum_db = 0.0f;
+        for (size_t i = 0; i < mh.count; ++i) {
+            AmeRaycastHit h = mh.hits[i];
+            if (!h.hit) continue;
+            float add_db = 0.0f, mono = 0.0f;
+            if (h.user_data) {
+                const AmeAcousticMaterial *mat = (const AmeAcousticMaterial*)h.user_data;
+                add_db = mat->transmission_loss_db; mono = mat->mono_collapse;
+            } else {
+                add_db = fabsf(rp.occlusion_db); mono = 0.3f;
+            }
+            sum_db += add_db;
+        }
+        ame_physics_raycast_free(&mh);
+        SDL_Log("[debug] hits=%zu, extra_loss=%.1f dB, L=%.3f R=%.3f gain=%.3f pan=%.2f", (size_t)mh.count, sum_db, gl, gr, sqrtf(gl*gl+gr*gr), (2.0f/M_PI)*atan2f(gr/(sqrtf(gl*gl+gr*gr)+1e-6f), gl/(sqrtf(gl*gl+gr*gr)+1e-6f)) - 1.0f);
+    }
 
     // Convert L/R gains back to pan and overall gain using constant power inverse
     float sum = fmaxf(1e-6f, gl*gl + gr*gr);
@@ -152,8 +180,36 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
         if (event->key.key == SDLK_A) g_move_a = down;
         if (event->key.key == SDLK_S) g_move_s = down;
         if (event->key.key == SDLK_D) g_move_d = down;
+        if (down && event->key.key == SDLK_SPACE) g_debug_draw = !g_debug_draw;
     }
     return SDL_APP_CONTINUE;
+}
+
+static void draw_debug_ray(void) {
+    ecs_world_t *w = (ecs_world_t*)ame_ecs_world_ptr(g_world);
+    const Position *lp = ecs_get_id(w, g_listener, g_comp_position);
+    const Position *sp = ecs_get_id(w, g_source, g_comp_position);
+    if (!lp || !sp) return;
+
+    // Draw ray
+    SDL_SetRenderDrawColor(g_renderer, 80, 200, 255, 255);
+    SDL_RenderLine(g_renderer, (int)lp->x, (int)lp->y, (int)sp->x, (int)sp->y);
+
+    // Draw hits
+    AmeRaycastMultiHit mh = ame_physics_raycast_all(g_phys, lp->x, lp->y, sp->x, sp->y, 16);
+    for (size_t i = 0; i < mh.count; ++i) {
+        AmeRaycastHit h = mh.hits[i];
+        if (!h.hit) continue;
+        int cx = (int)h.point_x, cy = (int)h.point_y;
+        // small cross
+        SDL_RenderLine(g_renderer, cx-4, cy, cx+4, cy);
+        SDL_RenderLine(g_renderer, cx, cy-4, cx, cy+4);
+        // normal
+        int nx = cx + (int)(h.normal_x * 10.0f);
+        int ny = cy + (int)(h.normal_y * 10.0f);
+        SDL_RenderLine(g_renderer, cx, cy, nx, ny);
+    }
+    ame_physics_raycast_free(&mh);
 }
 
 static void draw_scene(void) {
@@ -167,6 +223,9 @@ static void draw_scene(void) {
     SDL_FRect wall2 = (SDL_FRect){ g_w*0.75f - 20.0f, g_h*0.5f - 100.0f, 40.0f, 200.0f };
     SDL_RenderFillRect(g_renderer, &wall1);
     SDL_RenderFillRect(g_renderer, &wall2);
+    // wall3 (approximate as box; actual rotation not drawn differently here)
+    SDL_FRect wall3 = (SDL_FRect){ g_w*0.5f - 100.0f, g_h*0.8f - 20.0f, 200.0f, 40.0f };
+    SDL_RenderFillRect(g_renderer, &wall3);
 
     // Draw listener and source
     ecs_world_t *w = (ecs_world_t*)ame_ecs_world_ptr(g_world);
@@ -178,6 +237,10 @@ static void draw_scene(void) {
 
     SDL_SetRenderDrawColor(g_renderer, 220, 150, 120, 255);
     if (sp) { SDL_FRect r = (SDL_FRect){ sp->x - 6.0f, sp->y - 6.0f, 12.0f, 12.0f }; SDL_RenderFillRect(g_renderer, &r); }
+
+    if (g_debug_draw) {
+        draw_debug_ray();
+    }
 
     SDL_RenderPresent(g_renderer);
 }
