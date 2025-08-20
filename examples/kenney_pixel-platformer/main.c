@@ -8,6 +8,7 @@
 #include <math.h>
 #include <stdatomic.h>
 #include <stdbool.h>
+#include <stdint.h>
 
 #include "ame/ecs.h"
 #include "ame/tilemap.h"
@@ -22,8 +23,8 @@ static int g_w = 1280, g_h = 720;
 
 // Rendering state  
 static GLuint g_prog = 0, g_vao = 0;
-static GLuint g_vbo_pos = 0, g_vbo_col = 0;
-static GLint u_res = -1, u_camera = -1;
+static GLuint g_vbo_pos = 0, g_vbo_col = 0, g_vbo_uv = 0;
+static GLint u_res = -1, u_camera = -1, u_use_tex = -1, u_tex = -1;
 
 // Game systems
 static AmeTilemap g_map;
@@ -40,10 +41,15 @@ static bool g_on_ground = false;
 // Input state
 static _Atomic bool g_should_quit = false;
 static _Atomic int g_move_dir = 0; // -1 left, 1 right, 0 none
-static _Atomic bool g_jump_pressed = false;
+static _Atomic bool g_jump_down = false; // current key state
 
 // Camera
 static AmeCamera g_camera = {0};
+
+// Sprites
+static GLuint g_player_textures[4] = {0,0,0,0};
+static int g_player_frame = 0;
+static float g_anim_time = 0.0f;
 
 // Timing
 static uint64_t g_start_ns = 0;
@@ -55,9 +61,11 @@ static const char* vs_src =
     "#version 450 core\n"
     "layout(location=0) in vec2 a_pos;\n"
     "layout(location=1) in vec4 a_col;\n"
+    "layout(location=2) in vec2 a_uv;\n"
     "uniform vec2 u_res;\n"
     "uniform vec4 u_camera; // x, y, zoom, rotation\n"
     "out vec4 v_col;\n"
+    "out vec2 v_uv;\n"
     "void main(){\n"
     "  // Apply camera transform\n"
     "  vec2 cam_pos = a_pos - u_camera.xy;\n"
@@ -65,13 +73,21 @@ static const char* vs_src =
     "  vec2 ndc = vec2( (cam_pos.x / u_res.x) * 2.0 - 1.0, 1.0 - (cam_pos.y / u_res.y) * 2.0 );\n"
     "  gl_Position = vec4(ndc, 0.0, 1.0);\n"
     "  v_col = a_col;\n"
+    "  v_uv = a_uv;\n"
     "}\n";
 
 static const char* fs_src =
     "#version 450 core\n"
     "in vec4 v_col;\n"
+    "in vec2 v_uv;\n"
+    "uniform bool u_use_tex;\n"
+    "uniform sampler2D u_tex;\n"
     "out vec4 frag;\n"
-    "void main(){ frag = v_col; }\n";
+    "void main(){\n"
+    "  vec4 col = v_col;\n"
+    "  if (u_use_tex) { col *= texture(u_tex, v_uv); }\n"
+    "  frag = col;\n"
+    "}\n";
 
 static GLuint compile_shader(GLenum type, const char* src) {
     GLuint s = glCreateShader(type);
@@ -128,9 +144,12 @@ static int init_gl(void) {
     glBindVertexArray(g_vao);
     glGenBuffers(1, &g_vbo_pos);
     glGenBuffers(1, &g_vbo_col);
+    glGenBuffers(1, &g_vbo_uv);
 
     u_res = glGetUniformLocation(g_prog, "u_res");
     u_camera = glGetUniformLocation(g_prog, "u_camera");
+    u_use_tex = glGetUniformLocation(g_prog, "u_use_tex");
+    u_tex = glGetUniformLocation(g_prog, "u_tex");
     
     glViewport(0, 0, g_w, g_h);
     glClearColor(0.3f, 0.7f, 1.0f, 1); // Sky blue
@@ -144,6 +163,8 @@ static void shutdown_gl(void) {
     if (g_prog) glUseProgram(0);
     if (g_vbo_pos) { GLuint b = g_vbo_pos; glDeleteBuffers(1, &b); g_vbo_pos = 0; }
     if (g_vbo_col) { GLuint b = g_vbo_col; glDeleteBuffers(1, &b); g_vbo_col = 0; }
+    if (g_vbo_uv)  { GLuint b = g_vbo_uv;  glDeleteBuffers(1, &b); g_vbo_uv = 0; }
+    for (int i=0;i<4;i++){ if (g_player_textures[i]) { GLuint t=g_player_textures[i]; glDeleteTextures(1,&t); g_player_textures[i]=0; } }
     if (g_vao) { GLuint a = g_vao; glDeleteVertexArrays(1, &a); g_vao = 0; }
     if (g_gl) { SDL_GL_DestroyContext(g_gl); g_gl = NULL; }
     if (g_window) { SDL_DestroyWindow(g_window); g_window = NULL; }
@@ -159,7 +180,7 @@ static void on_input(const struct ni_event *ev, void *ud) {
         } else if (ev->code == NI_KEY_RIGHT || ev->code == NI_KEY_D) {
             if (down) g_move_dir = 1; else if (g_move_dir > 0) g_move_dir = 0;
         } else if (ev->code == NI_KEY_SPACE || ev->code == NI_KEY_W || ev->code == NI_KEY_UP) {
-            g_jump_pressed = down;
+            g_jump_down = down;
         }
         if (down && (ev->code == NI_KEY_ESC || ev->code == NI_KEY_Q)) {
             atomic_store(&g_should_quit, true);
@@ -260,8 +281,46 @@ static void upload_mesh(void) {
     glVertexAttribPointer(1, 4, GL_FLOAT, GL_FALSE, sizeof(float) * 4, (void*)0);
 }
 
-// Draw a rectangle (for player sprite)
-static void draw_rect(float x, float y, float w, float h, float r, float g, float b, float a) {
+// Generate a simple 16x16 RGBA texture procedurally
+static GLuint make_simple_player_texture(uint8_t variant)
+{
+    const int W=16, H=16;
+    uint8_t pixels[W*H*4];
+    for (int y=0;y<H;y++){
+        for(int x=0;x<W;x++){
+            int i=(y*W+x)*4;
+            // Base body color
+            pixels[i+0]=220; pixels[i+1]=220; pixels[i+2]=255; pixels[i+3]=255;
+            // Outline
+            if (x==0||y==0||x==W-1||y==H-1){ pixels[i+0]=40; pixels[i+1]=40; pixels[i+2]=80; }
+            // Eyes
+            if (y==6 && (x==5||x==10)){ pixels[i+0]=0; pixels[i+1]=0; pixels[i+2]=0; }
+            // Legs animate by variant
+            if (y>11){
+                bool left  = ((variant%2)==0);
+                bool right = ((variant%2)==1);
+                if ((left && x<7) || (right && x>8)) { pixels[i+0]=50; pixels[i+1]=50; pixels[i+2]=120; }
+            }
+        }
+    }
+    GLuint tex; glGenTextures(1,&tex);
+    glBindTexture(GL_TEXTURE_2D, tex);
+    glTexImage2D(GL_TEXTURE_2D,0,GL_RGBA8,W,H,0,GL_RGBA,GL_UNSIGNED_BYTE,pixels);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    return tex;
+}
+
+static void init_player_sprites(void)
+{
+    // Variants: 0 idle, 1 walk1, 2 walk2, 3 jump
+    for (int i=0;i<4;i++) g_player_textures[i] = make_simple_player_texture((uint8_t)i);
+}
+
+// Draw a rectangle (for player sprite) optionally textured
+static void draw_rect(float x, float y, float w, float h, float r, float g, float b, float a, bool textured) {
     float verts[] = {
         x, y,       x + w, y,       x, y + h,
         x + w, y,   x + w, y + h,   x, y + h
@@ -275,7 +334,27 @@ static void draw_rect(float x, float y, float w, float h, float r, float g, floa
     glBufferData(GL_ARRAY_BUFFER, sizeof(verts), verts, GL_DYNAMIC_DRAW);
     glBindBuffer(GL_ARRAY_BUFFER, g_vbo_col);
     glBufferData(GL_ARRAY_BUFFER, sizeof(colors), colors, GL_DYNAMIC_DRAW);
-    
+
+    float uvs[] = {
+        0,0, 1,0, 0,1,
+        1,0, 1,1, 0,1
+    };
+    glBindBuffer(GL_ARRAY_BUFFER, g_vbo_uv);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(uvs), uvs, GL_DYNAMIC_DRAW);
+
+    glEnableVertexAttribArray(0);
+    glBindBuffer(GL_ARRAY_BUFFER, g_vbo_pos);
+    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, sizeof(float) * 2, (void*)0);
+
+    glEnableVertexAttribArray(1);
+    glBindBuffer(GL_ARRAY_BUFFER, g_vbo_col);
+    glVertexAttribPointer(1, 4, GL_FLOAT, GL_FALSE, sizeof(float) * 4, (void*)0);
+
+    glEnableVertexAttribArray(2);
+    glBindBuffer(GL_ARRAY_BUFFER, g_vbo_uv);
+    glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, sizeof(float) * 2, (void*)0);
+
+    if (u_use_tex >= 0) glUniform1i(u_use_tex, textured ? 1 : 0);
     glDrawArrays(GL_TRIANGLES, 0, 6);
 }
 
@@ -305,6 +384,8 @@ static SDL_AppResult init_world(void) {
     }
     
     upload_mesh();
+
+    init_player_sprites();
 
     // Create physics collision from tilemap
     ame_physics_create_tilemap_collision(g_physics, g_map.layer0.data, 
@@ -348,17 +429,28 @@ static void update_game(float dt) {
     ame_physics_get_velocity(g_player_body, &vx, &vy);
     
     int move_dir = atomic_load(&g_move_dir);
-    bool jump_pressed = atomic_load(&g_jump_pressed);
+    bool jump_down = atomic_load(&g_jump_down);
     
     // Horizontal movement
     const float move_speed = 150.0f;
     vx = move_speed * (float)move_dir;
-    
-    // Jumping (apply only on transition from pressed while grounded)
-    if (jump_pressed && g_on_ground) {
-        vy = -300.0f; // Jump velocity (a bit stronger)
-        atomic_store(&g_jump_pressed, false);
+
+    // Jumping with edge-detect, coyote time and jump buffering
+    static bool prev_jump_down = false;
+    static float coyote_timer = 0.0f;   // time since leaving ground
+    static float jump_buffer = 0.0f;    // time since pressing jump
+
+    if (g_on_ground) coyote_timer = 0.1f; else coyote_timer = fmaxf(0.0f, coyote_timer - dt);
+
+    bool jump_pressed_edge = (jump_down && !prev_jump_down);
+    if (jump_pressed_edge) jump_buffer = 0.12f; else jump_buffer = fmaxf(0.0f, jump_buffer - dt);
+
+    if (jump_buffer > 0.0f && (g_on_ground || coyote_timer > 0.0f)) {
+        vy = -320.0f;
+        jump_buffer = 0.0f;
+        coyote_timer = 0.0f;
     }
+    prev_jump_down = jump_down;
     
     ame_physics_set_velocity(g_player_body, vx, vy);
     
@@ -368,6 +460,18 @@ static void update_game(float dt) {
     // Update camera to follow player
     ame_camera_set_target(&g_camera, g_player_x, g_player_y);
     ame_camera_update(&g_camera, dt);
+
+    // Update animation state
+    g_anim_time += dt;
+    if (!g_on_ground) {
+        g_player_frame = 3; // jump
+    } else if (fabsf(vx) > 1.0f) {
+        // Walk cycle between 1 and 2 at 10 FPS
+        int cycle = ((int)(g_anim_time * 10.0f)) % 2; // 0 or 1
+        g_player_frame = 1 + cycle;
+    } else {
+        g_player_frame = 0; // idle
+    }
 }
 
 SDL_AppResult SDL_AppInit(void **appstate, int argc, char **argv) {
@@ -437,8 +541,14 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
     }
     
     // Draw player
+    if (u_use_tex >= 0) glUniform1i(u_use_tex, 0); // tiles untextured
+    // Use textured rect for player
+    glActiveTexture(GL_TEXTURE0);
+    if (u_tex >= 0) glUniform1i(u_tex, 0);
+    GLuint tex = g_player_textures[g_player_frame % 4];
+    glBindTexture(GL_TEXTURE_2D, tex);
     draw_rect(g_player_x - g_player_size/2, g_player_y - g_player_size/2, 
-              g_player_size, g_player_size, 1.0f, 0.2f, 0.2f, 1.0f);
+              g_player_size, g_player_size, 1.0f, 1.0f, 1.0f, 1.0f, true);
     
     SDL_GL_SwapWindow(g_window);
     return SDL_APP_CONTINUE;
