@@ -521,16 +521,21 @@ static SDL_AppResult init_world(void) {
     return SDL_APP_CONTINUE;
 }
 
-// Ground detection via raycast
+// Ground detection via 3 raycasts (left, center, right)
 static bool check_on_ground(void) {
     float px, py;
     ame_physics_get_position(g_player_body, &px, &py);
-    
-    // Broaden the ground check a bit to be more reliable
-    AmeRaycastHit hit = ame_physics_raycast(g_physics, 
-                                           px, py + g_player_size/2 + 1,
-                                           px, py + g_player_size/2 + 8);
-    return hit.hit;
+
+    const float half = g_player_size * 0.5f;
+    const float y0 = py + half + 1.0f;
+    const float y1 = py + half + 12.0f; // slightly longer to catch slopes/edges
+    const float ox[3] = { -half + 2.0f, 0.0f, half - 2.0f };
+
+    for (int i = 0; i < 3; ++i) {
+        AmeRaycastHit hit = ame_physics_raycast(g_physics, px + ox[i], y0, px + ox[i], y1);
+        if (hit.hit) return true;
+    }
+    return false;
 }
 
 static void update_game(float dt) {
@@ -551,15 +556,19 @@ static void update_game(float dt) {
     const float move_speed = 150.0f;
     vx = move_speed * (float)move_dir;
 
-    // Jumping with edge-detect, coyote time and jump buffering
+// Jumping with edge-detect, coyote time and jump buffering
     static bool prev_jump_down = false;
     static float coyote_timer = 0.0f;   // time since leaving ground
     static float jump_buffer = 0.0f;    // time since pressing jump
 
-    if (g_on_ground) coyote_timer = 0.1f; else coyote_timer = fmaxf(0.0f, coyote_timer - dt);
+    // Slightly longer coyote and buffer windows to be forgiving
+    const float COYOTE_TIME = 0.15f;
+    const float JUMP_BUFFER_TIME = 0.18f;
+
+    if (g_on_ground) coyote_timer = COYOTE_TIME; else coyote_timer = fmaxf(0.0f, coyote_timer - dt);
 
     bool jump_pressed_edge = (jump_down && !prev_jump_down);
-    if (jump_pressed_edge) jump_buffer = 0.12f; else jump_buffer = fmaxf(0.0f, jump_buffer - dt);
+    if (jump_pressed_edge) jump_buffer = JUMP_BUFFER_TIME; else jump_buffer = fmaxf(0.0f, jump_buffer - dt);
 
     bool did_jump = false;
     if (jump_buffer > 0.0f && (g_on_ground || coyote_timer > 0.0f)) {
