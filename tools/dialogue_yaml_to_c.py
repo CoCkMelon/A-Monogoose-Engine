@@ -93,6 +93,50 @@ def emit_scene(name: str, scene: dict, out_lines: list):
     return scene_var
 
 
+def emit_route(name: str, route: dict, out_lines: list):
+    base = sanitize_c_ident(name)
+    edge_arrays = []
+    nodes = route.get('nodes') or []
+    for i, node in enumerate(nodes):
+        edges = node.get('edges') or []
+        if edges:
+            arr_name = f"{base}_edges_{i}"
+            edge_arrays.append((arr_name, edges))
+    for arr_name, edges in edge_arrays:
+        out_lines.append(f"static const AmeStoryEdge {arr_name}[] = {")
+        for e in edges:
+            choice = (e.get('choice') or '').replace('"', '\\"')
+            to = (e.get('to') or '').replace('"', '\\"')
+            out_lines.append(f"    {{ \"{choice}\", \"{to}\" }},")
+        out_lines.append("};\n")
+    # Emit nodes array
+    nodes_var = f"{base}_nodes"
+    out_lines.append(f"static const AmeStoryNode {nodes_var}[] = {")
+    for i, node in enumerate(nodes):
+        nid = (node.get('id') or '').replace('"', '\\"')
+        scene = (node.get('scene') or '').replace('"', '\\"')
+        entry = (node.get('entry') or '')
+        if not entry:
+            entry_c = 'NULL'
+        else:
+            entry_c = f'"{entry.replace("\"","\\\"")}"'
+        edges = node.get('edges') or []
+        if edges:
+            arr_name = f"{base}_edges_{i}"
+            edge_ptr = arr_name
+            edge_cnt = str(len(edges))
+        else:
+            edge_ptr = 'NULL'
+            edge_cnt = '0'
+        out_lines.append(f"    {{ \"{nid}\", \"{scene}\", {entry_c}, {edge_ptr}, {edge_cnt} }},")
+    out_lines.append("};\n")
+    # Emit route object
+    route_var = f"route_{base}"
+    route_name_c = name.replace('"', '\\"')
+    out_lines.append(f"static const AmeStoryRoute {route_var} = {{ .name=\"{route_name_c}\", .nodes={nodes_var}, .node_count=sizeof({nodes_var})/sizeof({nodes_var}[0]) }};\n")
+    return route_var
+
+
 def main():
     if len(sys.argv) < 3:
         print("Usage: tools/dialogue_yaml_to_c.py <input_dir> <output_dir>", file=sys.stderr)
@@ -120,24 +164,77 @@ def main():
 
     lines = [C_SOURCE_PREAMBLE]
     scene_ptrs = []
+    route_ptrs = []
+
+    # Support simple include mechanism: if a YAML has an 'includes' key with list of filenames,
+    # load them first and merge scenes into output. Relative paths resolved against in_dir.
+    def resolve_includes(basefile, data):
+        incs = data.get('includes') or []
+        for inc in incs:
+            inc_path = inc
+            if not os.path.isabs(inc_path):
+                inc_path = os.path.join(os.path.dirname(basefile), inc_path)
+            if os.path.isdir(inc_path):
+                for root, dirs, files in os.walk(inc_path):
+                    for f in files:
+                        if f.lower().endswith(('.yaml', '.yml')):
+                            with open(os.path.join(root, f), 'r', encoding='utf-8') as f2:
+                                d = yaml.safe_load(f2) or {}
+                            yield os.path.join(root, f), d
+            elif os.path.isfile(inc_path):
+                with open(inc_path, 'r', encoding='utf-8') as f2:
+                    d = yaml.safe_load(f2) or {}
+                yield inc_path, d
+
     for yf in yamls:
         with open(yf, 'r', encoding='utf-8') as f:
             data = yaml.safe_load(f) or {}
-        # Accept either a single scene or a mapping of name->scene
-        if 'title' in data or 'scene' in data or 'lines' in data:
+        # First process includes
+        for inc_file, inc_data in resolve_includes(yf, data):
+            # emit any scenes contained in included files
+            if 'lines' in inc_data or 'scene' in inc_data:
+                name = inc_data.get('scene') or os.path.splitext(os.path.basename(inc_file))[0]
+                scene_ptrs.append(emit_scene(name, inc_data, lines))
+            elif isinstance(inc_data, dict):
+                for name, scene in inc_data.items():
+                    if isinstance(scene, dict) and ('lines' in scene or 'scene' in scene):
+                        scene_ptrs.append(emit_scene(name, scene, lines))
+
+        # Accept either a single scene, a route, or a mapping
+        if 'route' in data and 'nodes' in data:
+            name = data.get('route') or os.path.splitext(os.path.basename(yf))[0]
+            route_ptrs.append(emit_route(name, data, lines))
+        elif 'title' in data or 'scene' in data or 'lines' in data:
             name = data.get('scene') or os.path.splitext(os.path.basename(yf))[0]
-            scene_var = emit_scene(name, data, lines)
-            scene_ptrs.append(scene_var)
-        else:
-            for name, scene in (data.items() if isinstance(data, dict) else []):
-                scene_var = emit_scene(name, scene, lines)
-                scene_ptrs.append(scene_var)
-    # Registry
+            scene_ptrs.append(emit_scene(name, data, lines))
+        elif isinstance(data, dict):
+            for name, scene in data.items():
+                if isinstance(scene, dict) and ('lines' in scene or 'scene' in scene):
+                    scene_ptrs.append(emit_scene(name, scene, lines))
+                elif isinstance(scene, dict) and ('route' in scene or 'nodes' in scene):
+                    nm = scene.get('route') or name
+                    route_ptrs.append(emit_route(nm, scene, lines))
+
+    # Registries
     lines.append("const AmeDialogueScene *ame__generated_scenes[] = {")
     for sv in scene_ptrs:
         lines.append(f"    &{sv},")
     lines.append("};\n")
     lines.append(f"const size_t ame__generated_scenes_count = sizeof(ame__generated_scenes)/sizeof(ame__generated_scenes[0]);\n")
+
+    # Routes registry and public loader/list symbols
+    lines.append("\n// Routes registry\n")
+    lines.append("const AmeStoryRoute *ame__generated_routes[] = {")
+    for rv in route_ptrs:
+        lines.append(f"    &{rv},")
+    lines.append("};\n")
+    lines.append(f"const size_t ame__generated_routes_count = sizeof(ame__generated_routes)/sizeof(ame__generated_routes[0]);\n")
+
+    # Provide loaders for routes and scenes
+    lines.append("\n#include \"ame_story_route.h\"\n")
+    lines.append("const AmeStoryRoute *ame_story_route_load_embedded(const char *name){\n    for(size_t i=0;i<ame__generated_routes_count;i++){ if(ame__generated_routes[i]->name && strcmp(ame__generated_routes[i]->name,name)==0) return ame__generated_routes[i]; } return NULL; }\n")
+    lines.append("const char **ame_story_route_list_embedded(size_t *count){ static const char *names[512]; size_t n=0; for(size_t i=0;i<ame__generated_routes_count;i++){ if(ame__generated_routes[i]->name) names[n++]=ame__generated_routes[i]->name; } if(count) *count=n; return names; }\n")
+    lines.append("bool ame_story_route_has_embedded(const char *name){ return ame_story_route_load_embedded(name)!=NULL; }\n")
 
     with open(src_path, 'w') as sf:
         sf.write('\n'.join(lines))

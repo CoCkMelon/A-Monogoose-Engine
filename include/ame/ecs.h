@@ -11,8 +11,10 @@ extern "C" {
 
 #include <stdint.h>
 #include <stdbool.h>
+#include <stddef.h>
 
 typedef struct AmeEcsWorld AmeEcsWorld;
+typedef uint64_t AmeEcsId;
 
 // Create a new ECS world. Returns NULL on failure.
 AmeEcsWorld* ame_ecs_world_create(void);
@@ -22,6 +24,12 @@ bool ame_ecs_world_progress(AmeEcsWorld* w, double delta_time);
 
 // Get underlying flecs ecs_world_t* pointer.
 void* ame_ecs_world_ptr(AmeEcsWorld* w);
+
+// Basic utilities
+AmeEcsId ame_ecs_component_register(AmeEcsWorld* w, const char* name, size_t size, size_t alignment);
+AmeEcsId ame_ecs_entity_new(AmeEcsWorld* w);
+void ame_ecs_set(AmeEcsWorld* w, AmeEcsId e, AmeEcsId comp, const void* data, size_t size);
+bool ame_ecs_get(AmeEcsWorld* w, AmeEcsId e, AmeEcsId comp, void* out, size_t size);
 
 // Destroy and cleanup world.
 void ame_ecs_world_destroy(AmeEcsWorld* w);

@@ -1,0 +1,15 @@
+# Example story route with includes
+includes:
+  - sample.yaml
+
+route: main
+nodes:
+  - id: start
+    scene: sample
+    edges:
+      - choice: Continue
+        to: end
+  - id: end
+    scene: sample
+    entry: END
+    edges: []

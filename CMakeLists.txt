@@ -36,6 +36,7 @@ add_library(ame STATIC
     src/gl_loader.c
     src/dialogue.c
     src/embedded_dialogues.c
+    src/story_route.c
     src/ecs.c
 )
 
@@ -64,6 +65,9 @@ if(UNIX AND NOT APPLE)
 endif()
 
 target_include_directories(ame PUBLIC ${CMAKE_CURRENT_LIST_DIR}/include)
+
+# Ensure story route header is public
+install(FILES include/ame_story_route.h DESTINATION include)
 
 # Example: line_draw
 add_executable(line_draw
@@ -112,7 +116,6 @@ if(TARGET asyncinput_shared)
     target_link_libraries(raymarch_arcade PRIVATE asyncinput_shared)
     target_link_libraries(dialogue_example PRIVATE asyncinput_shared)
     target_link_libraries(dialogue_ui_example PRIVATE asyncinput_shared)
-    target_link_libraries(flecs_scene PRIVATE asyncinput_shared)
 elseif(TARGET asyncinput_static)
     target_link_libraries(line_draw PRIVATE asyncinput_static)
     target_link_libraries(rhythm_game PRIVATE asyncinput_static)
@@ -163,7 +166,7 @@ target_link_libraries(rhythm_game PRIVATE SDL3::SDL3 Threads::Threads ame)
  endif()
 target_link_libraries(dialogue_ui_example PRIVATE SDL3::SDL3 Threads::Threads ame SDL3_ttf::SDL3_ttf glad)
 # Link flecs example
-target_link_libraries(flecs_scene PRIVATE SDL3::SDL3 Threads::Threads ame)
+target_link_libraries(flecs_scene PRIVATE SDL3::SDL3 Threads::Threads ame flecs)
 
 # Compile definitions for SDL3 callback main style
 add_compile_definitions(SDL_MAIN_USE_CALLBACKS=1)
