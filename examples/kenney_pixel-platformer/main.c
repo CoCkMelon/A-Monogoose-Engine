@@ -378,7 +378,7 @@ static void draw_rect(float x, float y, float w, float h, float r, float g, floa
 }
 
 // Load an image file using SDL_image and upload as an OpenGL RGBA8 texture
-static GLuint load_texture_rgba8(const char* path)
+static GLuint load_texture_rgba8_with_size(const char* path, int* out_w, int* out_h)
 {
     SDL_Surface* surf = IMG_Load(path);
     if (!surf) {
@@ -391,6 +391,8 @@ static GLuint load_texture_rgba8(const char* path)
         SDL_Log("ConvertSurfaceFormat failed: %s", SDL_GetError());
         return 0;
     }
+    if (out_w) *out_w = conv->w;
+    if (out_h) *out_h = conv->h;
     GLuint tex = 0;
     glGenTextures(1, &tex);
     glBindTexture(GL_TEXTURE_2D, tex);
@@ -401,6 +403,12 @@ static GLuint load_texture_rgba8(const char* path)
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
     SDL_DestroySurface(conv);
     return tex;
+}
+
+// Backwards-compatible wrapper when size isn't needed
+static GLuint load_texture_rgba8(const char* path)
+{
+    return load_texture_rgba8_with_size(path, NULL, NULL);
 }
 
 static SDL_AppResult init_world(void) {
@@ -417,7 +425,7 @@ static SDL_AppResult init_world(void) {
     // Create level file
     create_level_data();
 
-    // Load tilemap
+// Load tilemap
     if (!ame_tilemap_load_tmj("examples/kenney_pixel-platformer/level.tmj", &g_map)) {
         SDL_Log("Failed to load level.tmj");
         return SDL_APP_FAILURE;
@@ -430,14 +438,27 @@ static SDL_AppResult init_world(void) {
     
     upload_mesh();
 
-    // Build textured UV mesh and atlas for tiles
-    // If your TMJ doesn't contain full tileset info, provide sensible defaults for the Kenney atlas
+    // Load atlas first to derive tileset layout from actual image size
+    int atlas_w = 0, atlas_h = 0;
+    g_tile_atlas_tex = load_texture_rgba8_with_size("examples/kenney_pixel-platformer/Tilemap/tilemap_packed.png", &atlas_w, &atlas_h);
+
+    // Configure tileset info using map tile size and atlas dimensions
     g_map.tileset.firstgid = (g_map.tileset.firstgid > 0 ? g_map.tileset.firstgid : 1);
     g_map.tileset.tile_width = g_map.tile_width;
     g_map.tileset.tile_height = g_map.tile_height;
-    if (g_map.tileset.columns == 0) g_map.tileset.columns = 20; // tilemap_packed.png has 20 columns (360/18)
-    if (g_map.tileset.tilecount == 0) g_map.tileset.tilecount = 180;
+    if (atlas_w > 0 && atlas_h > 0 && g_map.tileset.tile_width > 0 && g_map.tileset.tile_height > 0) {
+        g_map.tileset.image_width = atlas_w;
+        g_map.tileset.image_height = atlas_h;
+        g_map.tileset.columns = atlas_w / g_map.tileset.tile_width;
+        int rows = atlas_h / g_map.tileset.tile_height;
+        g_map.tileset.tilecount = g_map.tileset.columns * rows;
+    } else {
+        // Fallback sensible defaults if atlas failed to load
+        if (g_map.tileset.columns == 0) g_map.tileset.columns = 20;
+        if (g_map.tileset.tilecount == 0) g_map.tileset.tilecount = 180;
+    }
 
+    // Build textured UV mesh now that tileset columns/count are known
     if (ame_tilemap_build_uv_mesh(&g_map, &g_uvmesh)) {
         glBindBuffer(GL_ARRAY_BUFFER, g_tile_vbo_pos);
         glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)(g_uvmesh.vert_count * 2 * sizeof(float)), g_uvmesh.vertices, GL_STATIC_DRAW);
@@ -445,8 +466,7 @@ static SDL_AppResult init_world(void) {
         glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)(g_uvmesh.vert_count * 2 * sizeof(float)), g_uvmesh.uvs, GL_STATIC_DRAW);
     }
 
-    // Try to load real atlas from disk; fallback to procedural if it fails
-    g_tile_atlas_tex = load_texture_rgba8("examples/kenney_pixel-platformer/Tilemap/tilemap_packed.png");
+    // If atlas texture failed to load, build a procedural one that matches the inferred layout
     if (!g_tile_atlas_tex) {
         g_tile_atlas_tex = ame_tilemap_make_test_atlas_texture(&g_map);
     }
@@ -674,7 +694,7 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
         ame_audio_sync_sources_refs(refs, 3);
     }
     
-    // Draw tilemap (textured)
+// Draw tilemap (textured)
     if (g_uvmesh.vert_count > 0 && g_tile_atlas_tex != 0) {
         if (u_use_tex >= 0) glUniform1i(u_use_tex, 1);
         glActiveTexture(GL_TEXTURE0);
@@ -685,15 +705,22 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
         glBindBuffer(GL_ARRAY_BUFFER, g_tile_vbo_pos);
         glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, sizeof(float)*2, (void*)0);
 
+        // Provide a constant white color for tiles so texture shows as-is
+        glDisableVertexAttribArray(1);
+        glVertexAttrib4f(1, 1.0f, 1.0f, 1.0f, 1.0f);
+
         glEnableVertexAttribArray(2);
         glBindBuffer(GL_ARRAY_BUFFER, g_tile_vbo_uv);
         glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, sizeof(float)*2, (void*)0);
 
         glDrawArrays(GL_TRIANGLES, 0, (GLsizei)g_uvmesh.vert_count);
+
+        // Restore color attrib array state for subsequent draws if needed
+        glEnableVertexAttribArray(1);
     }
     
     // Draw player
-    if (u_use_tex >= 0) glUniform1i(u_use_tex, 0); // tiles untextured
+    if (u_use_tex >= 0) glUniform1i(u_use_tex, 0); // player uses its own texture with per-vertex color disabled
     // Use textured rect for player
     glActiveTexture(GL_TEXTURE0);
     if (u_tex >= 0) glUniform1i(u_tex, 0);
