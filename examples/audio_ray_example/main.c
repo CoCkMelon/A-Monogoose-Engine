@@ -306,6 +306,14 @@ static void update_audio_spatial(void) {
     gl = gl * 0.6f + single_gl * 0.4f;
     gr = gr * 0.6f + single_gr * 0.4f;
 
+    // Smooth abrupt changes to avoid clicks (EMA on L/R gains)
+    static int s_init = 0;
+    static float s_gl = 0.0f, s_gr = 0.0f;
+    const float alpha = 0.15f; // smoothing factor per frame
+    if (!s_init) { s_gl = gl; s_gr = gr; s_init = 1; }
+    s_gl = s_gl + alpha * (gl - s_gl);
+    s_gr = s_gr + alpha * (gr - s_gr);
+
     // Terminal debug every ~15 frames
     static int frame = 0; frame = (frame + 1) % 15;
     if (frame == 0) {
@@ -315,17 +323,25 @@ static void update_audio_spatial(void) {
                 single_gl, single_gr);
     }
 
-    // Convert L/R gains back to pan and overall gain
-    float sum = fmaxf(1e-6f, gl*gl + gr*gr);
+    // Convert smoothed L/R gains back to pan and overall gain
+    float sum = fmaxf(1e-6f, s_gl*s_gl + s_gr*s_gr);
     float gain = sqrtf(sum);
-    float norm_l = (gain > 1e-6f) ? (gl / gain) : 0.7071f;
-    float norm_r = (gain > 1e-6f) ? (gr / gain) : 0.7071f;
+    float norm_l = (gain > 1e-6f) ? (s_gl / gain) : 0.7071f;
+    float norm_r = (gain > 1e-6f) ? (s_gr / gain) : 0.7071f;
     float a = atan2f(norm_r, norm_l);
     float pan = (2.0f / (float)M_PI) * a - 1.0f;
     if (pan < -1.0f) pan = -1.0f; if (pan > 1.0f) pan = 1.0f;
 
-    as->gain = gain;
-    as->pan  = pan;
+    // Additional light smoothing on output gain and pan
+    static int s_gp_init = 0;
+    static float s_gain = 0.0f, s_pan = 0.0f;
+    const float alpha_out = 0.2f;
+    if (!s_gp_init) { s_gain = gain; s_pan = pan; s_gp_init = 1; }
+    s_gain = s_gain + alpha_out * (gain - s_gain);
+    s_pan  = s_pan  + alpha_out * (pan  - s_pan);
+
+    as->gain = s_gain;
+    as->pan  = s_pan;
 }
 
 SDL_AppResult SDL_AppInit(void **appstate, int argc, char **argv) {
