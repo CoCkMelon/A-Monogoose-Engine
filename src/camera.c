@@ -15,6 +15,35 @@ static void ortho_top_left(float l, float r, float t, float b, float n, float f,
     m[15] = 1.0f;
 }
 
+void ame_camera_init(AmeCamera* cam)
+{
+    if (!cam) return;
+    cam->x = 0.0f;
+    cam->y = 0.0f;
+    cam->zoom = 1.0f;
+    cam->rotation = 0.0f;
+    cam->target_x = 0.0f;
+    cam->target_y = 0.0f;
+}
+
+void ame_camera_set_target(AmeCamera* cam, float x, float y)
+{
+    if (!cam) return;
+    cam->target_x = x;
+    cam->target_y = y;
+}
+
+void ame_camera_update(AmeCamera* cam, float dt)
+{
+    if (!cam) return;
+    // Critically damped spring towards target (simple smoothing)
+    const float stiffness = 10.0f; // higher = snappier
+    float dx = cam->target_x - cam->x;
+    float dy = cam->target_y - cam->y;
+    cam->x += dx * fminf(stiffness * dt, 1.0f);
+    cam->y += dy * fminf(stiffness * dt, 1.0f);
+}
+
 void ame_camera_make_pixel_perfect(float cam_x, float cam_y, int win_w, int win_h, int zoom, float* m_out)
 {
     if (zoom < 1) zoom = 1;

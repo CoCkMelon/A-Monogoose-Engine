@@ -5,6 +5,25 @@
 extern "C" {
 #endif
 
+// Simple 2D camera struct used by examples
+typedef struct AmeCamera {
+    float x;
+    float y;
+    float zoom;      // Zoom factor (e.g. 1.0 = 1:1)
+    float rotation;  // Rotation in radians (unused in basic pipeline)
+    float target_x;  // Desired target to follow
+    float target_y;
+} AmeCamera;
+
+// Initialize camera with defaults
+void ame_camera_init(AmeCamera* cam);
+
+// Set the follow target for the camera
+void ame_camera_set_target(AmeCamera* cam, float x, float y);
+
+// Advance camera simulation (simple smoothing towards target)
+void ame_camera_update(AmeCamera* cam, float dt);
+
 // Build a pixel-perfect orthographic matrix with top-left origin.
 // cam_x, cam_y: world-space camera position before snapping, in pixels.
 // win_w, win_h: viewport size in pixels.
