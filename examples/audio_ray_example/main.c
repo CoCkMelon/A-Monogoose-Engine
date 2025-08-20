@@ -11,6 +11,7 @@
 #include "ame/audio.h"
 #include "ame/physics.h"
 #include "ame/audio_ray.h"
+#include "ame/acoustics.h"
 
 // Components
 typedef struct { float x, y; } Position;
@@ -48,11 +49,14 @@ static SDL_AppResult init_scene(void) {
     // Create physics world with no gravity
     g_phys = ame_physics_world_create(0.0f, 0.0f);
 
-    // Create two static walls between source and listener to demonstrate occlusion
+// Create two static walls between source and listener to demonstrate occlusion
+    // Attach acoustic material via user_data
+    static const AmeAcousticMaterial kCenterMat = AME_MAT_CONCRETE; // strong attenuation
+    static const AmeAcousticMaterial kRightMat  = AME_MAT_STEEL;    // low attenuation, better transmission
     // Wall 1 at center
-    g_wall1 = ame_physics_create_body(g_phys, g_w*0.5f, g_h*0.5f, 40.0f, 200.0f, AME_BODY_STATIC, false, NULL);
+    g_wall1 = ame_physics_create_body(g_phys, g_w*0.5f, g_h*0.5f, 40.0f, 200.0f, AME_BODY_STATIC, false, (void*)&kCenterMat);
     // Wall 2 near right
-    g_wall2 = ame_physics_create_body(g_phys, g_w*0.75f, g_h*0.5f, 40.0f, 200.0f, AME_BODY_STATIC, false, NULL);
+    g_wall2 = ame_physics_create_body(g_phys, g_w*0.75f, g_h*0.5f, 40.0f, 200.0f, AME_BODY_STATIC, false, (void*)&kRightMat);
 
     // Listener on the left-center
     g_listener = ecs_entity_init(w, &(ecs_entity_desc_t){0});

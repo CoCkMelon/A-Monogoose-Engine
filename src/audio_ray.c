@@ -1,4 +1,5 @@
 #include "ame/audio_ray.h"
+#include "ame/acoustics.h"
 #include <math.h>
 #include <string.h>
 
@@ -39,29 +40,58 @@ bool ame_audio_ray_compute(const AmePhysicsWorld* physics,
     float air_db = (p->air_absorption_db_per_meter > 0.0f) ? (-p->air_absorption_db_per_meter * dist) : 0.0f;
     float air_lin = db_to_linear(air_db);
 
-    // Occlusion: cast a ray and if any collider blocks, apply extra dB loss
-    float occl_lin = 1.0f;
-    if (physics && physics->world && p->occlusion_db > 0.0f) {
-        AmeRaycastHit hit = ame_physics_raycast((AmePhysicsWorld*)physics,
-                                                p->listener_x, p->listener_y,
-                                                p->source_x, p->source_y);
-        if (hit.hit && hit.fraction < 0.999f) {
-            float occ_db = -fabsf(p->occlusion_db);
-            occl_lin = db_to_linear(occ_db);
+    // Occlusion and transmission: cast ray and accumulate per-material losses
+    float extra_db_loss = 0.0f;
+    float mono_collapse_total = 0.0f; // combined mono factor [0..1]
+    if (physics && physics->world) {
+        AmeRaycastMultiHit mh = ame_physics_raycast_all((AmePhysicsWorld*)physics,
+                                                        p->listener_x, p->listener_y,
+                                                        p->source_x, p->source_y,
+                                                        32);
+        if (mh.count > 0) {
+            // Combine mono as: 1 - product(1 - m_i)
+            float one_minus = 1.0f;
+            for (size_t i = 0; i < mh.count; ++i) {
+                AmeRaycastHit h = mh.hits[i];
+                if (!h.hit || h.fraction >= 0.999f) continue;
+                float add_db = 0.0f;
+                float mono = 0.0f;
+                if (h.user_data) {
+                    const AmeAcousticMaterial *mat = (const AmeAcousticMaterial*)h.user_data;
+                    add_db = mat->transmission_loss_db;
+                    mono = mat->mono_collapse;
+                } else {
+                    // Fallback to configured occlusion if no material attached
+                    add_db = fabsf(p->occlusion_db);
+                    mono = 0.3f;
+                }
+                if (add_db > 0.0f) extra_db_loss += add_db;
+                one_minus *= (1.0f - AME_CLAMP(mono, 0.0f, 1.0f));
+            }
+            mono_collapse_total = 1.0f - one_minus;
         }
+        ame_physics_raycast_free(&mh);
     }
 
-    // Pan based on angle from listener to source
+    // Pan based on angle from listener to source (use cosine -> dx/dist)
     float angle = atan2f(dy, dx); // [-pi, pi], 0 = to the right
-    // Map angle to pan in [-1,1] where -1 is left, 1 is right
-    float pan = AME_CLAMP(sinf(angle), -1.0f, 1.0f);
+    float pan = AME_CLAMP(cosf(angle), -1.0f, 1.0f);
     float gl, gr; // constant power
     float x = 0.5f * (pan + 1.0f); // [0..1]
     float a = (float)M_PI_2 * x;
     gl = cosf(a);
     gr = sinf(a);
 
-    float gain = att * air_lin * occl_lin;
+    // Apply distance, air, and extra material losses
+    float gain = att * air_lin * db_to_linear(-extra_db_loss);
+
+    // Apply mono collapse by blending towards mid
+    if (mono_collapse_total > 0.0001f) {
+        float mid = 0.5f * (gl + gr);
+        gl = gl + (mid - gl) * mono_collapse_total;
+        gr = gr + (mid - gr) * mono_collapse_total;
+    }
+
     *out_l = gl * gain;
     *out_r = gr * gain;
     return true;
