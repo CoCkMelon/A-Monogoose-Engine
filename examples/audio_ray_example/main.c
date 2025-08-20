@@ -72,7 +72,7 @@ static SDL_AppResult init_scene(void) {
     g_comp_audio = (ecs_entity_t)ame_audio_register_component(g_world);
 
     // Create physics world with no gravity
-    g_phys = ame_physics_world_create(0.0f, 0.0f);
+    g_phys = ame_physics_world_create(0.0f, 0.0f, 1.0f/60.0f);
 
 // Create two static walls between source and listener to demonstrate occlusion
     // Attach acoustic material via user_data

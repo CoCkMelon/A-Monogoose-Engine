@@ -59,13 +59,13 @@ public:
 
 extern "C" {
 
-AmePhysicsWorld* ame_physics_world_create(float gravity_x, float gravity_y) {
+AmePhysicsWorld* ame_physics_world_create(float gravity_x, float gravity_y, float timestep) {
     AmePhysicsWorld* world = (AmePhysicsWorld*)calloc(1, sizeof(AmePhysicsWorld));
     if (!world) return NULL;
     
     b2Vec2 gravity(gravity_x, gravity_y);
     world->world = new b2World(gravity);
-    world->timestep = 1.0f / 60.0f;
+    world->timestep = timestep;  // 1000 Hz timestep to match game tick rate
     world->velocity_iters = 6;
     world->position_iters = 2;
     

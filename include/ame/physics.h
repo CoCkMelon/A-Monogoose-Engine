@@ -57,7 +57,7 @@ typedef struct AmeRaycastHit {
 } AmeRaycastHit;
 
 // Initialize physics world with gravity
-AmePhysicsWorld* ame_physics_world_create(float gravity_x, float gravity_y);
+AmePhysicsWorld* ame_physics_world_create(float gravity_x, float gravity_y, float timestep);
 
 // Destroy physics world and all bodies
 void ame_physics_world_destroy(AmePhysicsWorld* world);

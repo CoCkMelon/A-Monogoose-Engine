@@ -9,6 +9,7 @@
 #include <stdatomic.h>
 #include <stdbool.h>
 #include <stdint.h>
+#include <string.h>
 
 #include "ame/ecs.h"
 #include "ame/tilemap.h"
@@ -18,6 +19,41 @@
 #include "ame/audio_ray.h"
 #include "asyncinput.h"
 #include <SDL3_image/SDL_image.h>
+
+#ifdef DEBUG
+#define LOGD(...) SDL_Log(__VA_ARGS__)
+#else
+#define LOGD(...) ((void)0)
+#endif
+
+// ==========================
+// ECS Components & Tags (C)
+// ==========================
+
+typedef struct CPlayerTag { int unused; } CPlayerTag;
+typedef struct CSize { float w, h; } CSize;
+typedef struct CPhysicsBody { b2Body* body; } CPhysicsBody;
+typedef struct CGrounded { bool value; } CGrounded;
+typedef struct CInput {
+    int move_dir;          // -1, 0, 1
+    bool jump_down;        // current button state
+    bool prev_jump_down;   // edge detection
+    float coyote_timer;    // time since leaving ground
+    float jump_buffer;     // time since jump pressed
+    bool jump_trigger;     // set true when a jump occurs (consumed by audio)
+} CInput;
+
+typedef struct CAnimation { int frame; float time; } CAnimation;
+
+typedef struct CAmbientAudio { float x, y; float base_gain; } CAmbientAudio;
+
+typedef struct CCamera { AmeCamera cam; } CCamera;
+
+typedef struct CTilemapRef { AmeTilemap* map; AmeTilemapUvMesh* uvmesh; GLuint atlas_tex; } CTilemapRef;
+
+typedef struct CTextures { GLuint player[4]; } CTextures;
+
+typedef struct CAudioRefs { AmeAudioSource *music, *ambient, *jump; } CAudioRefs;
 
 // Game state
 static SDL_Window* g_window = NULL;
@@ -38,6 +74,12 @@ static GLuint g_tile_atlas_tex = 0;
 static AmeEcsWorld* g_world = NULL;
 static AmePhysicsWorld* g_physics = NULL;
 
+// ECS ids and entities
+static ecs_entity_t EcsCPlayerTag, EcsCSize, EcsCPhysicsBody, EcsCGrounded, EcsCInput, EcsCAnimation, EcsCAmbientAudio, EcsCCamera, EcsCTilemapRef, EcsCTextures, EcsCAudioRefs;
+static ecs_entity_t g_e_player = 0;
+static ecs_entity_t g_e_camera = 0;
+static ecs_entity_t g_e_world = 0;
+
 // Player state
 static b2Body* g_player_body = NULL;
 static float g_player_x = 100.0f, g_player_y = 100.0f;
@@ -46,16 +88,19 @@ static bool g_on_ground = false;
 
 // Input state
 static _Atomic bool g_should_quit = false;
-static _Atomic int g_move_dir = 0; // -1 left, 1 right, 0 none
+static _Atomic int g_move_dir = 0; // -1 left, 1 right, 0 none (derived from left/right)
 static _Atomic bool g_jump_down = false; // current key state
+static _Atomic bool g_left_down = false;
+static _Atomic bool g_right_down = false;
 
 // Camera
-static AmeCamera g_camera = {0};
+static AmeCamera g_camera = (AmeCamera){0};
+static _Atomic float g_cam_x = 0.0f, g_cam_y = 0.0f, g_cam_zoom = 3.0f;
 
 // Sprites
 static GLuint g_player_textures[4] = {0,0,0,0};
-static int g_player_frame = 0;
-static float g_anim_time = 0.0f;
+static _Atomic int g_player_frame_atomic = 0;
+static _Atomic float g_player_x_atomic = 100.0f, g_player_y_atomic = 100.0f;
 
 // Audio
 static AmeAudioSource g_music;
@@ -64,11 +109,22 @@ static AmeAudioSource g_jump_sfx;
 static float g_ambient_x = 360.0f; // arbitrary position in world space
 static float g_ambient_y = 180.0f;
 static float g_ambient_base_gain = 0.8f;
+static _Atomic float g_ambient_pan_atomic = 0.0f;
+static _Atomic float g_ambient_gain_atomic = 0.0f;
+static _Atomic bool g_jump_sfx_request = false;
 
 // Timing
 static uint64_t g_start_ns = 0;
 static inline uint64_t now_ns(void) { return SDL_GetTicksNS(); }
 static inline float seconds_since_start(void) { return (float)((now_ns() - g_start_ns) / 1e9); }
+static const float fixed_dt = 0.001;
+
+// Logic & Audio thread control
+static SDL_Thread* g_logic_thread = NULL;
+static SDL_Thread* g_audio_thread = NULL;
+static _Atomic bool g_logic_running = false;
+// Forward decl for audio thread
+static int audio_thread_main(void *ud);
 
 // Single-pass vertex shader for both tiles and sprites
 static const char* vs_src =
@@ -113,7 +169,7 @@ static GLuint compile_shader(GLenum type, const char* src) {
         char log[1024]; 
         GLsizei n = 0; 
         glGetShaderInfoLog(s, sizeof log, &n, log); 
-        SDL_Log("shader: %.*s", (int)n, log);
+        LOGD("shader: %.*s", (int)n, log);
     } 
     return s;
 }
@@ -129,7 +185,7 @@ static GLuint link_program(GLuint vs, GLuint fs) {
         char log[1024]; 
         GLsizei n = 0; 
         glGetProgramInfoLog(p, sizeof log, &n, log); 
-        SDL_Log("program: %.*s", (int)n, log);
+        LOGD("program: %.*s", (int)n, log);
     } 
     return p;
 }
@@ -141,12 +197,12 @@ static int init_gl(void) {
     SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
     
     g_window = SDL_CreateWindow("AME - Pixel Platformer", g_w, g_h, SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE);
-    if (!g_window) { SDL_Log("window: %s", SDL_GetError()); return 0; }
+    if (!g_window) { LOGD("window: %s", SDL_GetError()); return 0; }
     
     g_gl = SDL_GL_CreateContext(g_window);
-    if (!g_gl) { SDL_Log("ctx: %s", SDL_GetError()); return 0; }
+    if (!g_gl) { LOGD("ctx: %s", SDL_GetError()); return 0; }
     
-    if (!gladLoadGL((GLADloadfunc)SDL_GL_GetProcAddress)) { SDL_Log("glad fail"); return 0; }
+    if (!gladLoadGL((GLADloadfunc)SDL_GL_GetProcAddress)) { LOGD("glad fail"); return 0; }
     
     GLuint vs = compile_shader(GL_VERTEX_SHADER, vs_src);
     GLuint fs = compile_shader(GL_FRAGMENT_SHADER, fs_src);
@@ -194,16 +250,20 @@ static void on_input(const struct ni_event *ev, void *ud) {
     (void)ud;
     if (ev->type == NI_EV_KEY) {
         bool down = (ev->value != 0);
+        
         if (ev->code == NI_KEY_LEFT || ev->code == NI_KEY_A) {
-            if (down) g_move_dir = -1; else if (g_move_dir < 0) g_move_dir = 0;
+            atomic_store(&g_left_down, down);
         } else if (ev->code == NI_KEY_RIGHT || ev->code == NI_KEY_D) {
-            if (down) g_move_dir = 1; else if (g_move_dir > 0) g_move_dir = 0;
+            atomic_store(&g_right_down, down);
         } else if (ev->code == NI_KEY_SPACE || ev->code == NI_KEY_W || ev->code == NI_KEY_UP) {
-            g_jump_down = down;
+            atomic_store(&g_jump_down, down);
         }
         if (down && (ev->code == NI_KEY_ESC || ev->code == NI_KEY_Q)) {
             atomic_store(&g_should_quit, true);
         }
+        // Derive move_dir atomically from left/right states to avoid missed transitions
+        int md = (atomic_load(&g_right_down) ? 1 : 0) - (atomic_load(&g_left_down) ? 1 : 0);
+        atomic_store(&g_move_dir, md);
     }
 }
 
@@ -238,7 +298,7 @@ static void create_level_data(void) {
     
     FILE* f = fopen("examples/kenney_pixel-platformer/level.tmj", "w");
     if (!f) {
-        SDL_Log("Failed to create level file");
+        LOGD("Failed to create level file");
         return;
     }
     
@@ -382,13 +442,13 @@ static GLuint load_texture_rgba8_with_size(const char* path, int* out_w, int* ou
 {
     SDL_Surface* surf = IMG_Load(path);
     if (!surf) {
-        SDL_Log("IMG_Load failed: %s", SDL_GetError());
+        LOGD("IMG_Load failed: %s", SDL_GetError());
         return 0;
     }
     SDL_Surface* conv = SDL_ConvertSurface(surf, SDL_PIXELFORMAT_RGBA32);
     SDL_DestroySurface(surf);
     if (!conv) {
-        SDL_Log("ConvertSurfaceFormat failed: %s", SDL_GetError());
+        LOGD("ConvertSurfaceFormat failed: %s", SDL_GetError());
         return 0;
     }
     if (out_w) *out_w = conv->w;
@@ -411,38 +471,162 @@ static GLuint load_texture_rgba8(const char* path)
     return load_texture_rgba8_with_size(path, NULL, NULL);
 }
 
-static SDL_AppResult init_world(void) {
+// ============ Systems (C) ============
+static void SysInputGather(ecs_iter_t *it) {
+    if (it->count == 0) {
+        LOGD("[SysInputGather] WARNING: No entities matched!");
+        return;
+    }
+    
+    CInput *in = (CInput*)ecs_field(it, CInput, 0);
+    // Re-derive md here to ensure consistency if multiple updates happened between ticks
+    bool left = atomic_load(&g_left_down);
+    bool right = atomic_load(&g_right_down);
+    int md = (right ? 1 : 0) - (left ? 1 : 0);
+    bool jd = atomic_load(&g_jump_down);
+    
+    for (int i = 0; i < it->count; ++i) {
+        in[i].move_dir = md;
+        in[i].jump_down = jd;
+    }
+}
+
+static void SysGroundCheck(ecs_iter_t *it) {
+    CPhysicsBody *pb = (CPhysicsBody*)ecs_field(it, CPhysicsBody, 0);
+    CGrounded *gr = (CGrounded*)ecs_field(it, CGrounded, 1);
+    CSize *sz = (CSize*)ecs_field(it, CSize, 2);
+    for (int i = 0; i < it->count; ++i) {
+        b2Body* body = pb[i].body;
+        float px, py; ame_physics_get_position(body, &px, &py);
+        const float halfw = (sz ? sz[i].w * 0.5f : 8.0f);
+        const float y0 = py + halfw + 1.0f;
+        const float y1 = py + halfw - 12.0f;
+        const float ox[3] = { -halfw + 2.0f, 0.0f, halfw - 2.0f };
+        bool on_ground = false;
+        for (int j = 0; j < 3; ++j) {
+            AmeRaycastHit hit = ame_physics_raycast(g_physics, px + ox[j], y0, px + ox[j], y1);
+            if (hit.hit) { on_ground = true; break; }
+        }
+        gr[i].value = on_ground;
+    }
+}
+
+static void SysMovementAndJump(ecs_iter_t *it) {
+    CPhysicsBody *pb = (CPhysicsBody*)ecs_field(it, CPhysicsBody, 0);
+    CInput *in = (CInput*)ecs_field(it, CInput, 1);
+    CGrounded *gr = (CGrounded*)ecs_field(it, CGrounded, 2);
+    float dt = it->delta_time;
+    
+    for (int i = 0; i < it->count; ++i) {
+        float vx, vy; ame_physics_get_velocity(pb[i].body, &vx, &vy);
+        const float move_speed = 50.0f;
+        vx = move_speed * (float)in[i].move_dir;
+        const float COYOTE_TIME = 0.15f;
+        const float JUMP_BUFFER_TIME = 0.18f;
+        if (gr[i].value) in[i].coyote_timer = COYOTE_TIME; else in[i].coyote_timer = fmaxf(0.0f, in[i].coyote_timer - dt);
+        bool jump_edge = (in[i].jump_down && !in[i].prev_jump_down);
+        if (jump_edge) in[i].jump_buffer = JUMP_BUFFER_TIME; else in[i].jump_buffer = fmaxf(0.0f, in[i].jump_buffer - dt);
+        in[i].jump_trigger = false;
+        if (in[i].jump_buffer > 0.0f && (gr[i].value || in[i].coyote_timer > 0.0f)) {
+            vy = -320.0f;
+            in[i].jump_buffer = 0.0f;
+            in[i].coyote_timer = 0.0f;
+            in[i].jump_trigger = true;
+        }
+        in[i].prev_jump_down = in[i].jump_down;
+        ame_physics_set_velocity(pb[i].body, vx, vy);
+    }
+}
+
+static void SysCameraFollow(ecs_iter_t *it) {
+    CCamera *cc = (CCamera*)ecs_field(it, CCamera, 0);
+    const CPhysicsBody *pb = (const CPhysicsBody*)ecs_field(it, CPhysicsBody, 1);
+    float px = 0.0f, py = 0.0f;
+    if (pb && pb[0].body) ame_physics_get_position(pb[0].body, &px, &py);
+    ame_camera_set_target(&cc[0].cam, px, py);
+    ame_camera_update(&cc[0].cam, it->delta_time);
+    atomic_store(&g_cam_x, cc[0].cam.x);
+    atomic_store(&g_cam_y, cc[0].cam.y);
+    atomic_store(&g_cam_zoom, cc[0].cam.zoom);
+}
+
+static void SysAnimation(ecs_iter_t *it) {
+    CAnimation *an = (CAnimation*)ecs_field(it, CAnimation, 0);
+    const CPhysicsBody *pb = (const CPhysicsBody*)ecs_field(it, CPhysicsBody, 1);
+    const CGrounded *gr = (const CGrounded*)ecs_field(it, CGrounded, 2);
+    float vx = 0.0f, vy = 0.0f; (void)vy;
+    if (pb && pb[0].body) ame_physics_get_velocity(pb[0].body, &vx, &vy);
+    an[0].time += it->delta_time;
+    if (!gr[0].value) {
+        an[0].frame = 3; // jump
+    } else if (fabsf(vx) > 1.0f) {
+        int cycle = ((int)(an[0].time * 10.0f)) % 2; // 10 FPS walk
+        an[0].frame = 1 + cycle;
+    } else {
+        an[0].frame = 0; // idle
+    }
+    atomic_store(&g_player_frame_atomic, an[0].frame);
+}
+
+static void SysPostStateMirror(ecs_iter_t *it) {
+    const CPhysicsBody *pb = (const CPhysicsBody*)ecs_field(it, CPhysicsBody, 0);
+    float px = 0.0f, py = 0.0f;
+    if (pb && pb[0].body) { ame_physics_get_position(pb[0].body, &px, &py); }
+    atomic_store(&g_player_x_atomic, px);
+    atomic_store(&g_player_y_atomic, py);
+}
+
+static void SysAudioUpdate(ecs_iter_t *it) {
+    const CAmbientAudio *aa = (const CAmbientAudio*)ecs_field(it, CAmbientAudio, 0);
+    const CPhysicsBody *pb = (const CPhysicsBody*)ecs_field(it, CPhysicsBody, 1);
+    const CInput *in = (const CInput*)ecs_field(it, CInput, 2);
+    float px=0, py=0; if (pb && pb[0].body) ame_physics_get_position(pb[0].body, &px, &py);
+    AmeAudioRayParams rp;
+    rp.listener_x = px; rp.listener_y = py;
+    rp.source_x = aa[0].x; rp.source_y = aa[0].y;
+    rp.min_distance = 32.0f; rp.max_distance = 600.0f;
+    rp.occlusion_db = 8.0f; rp.air_absorption_db_per_meter = 0.01f;
+    float gl = 0.0f, gr = 0.0f;
+    if (ame_audio_ray_compute(g_physics, &rp, &gl, &gr)) {
+        float sum = gl + gr; float pan = 0.0f; if (sum > 0.0001f) pan = (gr - gl)/sum;
+        float total = (gl > gr ? gl : gr);
+        atomic_store(&g_ambient_pan_atomic, pan);
+        atomic_store(&g_ambient_gain_atomic, aa[0].base_gain * total);
+    }
+    if (in && in[0].jump_trigger) {
+        atomic_store(&g_jump_sfx_request, true);
+    }
+}
+
+// ============ Modular init helpers ============
+static bool register_components_and_entities(void) {
     g_world = ame_ecs_world_create();
-    if (!g_world) return SDL_APP_FAILURE;
+    if (!g_world) return false;
+    ecs_world_t* w = (ecs_world_t*)ame_ecs_world_ptr(g_world);
+    EcsCPlayerTag    = ecs_component_init(w, &(ecs_component_desc_t){ .entity = ecs_entity_init(w, &(ecs_entity_desc_t){ .name = "CPlayerTag" }), .type = { (int32_t)sizeof(CPlayerTag), (int32_t)_Alignof(CPlayerTag) } });
+    EcsCSize         = ecs_component_init(w, &(ecs_component_desc_t){ .entity = ecs_entity_init(w, &(ecs_entity_desc_t){ .name = "CSize" }), .type = { (int32_t)sizeof(CSize), (int32_t)_Alignof(CSize) } });
+    EcsCPhysicsBody  = ecs_component_init(w, &(ecs_component_desc_t){ .entity = ecs_entity_init(w, &(ecs_entity_desc_t){ .name = "CPhysicsBody" }), .type = { (int32_t)sizeof(CPhysicsBody), (int32_t)_Alignof(CPhysicsBody) } });
+    EcsCGrounded     = ecs_component_init(w, &(ecs_component_desc_t){ .entity = ecs_entity_init(w, &(ecs_entity_desc_t){ .name = "CGrounded" }), .type = { (int32_t)sizeof(CGrounded), (int32_t)_Alignof(CGrounded) } });
+    EcsCInput        = ecs_component_init(w, &(ecs_component_desc_t){ .entity = ecs_entity_init(w, &(ecs_entity_desc_t){ .name = "CInput" }), .type = { (int32_t)sizeof(CInput), (int32_t)_Alignof(CInput) } });
+    EcsCAnimation    = ecs_component_init(w, &(ecs_component_desc_t){ .entity = ecs_entity_init(w, &(ecs_entity_desc_t){ .name = "CAnimation" }), .type = { (int32_t)sizeof(CAnimation), (int32_t)_Alignof(CAnimation) } });
+    EcsCAmbientAudio = ecs_component_init(w, &(ecs_component_desc_t){ .entity = ecs_entity_init(w, &(ecs_entity_desc_t){ .name = "CAmbientAudio" }), .type = { (int32_t)sizeof(CAmbientAudio), (int32_t)_Alignof(CAmbientAudio) } });
+    EcsCCamera       = ecs_component_init(w, &(ecs_component_desc_t){ .entity = ecs_entity_init(w, &(ecs_entity_desc_t){ .name = "CCamera" }), .type = { (int32_t)sizeof(CCamera), (int32_t)_Alignof(CCamera) } });
+    EcsCTilemapRef   = ecs_component_init(w, &(ecs_component_desc_t){ .entity = ecs_entity_init(w, &(ecs_entity_desc_t){ .name = "CTilemapRef" }), .type = { (int32_t)sizeof(CTilemapRef), (int32_t)_Alignof(CTilemapRef) } });
+    EcsCTextures     = ecs_component_init(w, &(ecs_component_desc_t){ .entity = ecs_entity_init(w, &(ecs_entity_desc_t){ .name = "CTextures" }), .type = { (int32_t)sizeof(CTextures), (int32_t)_Alignof(CTextures) } });
+    EcsCAudioRefs    = ecs_component_init(w, &(ecs_component_desc_t){ .entity = ecs_entity_init(w, &(ecs_entity_desc_t){ .name = "CAudioRefs" }), .type = { (int32_t)sizeof(CAudioRefs), (int32_t)_Alignof(CAudioRefs) } });
+    g_e_world = ecs_entity_init(w, &(ecs_entity_desc_t){ .name = "World" });
+    g_e_camera = ecs_entity_init(w, &(ecs_entity_desc_t){ .name = "Camera" });
+    g_e_player = ecs_entity_init(w, &(ecs_entity_desc_t){ .name = "Player" });
+    return true;
+}
 
-    // Initialize physics with gravity
-    g_physics = ame_physics_world_create(0.0f, 300.0f); // Downward gravity
-    if (!g_physics) {
-        SDL_Log("Failed to create physics world");
-        return SDL_APP_FAILURE;
-    }
-
-    // Create level file
+static bool load_map_and_gpu(void) {
     create_level_data();
-
-// Load tilemap
-    if (!ame_tilemap_load_tmj("examples/kenney_pixel-platformer/level.tmj", &g_map)) {
-        SDL_Log("Failed to load level.tmj");
-        return SDL_APP_FAILURE;
-    }
-    
-    if (!ame_tilemap_build_mesh(&g_map, &g_mesh)) {
-        SDL_Log("Failed to build mesh");
-        return SDL_APP_FAILURE;
-    }
-    
+    if (!ame_tilemap_load_tmj("examples/kenney_pixel-platformer/level.tmj", &g_map)) return false;
+    if (!ame_tilemap_build_mesh(&g_map, &g_mesh)) return false;
     upload_mesh();
-
-    // Load atlas first to derive tileset layout from actual image size
     int atlas_w = 0, atlas_h = 0;
     g_tile_atlas_tex = load_texture_rgba8_with_size("examples/kenney_pixel-platformer/Tilemap/tilemap_packed.png", &atlas_w, &atlas_h);
-
-    // Configure tileset info using map tile size and atlas dimensions
     g_map.tileset.firstgid = (g_map.tileset.firstgid > 0 ? g_map.tileset.firstgid : 1);
     g_map.tileset.tile_width = g_map.tile_width;
     g_map.tileset.tile_height = g_map.tile_height;
@@ -453,70 +637,196 @@ static SDL_AppResult init_world(void) {
         int rows = atlas_h / g_map.tileset.tile_height;
         g_map.tileset.tilecount = g_map.tileset.columns * rows;
     } else {
-        // Fallback sensible defaults if atlas failed to load
         if (g_map.tileset.columns == 0) g_map.tileset.columns = 20;
         if (g_map.tileset.tilecount == 0) g_map.tileset.tilecount = 180;
     }
-
-    // Build textured UV mesh now that tileset columns/count are known
     if (ame_tilemap_build_uv_mesh(&g_map, &g_uvmesh)) {
         glBindBuffer(GL_ARRAY_BUFFER, g_tile_vbo_pos);
         glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)(g_uvmesh.vert_count * 2 * sizeof(float)), g_uvmesh.vertices, GL_STATIC_DRAW);
         glBindBuffer(GL_ARRAY_BUFFER, g_tile_vbo_uv);
         glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)(g_uvmesh.vert_count * 2 * sizeof(float)), g_uvmesh.uvs, GL_STATIC_DRAW);
     }
+    if (!g_tile_atlas_tex) g_tile_atlas_tex = ame_tilemap_make_test_atlas_texture(&g_map);
+    return true;
+}
 
-    // If atlas texture failed to load, build a procedural one that matches the inferred layout
-    if (!g_tile_atlas_tex) {
-        g_tile_atlas_tex = ame_tilemap_make_test_atlas_texture(&g_map);
+static bool setup_audio(void) {
+    if (!ame_audio_init(48000)) return false;
+    if (!ame_audio_source_load_opus_file(&g_music, "examples/kenney_pixel-platformer/brackeys_platformer_assets/music/time_for_adventure.opus", true)) { LOGD("Failed to load music"); }
+    else { g_music.gain = 0.3f; g_music.pan = 0.0f; g_music.playing = true; }
+    if (!ame_audio_source_load_opus_file(&g_ambient, "examples/kenney_pixel-platformer/brackeys_platformer_assets/sounds/power_up.opus", true)) { LOGD("Failed to load ambient sound"); }
+    else { g_ambient.gain = g_ambient_base_gain; g_ambient.pan = 0.0f; g_ambient.playing = true; }
+    if (!ame_audio_source_load_opus_file(&g_jump_sfx, "examples/kenney_pixel-platformer/brackeys_platformer_assets/sounds/jump.opus", false)) { LOGD("Failed to load jump sfx"); }
+    else { g_jump_sfx.gain = 0.6f; g_jump_sfx.pan = 0.0f; g_jump_sfx.playing = false; }
+    return true;
+}
+
+static void instantiate_world_entities(void) {
+    ecs_world_t* w = (ecs_world_t*)ame_ecs_world_ptr(g_world);
+    CTilemapRef tref = { .map = &g_map, .uvmesh = &g_uvmesh, .atlas_tex = g_tile_atlas_tex };
+    ecs_set_id(w, g_e_world, EcsCTilemapRef, sizeof(CTilemapRef), &tref);
+    CTextures texs; texs.player[0]=g_player_textures[0]; texs.player[1]=g_player_textures[1]; texs.player[2]=g_player_textures[2]; texs.player[3]=g_player_textures[3];
+    ecs_set_id(w, g_e_world, EcsCTextures, sizeof(CTextures), &texs);
+    CAudioRefs arefs = { .music=&g_music, .ambient=&g_ambient, .jump=&g_jump_sfx };
+    ecs_set_id(w, g_e_world, EcsCAudioRefs, sizeof(CAudioRefs), &arefs);
+    CAmbientAudio amb = { .x = g_ambient_x, .y = g_ambient_y, .base_gain = g_ambient_base_gain };
+    ecs_set_id(w, g_e_world, EcsCAmbientAudio, sizeof(CAmbientAudio), &amb);
+
+    CCamera cc; ame_camera_init(&cc.cam); cc.cam.zoom = 3.0f; ame_camera_set_viewport(&cc.cam, g_w, g_h);
+    ecs_set_id(w, g_e_camera, EcsCCamera, sizeof(CCamera), &cc);
+
+    CPlayerTag tag = {0}; ecs_set_id(w, g_e_player, EcsCPlayerTag, sizeof(CPlayerTag), &tag);
+    CSize sz = { .w = g_player_size, .h = g_player_size }; ecs_set_id(w, g_e_player, EcsCSize, sizeof(CSize), &sz);
+
+    g_physics = ame_physics_world_create(0.0f, 100.0f, fixed_dt);
+    ame_physics_create_tilemap_collision(g_physics, g_map.layer0.data, g_map.width, g_map.height, (float)g_map.tile_width);
+    g_player_body = ame_physics_create_body(g_physics, g_player_x, g_player_y, g_player_size, g_player_size, AME_BODY_DYNAMIC, false, NULL);
+    CPhysicsBody pb = { .body = g_player_body }; ecs_set_id(w, g_e_player, EcsCPhysicsBody, sizeof(CPhysicsBody), &pb);
+
+    CGrounded gr = { .value = false }; ecs_set_id(w, g_e_player, EcsCGrounded, sizeof(CGrounded), &gr);
+    CInput in = {0}; ecs_set_id(w, g_e_player, EcsCInput, sizeof(CInput), &in);
+    CAnimation an = { .frame = 0, .time = 0.0f }; ecs_set_id(w, g_e_player, EcsCAnimation, sizeof(CAnimation), &an);
+}
+
+static void register_systems(void) {
+    ecs_world_t* w = (ecs_world_t*)ame_ecs_world_ptr(g_world);
+
+    ecs_system_desc_t d;
+    memset(&d, 0, sizeof d);
+    d.entity = ecs_entity_init(w, &(ecs_entity_desc_t){ 
+        .name = "SysInputGather",
+        .add = (ecs_id_t[]){ ecs_pair(EcsDependsOn, EcsOnUpdate), EcsOnUpdate, 0 }
+    });
+    d.callback = SysInputGather;
+    d.query.terms[0].id = EcsCInput;
+    ecs_system_init(w, &d);
+
+    memset(&d, 0, sizeof d);
+    d.entity = ecs_entity_init(w, &(ecs_entity_desc_t){ 
+        .name = "SysGroundCheck",
+        .add = (ecs_id_t[]){ ecs_pair(EcsDependsOn, EcsOnUpdate), EcsOnUpdate, 0 }
+    });
+    d.callback = SysGroundCheck;
+    d.query.terms[0].id = EcsCPhysicsBody;
+    d.query.terms[1].id = EcsCGrounded;
+    d.query.terms[2].id = EcsCSize;
+    d.query.terms[2].oper = EcsOptional;  // Size is optional
+    ecs_system_init(w, &d);
+
+    memset(&d, 0, sizeof d);
+    d.entity = ecs_entity_init(w, &(ecs_entity_desc_t){ 
+        .name = "SysMovementAndJump",
+        .add = (ecs_id_t[]){ ecs_pair(EcsDependsOn, EcsOnUpdate), EcsOnUpdate, 0 }
+    });
+    d.callback = SysMovementAndJump;
+    d.query.terms[0].id = EcsCPhysicsBody;
+    d.query.terms[1].id = EcsCInput;
+    d.query.terms[2].id = EcsCGrounded;
+    ecs_system_init(w, &d);
+
+    memset(&d, 0, sizeof d);
+    d.entity = ecs_entity_init(w, &(ecs_entity_desc_t){ 
+        .name = "SysCameraFollow",
+        .add = (ecs_id_t[]){ ecs_pair(EcsDependsOn, EcsOnUpdate), EcsOnUpdate, 0 }
+    });
+    d.callback = SysCameraFollow;
+    d.query.terms[0].id = EcsCCamera;
+    d.query.terms[1].id = EcsCPhysicsBody;
+    d.query.terms[1].src.id = g_e_player;
+    ecs_system_init(w, &d);
+
+    memset(&d, 0, sizeof d);
+    d.entity = ecs_entity_init(w, &(ecs_entity_desc_t){ 
+        .name = "SysAnimation",
+        .add = (ecs_id_t[]){ ecs_pair(EcsDependsOn, EcsOnUpdate), EcsOnUpdate, 0 }
+    });
+    d.callback = SysAnimation;
+    d.query.terms[0].id = EcsCAnimation;
+    d.query.terms[1].id = EcsCPhysicsBody;
+    d.query.terms[2].id = EcsCGrounded;
+    ecs_system_init(w, &d);
+
+    memset(&d, 0, sizeof d);
+    d.entity = ecs_entity_init(w, &(ecs_entity_desc_t){ 
+        .name = "SysPostStateMirror",
+        .add = (ecs_id_t[]){ ecs_pair(EcsDependsOn, EcsOnUpdate), EcsOnUpdate, 0 }
+    });
+    d.callback = SysPostStateMirror;
+    d.query.terms[0].id = EcsCPhysicsBody;
+    ecs_system_init(w, &d);
+
+    memset(&d, 0, sizeof d);
+    d.entity = ecs_entity_init(w, &(ecs_entity_desc_t){ 
+        .name = "SysAudioUpdate",
+        .add = (ecs_id_t[]){ ecs_pair(EcsDependsOn, EcsOnUpdate), EcsOnUpdate, 0 }
+    });
+    d.callback = SysAudioUpdate;
+    d.query.terms[0].id = EcsCAmbientAudio;
+    d.query.terms[1].id = EcsCPhysicsBody; d.query.terms[1].src.id = g_e_player;
+    d.query.terms[2].id = EcsCInput;       d.query.terms[2].src.id = g_e_player;
+    ecs_system_init(w, &d);
+}
+
+static int logic_thread_main(void *ud) {
+    (void)ud;
+    ecs_world_t* w = (ecs_world_t*)ame_ecs_world_ptr(g_world);
+    
+    LOGD("[logic_thread] Starting, world ptr: %p", (void*)w);
+    
+    // Verify entities exist
+    if (ecs_is_alive(w, g_e_player)) {
+        LOGD("[logic_thread] Player entity is alive");
+        if (ecs_has_id(w, g_e_player, EcsCInput)) {
+            LOGD("[logic_thread] Player has CInput component");
+        } else {
+            LOGD("[logic_thread] ERROR: Player missing CInput component!");
+        }
+        if (ecs_has_id(w, g_e_player, EcsCPhysicsBody)) {
+            LOGD("[logic_thread] Player has CPhysicsBody component");
+        } else {
+            LOGD("[logic_thread] ERROR: Player missing CPhysicsBody component!");
+        }
+    } else {
+        LOGD("[logic_thread] ERROR: Player entity not alive!");
     }
+    
+    uint64_t last = now_ns();
+    double acc = 0.0;
+    atomic_store(&g_logic_running, true);
+    
+    int frame_counter = 0;
+    while (!atomic_load(&g_should_quit)) {
+        uint64_t t = now_ns();
+        double frame = (double)(t - last) / 1e9;
+        last = t;
+        if (frame > 0.05) frame = 0.05;
+        acc += frame;
+        int steps = 0;
+        while (acc >= fixed_dt && steps < 5) {
+            if ((frame_counter++ % 1000) == 0) {
+                LOGD("[logic_thread] Calling ecs_progress, frame %d", frame_counter);
+            }
+            ecs_progress(w, (float)fixed_dt);
+            ame_physics_world_step(g_physics);
+            acc -= fixed_dt;
+            steps++;
+        }
+        SDL_DelayNS(200000); // ~0.2 ms
+    }
+    atomic_store(&g_logic_running, false);
+    return 0;
+}
 
+static SDL_AppResult init_world(void) {
+    if (!register_components_and_entities()) return SDL_APP_FAILURE;
+    if (!load_map_and_gpu()) return SDL_APP_FAILURE;
     init_player_sprites();
+    if (!setup_audio()) return SDL_APP_FAILURE;
+    instantiate_world_entities();
+    register_systems();
 
-    // Audio setup: music, ambient, sfx
-    if (!ame_audio_init(48000)) { SDL_Log("Audio init failed"); return SDL_APP_FAILURE; }
-
-    // Music
-    if (!ame_audio_source_load_opus_file(&g_music, "examples/kenney_pixel-platformer/brackeys_platformer_assets/music/time_for_adventure.opus", true)) {
-        SDL_Log("Failed to load music");
-    } else {
-        g_music.gain = 0.3f;
-        g_music.pan = 0.0f;
-        g_music.playing = true;
-    }
-
-    // Ambient looping sound somewhere in the level
-    if (!ame_audio_source_load_opus_file(&g_ambient, "examples/kenney_pixel-platformer/brackeys_platformer_assets/sounds/power_up.opus", true)) {
-        SDL_Log("Failed to load ambient sound");
-    } else {
-        g_ambient.gain = g_ambient_base_gain;
-        g_ambient.pan = 0.0f;
-        g_ambient.playing = true;
-    }
-
-    // Jump one-shot
-    if (!ame_audio_source_load_opus_file(&g_jump_sfx, "examples/kenney_pixel-platformer/brackeys_platformer_assets/sounds/jump.opus", false)) {
-        SDL_Log("Failed to load jump sfx");
-    } else {
-        g_jump_sfx.gain = 0.6f;
-        g_jump_sfx.pan = 0.0f;
-        g_jump_sfx.playing = false;
-    }
-
-    // Create physics collision from tilemap
-    ame_physics_create_tilemap_collision(g_physics, g_map.layer0.data, 
-                                        g_map.width, g_map.height, 
-                                        (float)g_map.tile_width);
-
-    // Create player physics body
-    g_player_body = ame_physics_create_body(g_physics, g_player_x, g_player_y,
-                                           g_player_size, g_player_size, 
-                                           AME_BODY_DYNAMIC, false, NULL);
-
-    // Initialize camera
-    ame_camera_init(&g_camera);
-    g_camera.zoom = 3.0f; // Zoom in for pixel perfect look
-    ame_camera_set_viewport(&g_camera, g_w, g_h);
+    g_logic_thread = SDL_CreateThread(logic_thread_main, "logic", NULL);
+    if (!g_logic_thread) { LOGD("Failed to start logic thread: %s", SDL_GetError()); return SDL_APP_FAILURE; }
 
     return SDL_APP_CONTINUE;
 }
@@ -528,7 +838,7 @@ static bool check_on_ground(void) {
 
     const float half = g_player_size * 0.5f;
     const float y0 = py + half + 1.0f;
-    const float y1 = py + half + 12.0f; // slightly longer to catch slopes/edges
+    const float y1 = py + half - 12.0f; // This way works.
     const float ox[3] = { -half + 2.0f, 0.0f, half - 2.0f };
 
     for (int i = 0; i < 3; ++i) {
@@ -539,96 +849,10 @@ static bool check_on_ground(void) {
 }
 
 static void update_game(float dt) {
-    // Get player position from physics
-    ame_physics_get_position(g_player_body, &g_player_x, &g_player_y);
-    
-    // Check ground state
-    g_on_ground = check_on_ground();
-    
-    // Handle movement
-    float vx, vy;
-    ame_physics_get_velocity(g_player_body, &vx, &vy);
-    
-    int move_dir = atomic_load(&g_move_dir);
-    bool jump_down = atomic_load(&g_jump_down);
-    
-    // Horizontal movement
-    const float move_speed = 150.0f;
-    vx = move_speed * (float)move_dir;
-
-// Jumping with edge-detect, coyote time and jump buffering
-    static bool prev_jump_down = false;
-    static float coyote_timer = 0.0f;   // time since leaving ground
-    static float jump_buffer = 0.0f;    // time since pressing jump
-
-    // Slightly longer coyote and buffer windows to be forgiving
-    const float COYOTE_TIME = 0.15f;
-    const float JUMP_BUFFER_TIME = 0.18f;
-
-    if (g_on_ground) coyote_timer = COYOTE_TIME; else coyote_timer = fmaxf(0.0f, coyote_timer - dt);
-
-    bool jump_pressed_edge = (jump_down && !prev_jump_down);
-    if (jump_pressed_edge) jump_buffer = JUMP_BUFFER_TIME; else jump_buffer = fmaxf(0.0f, jump_buffer - dt);
-
-    bool did_jump = false;
-    if (jump_buffer > 0.0f && (g_on_ground || coyote_timer > 0.0f)) {
-        vy = -320.0f;
-        jump_buffer = 0.0f;
-        coyote_timer = 0.0f;
-        did_jump = true;
-    }
-    prev_jump_down = jump_down;
-    
-    ame_physics_set_velocity(g_player_body, vx, vy);
-    
-    // Step physics
-    ame_physics_world_step(g_physics);
-
-    // Audio: update ambient routing using audio ray
-    {
-        AmeAudioRayParams rp;
-        rp.listener_x = g_player_x;
-        rp.listener_y = g_player_y;
-        rp.source_x = g_ambient_x;
-        rp.source_y = g_ambient_y;
-        rp.min_distance = 32.0f;
-        rp.max_distance = 600.0f;
-        rp.occlusion_db = 8.0f;
-        rp.air_absorption_db_per_meter = 0.01f;
-        float gl = 0.0f, gr = 0.0f;
-        if (ame_audio_ray_compute(g_physics, &rp, &gl, &gr)) {
-            float sum = gl + gr;
-            float pan = 0.0f;
-            if (sum > 0.0001f) pan = (gr - gl) / sum; // crude mapping to [-1,1]
-            float total = (gl > gr ? gl : gr);
-            g_ambient.pan = pan;
-            g_ambient.gain = g_ambient_base_gain * total;
-            g_ambient.playing = true;
-        }
-    }
-
-    // Trigger jump sfx
-    if (did_jump) {
-        g_jump_sfx.u.pcm.cursor = 0;
-        g_jump_sfx.playing = true;
-        g_jump_sfx.pan = 0.0f;
-    }
-    
-    // Update camera to follow player
-    ame_camera_set_target(&g_camera, g_player_x, g_player_y);
-    ame_camera_update(&g_camera, dt);
-
-    // Update animation state
-    g_anim_time += dt;
-    if (!g_on_ground) {
-        g_player_frame = 3; // jump
-    } else if (fabsf(vx) > 1.0f) {
-        // Walk cycle between 1 and 2 at 10 FPS
-        int cycle = ((int)(g_anim_time * 10.0f)) % 2; // 0 or 1
-        g_player_frame = 1 + cycle;
-    } else {
-        g_player_frame = 0; // idle
-    }
+    (void)dt;
+    g_camera.x = atomic_load(&g_cam_x);
+    g_camera.y = atomic_load(&g_cam_y);
+    g_camera.zoom = atomic_load(&g_cam_zoom);
 }
 
 SDL_AppResult SDL_AppInit(void **appstate, int argc, char **argv) {
@@ -636,7 +860,7 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char **argv) {
     SDL_SetAppMetadata("AME - Pixel Platformer", "0.1", "com.example.ame.pixel_platformer");
     
     if (!SDL_Init(SDL_INIT_VIDEO)) { 
-        SDL_Log("SDL init: %s", SDL_GetError()); 
+        LOGD("SDL init: %s", SDL_GetError()); 
         return SDL_APP_FAILURE; 
     }
     
@@ -646,18 +870,21 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char **argv) {
     // Just try to load an image to verify SDL_image is working
     
     if (ni_init(0) != 0) {
-        SDL_Log("ni_init failed");
+        LOGD("ni_init failed");
         return SDL_APP_FAILURE;
     }
     
     if (ni_register_callback(on_input, NULL, 0) != 0) {
-        SDL_Log("ni_register_callback failed");
+        LOGD("ni_register_callback failed");
         ni_shutdown();
         return SDL_APP_FAILURE;
     }
     
     if (init_world() != SDL_APP_CONTINUE) return SDL_APP_FAILURE;
-    
+
+    // Start audio thread after world/audio init
+    g_audio_thread = SDL_CreateThread(audio_thread_main, "audio", NULL);
+
     g_start_ns = now_ns();
     return SDL_APP_CONTINUE;
 }
@@ -674,6 +901,28 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
     return SDL_APP_CONTINUE;
 }
 
+// Audio thread: applies atomic state quickly for low-latency reaction
+static int audio_thread_main(void *ud) {
+    (void)ud;
+    while (!atomic_load(&g_should_quit)) {
+        // Apply ambient parameters
+        g_ambient.pan = atomic_load(&g_ambient_pan_atomic);
+        g_ambient.gain = atomic_load(&g_ambient_gain_atomic);
+        if (atomic_exchange(&g_jump_sfx_request, false)) {
+            g_jump_sfx.u.pcm.cursor = 0;
+            g_jump_sfx.playing = true;
+            g_jump_sfx.pan = 0.0f;
+        }
+        AmeAudioSourceRef refs[3];
+        refs[0].src = &g_music;   refs[0].stable_id = 1;
+        refs[1].src = &g_ambient; refs[1].stable_id = 2;
+        refs[2].src = &g_jump_sfx; refs[2].stable_id = 3;
+        ame_audio_sync_sources_refs(refs, 3);
+        SDL_DelayNS(1000000); // ~1 ms
+    }
+    return 0;
+}
+
 SDL_AppResult SDL_AppIterate(void *appstate) {
     (void)appstate;
     
@@ -686,7 +935,8 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
     prev = t;
     
     update_game(dt);
-    
+
+    // Audio is now handled in a dedicated thread for low latency
     glUseProgram(g_prog);
     if (u_res >= 0) glUniform2f(u_res, (float)g_w, (float)g_h);
     if (u_camera >= 0) glUniform4f(u_camera, g_camera.x, g_camera.y, g_camera.zoom, g_camera.rotation);
@@ -694,15 +944,6 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
     glBindVertexArray(g_vao);
     glClear(GL_COLOR_BUFFER_BIT);
 
-    // Sync audio sources once per frame
-    {
-        AmeAudioSourceRef refs[3];
-        refs[0].src = &g_music;   refs[0].stable_id = 1;
-        refs[1].src = &g_ambient; refs[1].stable_id = 2;
-        refs[2].src = &g_jump_sfx; refs[2].stable_id = 3;
-        ame_audio_sync_sources_refs(refs, 3);
-    }
-    
 // Draw tilemap (textured)
     if (g_uvmesh.vert_count > 0 && g_tile_atlas_tex != 0) {
         if (u_use_tex >= 0) glUniform1i(u_use_tex, 1);
@@ -730,13 +971,14 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
     
     // Draw player
     if (u_use_tex >= 0) glUniform1i(u_use_tex, 0); // player uses its own texture with per-vertex color disabled
-    // Use textured rect for player
     glActiveTexture(GL_TEXTURE0);
     if (u_tex >= 0) glUniform1i(u_tex, 0);
-    GLuint tex = g_player_textures[g_player_frame % 4];
+    int pframe = atomic_load(&g_player_frame_atomic);
+    float px = atomic_load(&g_player_x_atomic);
+    float py = atomic_load(&g_player_y_atomic);
+    GLuint tex = g_player_textures[pframe % 4];
     glBindTexture(GL_TEXTURE_2D, tex);
-    draw_rect(g_player_x - g_player_size/2, g_player_y - g_player_size/2, 
-              g_player_size, g_player_size, 1.0f, 1.0f, 1.0f, 1.0f, true);
+    draw_rect(px - g_player_size/2, py - g_player_size/2, g_player_size, g_player_size, 1.0f, 1.0f, 1.0f, 1.0f, true);
     
     SDL_GL_SwapWindow(g_window);
     return SDL_APP_CONTINUE;
@@ -744,6 +986,10 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
 
 void SDL_AppQuit(void *appstate, SDL_AppResult result) {
     (void)appstate; (void)result;
+
+    atomic_store(&g_should_quit, true);
+    if (g_logic_thread) { SDL_WaitThread(g_logic_thread, NULL); g_logic_thread = NULL; }
+    if (g_audio_thread) { SDL_WaitThread(g_audio_thread, NULL); g_audio_thread = NULL; }
     
     if (g_player_body) {
         ame_physics_destroy_body(g_physics, g_player_body);
