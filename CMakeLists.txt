@@ -127,6 +127,11 @@ add_executable(audio_pan_example
     examples/audio_pan_example/main.c
 )
 
+# Example: audio opus playback from file
+add_executable(audio_opus_example
+    examples/audio_opus_example/main.c
+)
+
 # Prefer the shared lib if enabled, fall back to static otherwise
 if(TARGET asyncinput_shared)
     target_link_libraries(line_draw PRIVATE asyncinput_shared)
@@ -160,6 +165,7 @@ if(TARGET OpenGL::GL)
     target_link_libraries(flecs_scene PRIVATE OpenGL::GL)
     target_link_libraries(tilemap_render PRIVATE OpenGL::GL)
     target_link_libraries(audio_pan_example PRIVATE OpenGL::GL)
+    target_link_libraries(audio_opus_example PRIVATE OpenGL::GL)
 else()
     target_link_libraries(line_draw PRIVATE GL)
     target_link_libraries(rhythm_game PRIVATE GL)
@@ -172,6 +178,7 @@ else()
     target_link_libraries(flecs_scene PRIVATE GL)
     target_link_libraries(tilemap_render PRIVATE GL)
     target_link_libraries(audio_pan_example PRIVATE GL)
+    target_link_libraries(audio_opus_example PRIVATE GL)
 endif()
 
 target_link_libraries(line_draw PRIVATE SDL3::SDL3 Threads::Threads ame)
@@ -195,6 +202,8 @@ target_link_libraries(flecs_scene PRIVATE SDL3::SDL3 Threads::Threads ame flecs)
 target_link_libraries(tilemap_render PRIVATE SDL3::SDL3 Threads::Threads ame flecs)
 # Link audio example
 target_link_libraries(audio_pan_example PRIVATE SDL3::SDL3 Threads::Threads ame)
+# Link opus example
+target_link_libraries(audio_opus_example PRIVATE SDL3::SDL3 Threads::Threads ame)
 
 # Compile definitions for SDL3 callback main style
 add_compile_definitions(SDL_MAIN_USE_CALLBACKS=1)
@@ -209,4 +218,5 @@ if(UNIX AND NOT APPLE)
     target_link_libraries(flecs_scene PRIVATE dl)
     target_link_libraries(tilemap_render PRIVATE dl)
     target_link_libraries(audio_pan_example PRIVATE dl)
+    target_link_libraries(audio_opus_example PRIVATE dl)
 endif()
