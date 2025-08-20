@@ -17,6 +17,7 @@
 #include "ame/audio.h"
 #include "ame/audio_ray.h"
 #include "asyncinput.h"
+#include <SDL3_image/SDL_image.h>
 
 // Game state
 static SDL_Window* g_window = NULL;
@@ -376,12 +377,30 @@ static void draw_rect(float x, float y, float w, float h, float r, float g, floa
     glDrawArrays(GL_TRIANGLES, 0, 6);
 }
 
-// Try to load a RGBA8 texture. Placeholder returns 0 to trigger procedural fallback.
+// Load an image file using SDL_image and upload as an OpenGL RGBA8 texture
 static GLuint load_texture_rgba8(const char* path)
 {
-    (void)path;
-    // TODO: integrate stb_image or SDL_image to actually load PNGs.
-    return 0; // cause fallback to procedural atlas
+    SDL_Surface* surf = IMG_Load(path);
+    if (!surf) {
+        SDL_Log("IMG_Load failed: %s", SDL_GetError());
+        return 0;
+    }
+    SDL_Surface* conv = SDL_ConvertSurface(surf, SDL_PIXELFORMAT_RGBA32);
+    SDL_DestroySurface(surf);
+    if (!conv) {
+        SDL_Log("ConvertSurfaceFormat failed: %s", SDL_GetError());
+        return 0;
+    }
+    GLuint tex = 0;
+    glGenTextures(1, &tex);
+    glBindTexture(GL_TEXTURE_2D, tex);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, conv->w, conv->h, 0, GL_RGBA, GL_UNSIGNED_BYTE, conv->pixels);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    SDL_DestroySurface(conv);
+    return tex;
 }
 
 static SDL_AppResult init_world(void) {
@@ -427,7 +446,6 @@ static SDL_AppResult init_world(void) {
     }
 
     // Try to load real atlas from disk; fallback to procedural if it fails
-    extern GLuint load_texture_rgba8(const char* path);
     g_tile_atlas_tex = load_texture_rgba8("examples/kenney_pixel-platformer/Tilemap/tilemap_packed.png");
     if (!g_tile_atlas_tex) {
         g_tile_atlas_tex = ame_tilemap_make_test_atlas_texture(&g_map);
@@ -594,6 +612,9 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char **argv) {
     }
     
     if (!init_gl()) return SDL_APP_FAILURE;
+
+    // SDL3_image doesn't need explicit initialization anymore
+    // Just try to load an image to verify SDL_image is working
     
     if (ni_init(0) != 0) {
         SDL_Log("ni_init failed");
@@ -705,5 +726,6 @@ void SDL_AppQuit(void *appstate, SDL_AppResult result) {
     ni_shutdown();
     shutdown_gl();
     ame_audio_shutdown();
+    // SDL3_image doesn't need explicit quit
     SDL_Quit();
 }
