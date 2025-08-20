@@ -24,6 +24,8 @@ void ame_camera_init(AmeCamera* cam)
     cam->rotation = 0.0f;
     cam->target_x = 0.0f;
     cam->target_y = 0.0f;
+    cam->viewport_w = 0;
+    cam->viewport_h = 0;
 }
 
 void ame_camera_set_target(AmeCamera* cam, float x, float y)
@@ -33,13 +35,29 @@ void ame_camera_set_target(AmeCamera* cam, float x, float y)
     cam->target_y = y;
 }
 
+void ame_camera_set_viewport(AmeCamera* cam, int w, int h)
+{
+    if (!cam) return;
+    cam->viewport_w = w;
+    cam->viewport_h = h;
+}
+
 void ame_camera_update(AmeCamera* cam, float dt)
 {
     if (!cam) return;
-    // Critically damped spring towards target (simple smoothing)
+    int vw = cam->viewport_w > 0 ? cam->viewport_w : 0;
+    int vh = cam->viewport_h > 0 ? cam->viewport_h : 0;
+    float half_w = (vw > 0 ? (float)vw : 0.0f) / (cam->zoom > 0 ? cam->zoom : 1.0f) * 0.5f;
+    float half_h = (vh > 0 ? (float)vh : 0.0f) / (cam->zoom > 0 ? cam->zoom : 1.0f) * 0.5f;
+
+    // Desired top-left so that target appears centered
+    float desired_x = cam->target_x - half_w;
+    float desired_y = cam->target_y - half_h;
+
+    // Critically damped spring towards desired top-left (simple smoothing)
     const float stiffness = 10.0f; // higher = snappier
-    float dx = cam->target_x - cam->x;
-    float dy = cam->target_y - cam->y;
+    float dx = desired_x - cam->x;
+    float dy = desired_y - cam->y;
     cam->x += dx * fminf(stiffness * dt, 1.0f);
     cam->y += dy * fminf(stiffness * dt, 1.0f);
 }
