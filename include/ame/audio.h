@@ -70,8 +70,16 @@ bool ame_audio_source_load_opus_file(AmeAudioSource *s, const char *filepath, bo
 // pan in [-1,1] -> (gain_l, gain_r)
 void ame_audio_constant_power_gains(float pan, float *out_l, float *out_r);
 
-// Sync the active sources by providing an array of pointers to AmeAudioSource components.
-// This avoids requiring Flecs iteration from the audio module, keeping coupling minimal.
+// Reference with a stable identifier for a source (e.g., ECS entity id)
+typedef struct AmeAudioSourceRef {
+    struct AmeAudioSource *src;
+    uint64_t stable_id;
+} AmeAudioSourceRef;
+
+// Preferred: sync active sources with stable ids to preserve phase/cursor across frames.
+void ame_audio_sync_sources_refs(const AmeAudioSourceRef *refs, size_t count);
+
+// Legacy: sync by pointers only (may cause phase resets if pointers relocate).
 void ame_audio_sync_sources_manual(struct AmeAudioSource **sources, size_t count);
 
 #ifdef __cplusplus

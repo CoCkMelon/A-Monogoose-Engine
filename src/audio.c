@@ -26,9 +26,10 @@ typedef struct AmeMixer {
     _Atomic bool running;
     pthread_mutex_t mtx;
 
-    // We store audio sources directly from ECS by iterating each frame, but the mixer
-    // keeps an internal simple array snapshot to avoid locking in the audio callback.
-    AmeAudioSource **active;
+    // Mixer keeps a copy of active sources (value semantics) decoupled from ECS memory.
+    // We also store stable ids to preserve state (phase/cursor) across syncs.
+    AmeAudioSource *active_vals;  // contiguous array of copies used for mixing
+    uint64_t       *active_ids;   // parallel array storing stable ids
     size_t active_count;
     size_t active_cap;
 
@@ -41,19 +42,53 @@ typedef struct AmeMixer {
 
 static AmeMixer g_mixer = {0};
 
-static void mixer_set_active_sources(AmeAudioSource **list, size_t count) {
+static void mixer_set_active_refs(const struct AmeAudioSourceRef *refs, size_t count) {
     pthread_mutex_lock(&g_mixer.mtx);
+
+    // Ensure capacity for values and origin pointers
     if (count > g_mixer.active_cap) {
         size_t ncap = count * 2 + 8;
-        AmeAudioSource **nl = (AmeAudioSource**)realloc(g_mixer.active, ncap * sizeof(*nl));
-        if (nl) { g_mixer.active = nl; g_mixer.active_cap = ncap; }
+        AmeAudioSource *nv = (AmeAudioSource*)realloc(g_mixer.active_vals, ncap * sizeof(AmeAudioSource));
+        uint64_t *ni = (uint64_t*)realloc(g_mixer.active_ids, ncap * sizeof(uint64_t));
+        if (nv && ni) {
+            g_mixer.active_vals = nv;
+            g_mixer.active_ids = ni;
+            g_mixer.active_cap = ncap;
+        } else {
+            // Allocation failed; keep previous state
+            if (nv) g_mixer.active_vals = nv;
+            if (ni) g_mixer.active_ids = ni;
+            g_mixer.active_count = 0;
+            pthread_mutex_unlock(&g_mixer.mtx);
+            return;
+        }
     }
-    if (count <= g_mixer.active_cap && g_mixer.active) {
-        memcpy(g_mixer.active, list, count * sizeof(AmeAudioSource*));
-        g_mixer.active_count = count;
-    } else {
-        g_mixer.active_count = 0;
+
+    // Build new snapshot, preserving state from previous snapshot by matching origin pointers
+    for (size_t i = 0; i < count; ++i) {
+        const struct AmeAudioSourceRef *r = &refs[i];
+        AmeAudioSource *src_ptr = r->src;
+        uint64_t sid = r->stable_id;
+        AmeAudioSource copy = (AmeAudioSource){0};
+        if (src_ptr) copy = *src_ptr;
+        // Find previous index for this stable id
+        size_t prev_idx = (size_t)-1;
+        for (size_t j = 0; j < g_mixer.active_count; ++j) {
+            if (g_mixer.active_ids[j] == sid) { prev_idx = j; break; }
+        }
+        if (prev_idx != (size_t)-1) {
+            // Preserve stateful fields
+            if (copy.type == AME_AUDIO_SOURCE_OSC_SIGMOID && g_mixer.active_vals[prev_idx].type == AME_AUDIO_SOURCE_OSC_SIGMOID) {
+                copy.u.osc.phase = g_mixer.active_vals[prev_idx].u.osc.phase;
+            } else if (copy.type == AME_AUDIO_SOURCE_OPUS && g_mixer.active_vals[prev_idx].type == AME_AUDIO_SOURCE_OPUS) {
+                copy.u.pcm.cursor = g_mixer.active_vals[prev_idx].u.pcm.cursor;
+            }
+        }
+        g_mixer.active_vals[i] = copy;
+        g_mixer.active_ids[i] = sid;
     }
+    g_mixer.active_count = count;
+
     pthread_mutex_unlock(&g_mixer.mtx);
 }
 
@@ -159,31 +194,31 @@ static int pa_callback(const void *input, void *output,
     float *out = (float*)output;
     memset(out, 0, frameCount * 2 * sizeof(float));
 
-    // Copy active source pointers under lock, then mix without holding the lock
+    // Copy active source values under lock, then mix without holding the lock.
     pthread_mutex_lock(&g_mixer.mtx);
     size_t count = g_mixer.active_count;
-    AmeAudioSource **list = g_mixer.active;
+    AmeAudioSource *vals = g_mixer.active_vals; // snapshot values
 
     // Use a small stack buffer for common cases to avoid heap alloc in the callback
     const size_t STACK_MAX = 64;
-    AmeAudioSource *stack_buf[STACK_MAX];
-    AmeAudioSource **tmp = stack_buf;
+    AmeAudioSource stack_vals[STACK_MAX];
+    AmeAudioSource *tmp_vals = stack_vals;
     bool heap_used = false;
     if (count > STACK_MAX) {
-        tmp = (AmeAudioSource**)malloc(count * sizeof(AmeAudioSource*));
-        heap_used = (tmp != NULL);
+        tmp_vals = (AmeAudioSource*)malloc(count * sizeof(AmeAudioSource));
+        heap_used = (tmp_vals != NULL);
         if (!heap_used) { // fallback to mixing nothing if allocation fails
             count = 0;
-            tmp = stack_buf;
+            tmp_vals = stack_vals;
         }
     }
     if (count > 0) {
-        memcpy(tmp, list, count * sizeof(AmeAudioSource*));
+        memcpy(tmp_vals, vals, count * sizeof(AmeAudioSource));
     }
     pthread_mutex_unlock(&g_mixer.mtx);
 
     for (size_t i = 0; i < count; ++i) {
-        AmeAudioSource *s = tmp[i];
+        AmeAudioSource *s = &tmp_vals[i];
         if (!s || !s->playing || s->gain <= 0.0f) continue;
         float gl, gr; ame_audio_constant_power_gains(s->pan, &gl, &gr);
         gl *= s->gain; gr *= s->gain;
@@ -239,7 +274,21 @@ static int pa_callback(const void *input, void *output,
         g_mixer.fade_in_remaining = r;
     }
 
-    if (heap_used) free(tmp);
+    // Write back stateful fields (phase/cursor) into mixer storage under lock
+    pthread_mutex_lock(&g_mixer.mtx);
+    size_t write_n = (count <= g_mixer.active_count) ? count : g_mixer.active_count;
+    for (size_t i = 0; i < write_n; ++i) {
+        if (g_mixer.active_vals[i].type == AME_AUDIO_SOURCE_OSC_SIGMOID && tmp_vals[i].type == AME_AUDIO_SOURCE_OSC_SIGMOID) {
+            g_mixer.active_vals[i].u.osc.phase = tmp_vals[i].u.osc.phase;
+        } else if (g_mixer.active_vals[i].type == AME_AUDIO_SOURCE_OPUS && tmp_vals[i].type == AME_AUDIO_SOURCE_OPUS) {
+            g_mixer.active_vals[i].u.pcm.cursor = tmp_vals[i].u.pcm.cursor;
+        }
+        // Also reflect 'playing' flag if it turned off
+        g_mixer.active_vals[i].playing = tmp_vals[i].playing;
+    }
+    pthread_mutex_unlock(&g_mixer.mtx);
+
+    if (heap_used) free(tmp_vals);
     return paContinue;
 }
 
@@ -380,8 +429,10 @@ void ame_audio_shutdown(void) {
     }
     Pa_Terminate();
 
-    if (g_mixer.active) free(g_mixer.active);
-    g_mixer.active = NULL; g_mixer.active_cap = g_mixer.active_count = 0;
+    if (g_mixer.active_vals) free(g_mixer.active_vals);
+    if (g_mixer.active_ids) free(g_mixer.active_ids);
+    g_mixer.active_vals = NULL; g_mixer.active_ids = NULL;
+    g_mixer.active_cap = g_mixer.active_count = 0;
 
     pthread_mutex_destroy(&g_mixer.mtx);
 }
@@ -398,6 +449,20 @@ AmeEcsId ame_audio_register_component(AmeEcsWorld *ew) {
     return (AmeEcsId)id;
 }
 
+void ame_audio_sync_sources_refs(const struct AmeAudioSourceRef *refs, size_t count) {
+    mixer_set_active_refs(refs, count);
+}
+
 void ame_audio_sync_sources_manual(struct AmeAudioSource **sources, size_t count) {
-    mixer_set_active_sources(sources, count);
+    // Fallback: build refs with pointer-derived ids (not stable across relocations)
+    AmeAudioSourceRef stack_refs[64];
+    AmeAudioSourceRef *refs = stack_refs;
+    bool heap_used = false;
+    if (count > 64) { refs = (AmeAudioSourceRef*)malloc(count * sizeof(AmeAudioSourceRef)); heap_used = (refs != NULL); if (!heap_used) { count = 0; refs = stack_refs; } }
+    for (size_t i = 0; i < count; ++i) {
+        refs[i].src = sources[i];
+        refs[i].stable_id = (uint64_t)(uintptr_t)sources[i];
+    }
+    mixer_set_active_refs(refs, count);
+    if (heap_used) free(refs);
 }

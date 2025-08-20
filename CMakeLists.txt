@@ -1,10 +1,13 @@
 cmake_minimum_required(VERSION 3.16)
-project(a_mongoose_engine C)
+project(a_mongoose_engine C CXX)
 
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # Find SDL3 and OpenGL
 find_package(SDL3 REQUIRED)
@@ -19,6 +22,19 @@ target_include_directories(glad PUBLIC third_party/glad/include)
 
 # Flecs ECS
 add_subdirectory(third_party/flecs)
+
+# Box2D Physics (using FetchContent for cleaner integration)
+include(FetchContent)
+FetchContent_Declare(
+  box2d
+  GIT_REPOSITORY https://github.com/erincatto/box2d.git
+  GIT_TAG v2.4.1
+  GIT_SHALLOW TRUE
+)
+set(BOX2D_BUILD_UNIT_TESTS OFF CACHE BOOL "" FORCE)
+set(BOX2D_BUILD_TESTBED OFF CACHE BOOL "" FORCE)
+set(BOX2D_BUILD_DOCS OFF CACHE BOOL "" FORCE)
+FetchContent_MakeAvailable(box2d)
 
 # Bring in the sibling asyncinput library for examples
 add_subdirectory(${CMAKE_CURRENT_LIST_DIR}/../asyncinput ${CMAKE_CURRENT_BINARY_DIR}/asyncinput_build)
@@ -40,6 +56,8 @@ add_library(ame STATIC
     src/ecs.c
     src/tilemap.c
     src/audio.c
+    src/physics.cpp
+    src/audio_ray.c
 )
 
 # If generated dialogues are present, compile them and enable the macro
@@ -59,7 +77,7 @@ endif()
 target_link_libraries(ame PUBLIC SDL3::SDL3)
 
 # Link vendored glad
-target_link_libraries(ame PUBLIC glad flecs)
+target_link_libraries(ame PUBLIC glad flecs box2d)
 
 # Audio dependencies via pkg-config
 pkg_check_modules(PORTAUDIO REQUIRED IMPORTED_TARGET portaudio-2.0)
@@ -132,6 +150,11 @@ add_executable(audio_opus_example
     examples/audio_opus_example/main.c
 )
 
+# Example: audio ray tracing with Box2D occlusion
+add_executable(audio_ray_example
+    examples/audio_ray_example/main.c
+)
+
 # Prefer the shared lib if enabled, fall back to static otherwise
 if(TARGET asyncinput_shared)
     target_link_libraries(line_draw PRIVATE asyncinput_shared)
@@ -148,6 +171,7 @@ elseif(TARGET asyncinput_static)
     target_link_libraries(flecs_scene PRIVATE asyncinput_static)
     target_link_libraries(tilemap_render PRIVATE asyncinput_static)
     target_link_libraries(audio_pan_example PRIVATE asyncinput_static)
+    target_link_libraries(audio_ray_example PRIVATE asyncinput_static)
 else()
     message(FATAL_ERROR "asyncinput library targets not found")
 endif()
@@ -166,6 +190,7 @@ if(TARGET OpenGL::GL)
     target_link_libraries(tilemap_render PRIVATE OpenGL::GL)
     target_link_libraries(audio_pan_example PRIVATE OpenGL::GL)
     target_link_libraries(audio_opus_example PRIVATE OpenGL::GL)
+    target_link_libraries(audio_ray_example PRIVATE OpenGL::GL)
 else()
     target_link_libraries(line_draw PRIVATE GL)
     target_link_libraries(rhythm_game PRIVATE GL)
@@ -179,6 +204,7 @@ else()
     target_link_libraries(tilemap_render PRIVATE GL)
     target_link_libraries(audio_pan_example PRIVATE GL)
     target_link_libraries(audio_opus_example PRIVATE GL)
+    target_link_libraries(audio_ray_example PRIVATE GL)
 endif()
 
 target_link_libraries(line_draw PRIVATE SDL3::SDL3 Threads::Threads ame)
@@ -204,6 +230,8 @@ target_link_libraries(tilemap_render PRIVATE SDL3::SDL3 Threads::Threads ame fle
 target_link_libraries(audio_pan_example PRIVATE SDL3::SDL3 Threads::Threads ame)
 # Link opus example
 target_link_libraries(audio_opus_example PRIVATE SDL3::SDL3 Threads::Threads ame)
+# Link audio ray example
+target_link_libraries(audio_ray_example PRIVATE SDL3::SDL3 Threads::Threads ame)
 
 # Compile definitions for SDL3 callback main style
 add_compile_definitions(SDL_MAIN_USE_CALLBACKS=1)
@@ -219,4 +247,5 @@ if(UNIX AND NOT APPLE)
     target_link_libraries(tilemap_render PRIVATE dl)
     target_link_libraries(audio_pan_example PRIVATE dl)
     target_link_libraries(audio_opus_example PRIVATE dl)
+    target_link_libraries(audio_ray_example PRIVATE dl)
 endif()

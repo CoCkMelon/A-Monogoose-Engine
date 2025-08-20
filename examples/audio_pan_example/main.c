@@ -60,7 +60,7 @@ static void update_audio_pan(void) {
 SDL_AppResult SDL_AppInit(void **appstate, int argc, char **argv) {
     (void)argc; (void)argv; (void)appstate;
     SDL_SetAppMetadata("AME - Audio Pan Example", "0.1", "com.example.ame.audio_pan");
-    if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO)) { 
+    if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS | SDL_INIT_AUDIO)) {
         SDL_Log("SDL_Init failed: %s", SDL_GetError()); 
         return SDL_APP_FAILURE; 
     }
@@ -111,8 +111,8 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
 
     // Sync audio sources to the mixer once per frame (manual array here)
     AmeAudioSource *s = ecs_get_id(w, g_entity, g_comp_audio);
-    AmeAudioSource *arr[1] = { s };
-    ame_audio_sync_sources_manual(arr, s ? 1 : 0);
+    AmeAudioSourceRef refs[1] = { { s, (uint64_t)g_entity } };
+    ame_audio_sync_sources_refs(refs, s ? 1 : 0);
 
     // Keep running until user closes the window
     return SDL_APP_CONTINUE;
