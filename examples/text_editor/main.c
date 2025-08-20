@@ -384,8 +384,10 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char **argv){
     if (ni_enable_xkb(1) != 0) { SDL_Log("ni_enable_xkb failed (libxkbcommon not found?)"); }
     /* Hide OS cursor; we'll draw a software cursor */
     SDL_HideCursor();
-    int mx = 0, my = 0;
-    SDL_GetMouseState(&mx, &my);
+    float fx = 0.0f, fy = 0.0f;
+    SDL_GetMouseState(&fx, &fy);
+    int mx = (int)fx;
+    int my = (int)fy;
     SDL_SetAtomicInt(&g_ai_mouse_x, mx);
     SDL_SetAtomicInt(&g_ai_mouse_y, my);
 #endif
