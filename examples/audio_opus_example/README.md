@@ -18,3 +18,7 @@ Controls
 Notes
 - Decoding happens at load; the entire track is stored as interleaved stereo float32 in memory.
 - The audio backend and device can be influenced with AME_AUDIO_HOST environment variable (e.g., pulse, alsa, jack).
+
+AI note for examples
+- Keep debug prints behind a DEBUG-only macro if you add diagnostics.
+- Do not add noisy key or per-frame logs; keep output clean in Release builds.

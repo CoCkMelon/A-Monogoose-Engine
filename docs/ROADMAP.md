@@ -160,3 +160,19 @@ Adoption path
 - Move to Phase 2 to reduce gameplay code churn and enable larger scenes.
 - Only add tilemaps/physics/scene systems when the gameplay demands them.
 
+---
+
+Guidelines for AI agents
+- Keep logging DEBUG-only unless errors must be surfaced. Prefer a guarded macro pattern in C, for example:
+
+      #ifdef DEBUG
+      #define LOGD(...) SDL_Log(__VA_ARGS__)
+      #else
+      #define LOGD(...) ((void)0)
+      #endif
+
+- Remove noisy logs (like per-keypress spam) from examples; retain essential diagnostics under LOGD.
+- Use plain ASCII in C source. Avoid special Unicode, HTML, or nonstandard escapes in code.
+- Make minimal, scoped changes and preserve current behavior in Release builds.
+- Use clear commit messages and, when requested, include: "Changes made by GPT-5 and Claude 4.1 Opus."
+

@@ -59,8 +59,12 @@ static SDL_AppResult init_scene(const char *opus_path, bool loop) {
 static void sync_audio(void) {
     ecs_world_t *w = (ecs_world_t*)ame_ecs_world_ptr(g_world);
     AmeAudioSource *s = ecs_get_id(w, g_entity, g_comp_audio);
-    AmeAudioSource *arr[1] = { s };
-    ame_audio_sync_sources_manual(arr, s ? 1 : 0);
+    if (s) {
+        AmeAudioSourceRef ref = { .src = s, .stable_id = g_entity };
+        ame_audio_sync_sources_refs(&ref, 1);
+    } else {
+        ame_audio_sync_sources_refs(NULL, 0);
+    }
 }
 
 static void update_pan_from_position(void) {

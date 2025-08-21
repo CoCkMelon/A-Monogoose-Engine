@@ -19,7 +19,9 @@
 #include "ame/audio_ray.h"
 #include "asyncinput.h"
 #include <SDL3_image/SDL_image.h>
+#include "ame/scene2d.h"
 
+#define DEBUG // It is inconvinient to define anything in cmake
 #ifdef DEBUG
 #define LOGD(...) SDL_Log(__VA_ARGS__)
 #else
@@ -63,14 +65,26 @@ static int g_w = 1280, g_h = 720;
 // Rendering state  
 static GLuint g_prog = 0, g_vao = 0;
 static GLuint g_vbo_pos = 0, g_vbo_col = 0, g_vbo_uv = 0; // dynamic buffers (player and uploads)
-static GLuint g_tile_vbo_pos = 0, g_tile_vbo_uv = 0;      // static buffers for tilemap
+static GLuint g_tile_vbo_pos = 0, g_tile_vbo_uv = 0;      // static buffers for tilemap (legacy)
+static GLuint g_batch_vbo = 0;                            // interleaved batch buffer for single-pass
 static GLint u_res = -1, u_camera = -1, u_use_tex = -1, u_tex = -1;
+
+// Tilemap full-screen pass state
+static GLuint g_tile_prog = 0;
+static GLuint g_fullscreen_vao = 0;
+static GLint tu_res = -1, tu_camera = -1, tu_map_size = -1, tu_tile_size = -1, tu_layer_count = -1;
+static GLint tu_atlas = -1, tu_gidtex = -1, tu_atlas_tex_size = -1, tu_firstgid = -1, tu_columns = -1;
+
+// Single-pass batch state
+static AmeScene2DBatch g_batch;
 
 // Game systems
 static AmeTilemap g_map;
 static AmeTilemapMesh g_mesh; // colored mesh (legacy)
 static AmeTilemapUvMesh g_uvmesh; // uv mesh for textured tiles
 static GLuint g_tile_atlas_tex = 0;
+// Additional per-index tile textures (1..4 used by our generated level)
+static GLuint g_tile_textures[5] = {0,0,0,0,0};
 static AmeEcsWorld* g_world = NULL;
 static AmePhysicsWorld* g_physics = NULL;
 
@@ -119,6 +133,10 @@ static inline uint64_t now_ns(void) { return SDL_GetTicksNS(); }
 static inline float seconds_since_start(void) { return (float)((now_ns() - g_start_ns) / 1e9); }
 static const float fixed_dt = 0.001;
 
+// Frame counter for draw call logging
+static int g_frame_count = 0;
+static int g_draw_calls = 0;
+
 // Logic & Audio thread control
 static SDL_Thread* g_logic_thread = NULL;
 static SDL_Thread* g_audio_thread = NULL;
@@ -126,7 +144,7 @@ static _Atomic bool g_logic_running = false;
 // Forward decl for audio thread
 static int audio_thread_main(void *ud);
 
-// Single-pass vertex shader for both tiles and sprites
+// Single-pass vertex shader for both tiles and sprites (for dynamic batch like player)
 static const char* vs_src =
     "#version 450 core\n"
     "layout(location=0) in vec2 a_pos;\n"
@@ -157,6 +175,66 @@ static const char* fs_src =
     "  vec4 col = v_col;\n"
     "  if (u_use_tex) { col *= texture(u_tex, v_uv); }\n"
     "  frag = col;\n"
+    "}\n";
+
+// Full-screen tilemap compositing shaders
+static const char* tile_vs_src =
+    "#version 450 core\n"
+    "out vec2 v_uv;\n"
+    "void main(){\n"
+    "  vec2 p = vec2((gl_VertexID==1)?3.0:-1.0, (gl_VertexID==2)?   3.0:-1.0);\n"
+    "  v_uv = (p+1.0)*0.5;\n"
+    "  gl_Position = vec4(p,0,1);\n"
+    "}\n";
+
+static const char* tile_fs_src =
+    "#version 450 core\n"
+    "in vec2 v_uv;\n"
+    "uniform vec2 u_res;\n"
+    "uniform vec4 u_camera; // x, y, zoom, rot\n"
+    "uniform ivec2 u_map_size; // tiles (width, height)\n"
+    "uniform ivec2 u_tile_size; // pixels (w, h)\n"
+    "uniform int u_layer_count;\n"
+    "uniform sampler2D u_atlas[16];\n"
+    "uniform isampler2D u_gidtex[16];\n"
+    "uniform ivec2 u_atlas_tex_size[16];\n"
+    "uniform int u_firstgid[16];\n"
+    "uniform int u_columns[16];\n"
+    "out vec4 frag;\n"
+    "void main() {\n"
+    "  // Convert normalized device coordinates to screen pixels\n"
+    "  vec2 screen_px = v_uv * u_res;\n"
+    "  // Convert to world pixel coordinates\n"
+    "  vec2 world_px = screen_px / max(u_camera.z, 0.00001) + u_camera.xy;\n"
+    "  // Tile coordinates in the map grid\n"
+    "  ivec2 tcoord = ivec2(floor(world_px / vec2(u_tile_size)));\n"
+    "  // Early out if tile is outside the map\n"
+    "  if (any(lessThan(tcoord, ivec2(0))) || any(greaterThanEqual(tcoord, u_map_size))) {\n"
+    "    frag = vec4(0.0);\n"
+    "    return;\n"
+    "  }\n"
+    "  // Pixel within the tile\n"
+    "  vec2 tile_frac = fract(world_px / vec2(u_tile_size));\n"
+    "  ivec2 in_tile_px = ivec2(tile_frac * vec2(u_tile_size));\n"
+    "  vec4 outc = vec4(0.0);\n"
+    "  // Loop through layers\n"
+    "  for (int i = 0; i < u_layer_count; i++) {\n"
+    "    int gid = texelFetch(u_gidtex[i], tcoord, 0).r;\n"
+    "    int local = gid - u_firstgid[i];\n"
+    "    // Skip if gid is less than or equal to zero or local < 0\n"
+    "    float mask = float(gid > 0 && local >= 0);\n"
+    "    if (mask == 0.0) continue;\n"
+    "    int cols = max(u_columns[i], 1);\n"
+    "    int tile_x = local % cols;\n"
+    "    int tile_y = local / cols;\n"
+    "    ivec2 atlas_px = ivec2(tile_x * u_tile_size.x + in_tile_px.x,\n"
+    "                           tile_y * u_tile_size.y + in_tile_px.y);\n"
+    "    ivec2 atlas_size = u_atlas_tex_size[i];\n"
+    "    vec2 uv = (vec2(atlas_px) + 0.5) / vec2(atlas_size);\n"
+    "    vec4 tex_color = texture(u_atlas[i], uv) * mask;\n"
+    "    outc = tex_color + outc * (1.0 - tex_color.a);\n"
+    "  }\n"
+    "  frag = outc;\n"
     "}\n";
 
 static GLuint compile_shader(GLenum type, const char* src) {
@@ -195,6 +273,8 @@ static int init_gl(void) {
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 4);
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 5);
     SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
+    // Request no depth buffer (single-pass 2D rendering without depth)
+    SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE, 0);
     
     g_window = SDL_CreateWindow("AME - Pixel Platformer", g_w, g_h, SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE);
     if (!g_window) { LOGD("window: %s", SDL_GetError()); return 0; }
@@ -210,23 +290,53 @@ static int init_gl(void) {
     glDeleteShader(vs); 
     glDeleteShader(fs);
 
+    // Compile tilemap full-screen program
+    GLuint tvs = compile_shader(GL_VERTEX_SHADER, tile_vs_src);
+    GLuint tfs = compile_shader(GL_FRAGMENT_SHADER, tile_fs_src);
+    g_tile_prog = link_program(tvs, tfs);
+    glDeleteShader(tvs);
+    glDeleteShader(tfs);
+
     glGenVertexArrays(1, &g_vao);
     glBindVertexArray(g_vao);
     glGenBuffers(1, &g_vbo_pos);
     glGenBuffers(1, &g_vbo_col);
     glGenBuffers(1, &g_vbo_uv);
-    glGenBuffers(1, &g_tile_vbo_pos);
+glGenBuffers(1, &g_tile_vbo_pos);
     glGenBuffers(1, &g_tile_vbo_uv);
+    glGenBuffers(1, &g_batch_vbo);
+
+    // Full-screen VAO for tilemap pass (no VBO needed, gl_VertexID used)
+    glGenVertexArrays(1, &g_fullscreen_vao);
 
     u_res = glGetUniformLocation(g_prog, "u_res");
     u_camera = glGetUniformLocation(g_prog, "u_camera");
     u_use_tex = glGetUniformLocation(g_prog, "u_use_tex");
     u_tex = glGetUniformLocation(g_prog, "u_tex");
+
+    // Tile uniforms
+    tu_res = glGetUniformLocation(g_tile_prog, "u_res");
+    tu_camera = glGetUniformLocation(g_tile_prog, "u_camera");
+    tu_map_size = glGetUniformLocation(g_tile_prog, "u_map_size");
+    tu_tile_size = glGetUniformLocation(g_tile_prog, "u_tile_size");
+    tu_layer_count = glGetUniformLocation(g_tile_prog, "u_layer_count");
+    tu_atlas = glGetUniformLocation(g_tile_prog, "u_atlas[0]");
+    tu_gidtex = glGetUniformLocation(g_tile_prog, "u_gidtex[0]");
+    tu_atlas_tex_size = glGetUniformLocation(g_tile_prog, "u_atlas_tex_size[0]");
+    tu_firstgid = glGetUniformLocation(g_tile_prog, "u_firstgid[0]");
+    tu_columns = glGetUniformLocation(g_tile_prog, "u_columns[0]");
     
     glViewport(0, 0, g_w, g_h);
     glClearColor(0.3f, 0.7f, 1.0f, 1); // Sky blue
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+
+    // Ensure depth testing and writes are disabled for single-pass 2D
+    glDisable(GL_DEPTH_TEST);
+    glDepthMask(GL_FALSE);
+
+    // Init batch system
+    ame_scene2d_batch_init(&g_batch);
     
     return 1;
 }
@@ -238,11 +348,18 @@ static void shutdown_gl(void) {
     if (g_vbo_uv)  { GLuint b = g_vbo_uv;  glDeleteBuffers(1, &b); g_vbo_uv = 0; }
     if (g_tile_vbo_pos) { GLuint b = g_tile_vbo_pos; glDeleteBuffers(1, &b); g_tile_vbo_pos = 0; }
     if (g_tile_vbo_uv)  { GLuint b = g_tile_vbo_uv;  glDeleteBuffers(1, &b); g_tile_vbo_uv = 0; }
-    if (g_tile_atlas_tex) { GLuint t = g_tile_atlas_tex; glDeleteTextures(1, &t); g_tile_atlas_tex = 0; }
+    if (g_batch_vbo)    { GLuint b = g_batch_vbo;    glDeleteBuffers(1, &b); g_batch_vbo = 0; }
+if (g_tile_atlas_tex) { GLuint t = g_tile_atlas_tex; glDeleteTextures(1, &t); g_tile_atlas_tex = 0; }
+    for (int i=1;i<=4;i++){ if (g_tile_textures[i]) { GLuint t=g_tile_textures[i]; glDeleteTextures(1,&t); g_tile_textures[i]=0; } }
     for (int i=0;i<4;i++){ if (g_player_textures[i]) { GLuint t=g_player_textures[i]; glDeleteTextures(1,&t); g_player_textures[i]=0; } }
     if (g_vao) { GLuint a = g_vao; glDeleteVertexArrays(1, &a); g_vao = 0; }
+    if (g_fullscreen_vao) { GLuint a = g_fullscreen_vao; glDeleteVertexArrays(1, &a); g_fullscreen_vao = 0; }
+    if (g_tile_prog) { GLuint p = g_tile_prog; glDeleteProgram(p); g_tile_prog = 0; }
     if (g_gl) { SDL_GL_DestroyContext(g_gl); g_gl = NULL; }
     if (g_window) { SDL_DestroyWindow(g_window); g_window = NULL; }
+
+    // Free batch
+    ame_scene2d_batch_free(&g_batch);
 }
 
 // Input callback for asyncinput
@@ -267,83 +384,85 @@ static void on_input(const struct ni_event *ev, void *ud) {
     }
 }
 
-// Create a simple platformer level
-static void create_level_data(void) {
-    // Simple 20x15 level with platforms
-    const int level_data[] = {
-        1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
-        1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,
-        1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,
-        1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,
-        1,0,0,0,0,0,0,0,0,3,3,3,0,0,0,0,0,0,0,1,
-        1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,
-        1,0,0,0,0,2,2,2,0,0,0,0,0,4,4,4,0,0,0,1,
-        1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,
-        1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,
-        1,0,0,2,2,0,0,0,0,0,0,0,0,0,0,0,3,3,0,1,
-        1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,
-        1,0,0,0,0,0,0,0,0,2,2,2,2,0,0,0,0,0,0,1,
-        1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,
-        1,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,1,
-        1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1
-    };
-    
-    const char* level_json = "{\n"
-        "  \"compressionlevel\": -1,\n"
-        "  \"height\": 15,\n"
-        "  \"infinite\": false,\n"
-        "  \"layers\": [\n"
-        "    {\n"
-        "      \"data\": [\n";
-    
-    FILE* f = fopen("examples/kenney_pixel-platformer/level.tmj", "w");
-    if (!f) {
-        LOGD("Failed to create level file");
-        return;
+// --- Minimal file read helper (for TMX/TSX parsing) ---
+static char* read_file_all(const char* path, size_t* out_size) {
+    SDL_IOStream* io = SDL_IOFromFile(path, "rb");
+    if (!io) return NULL;
+    Sint64 len = SDL_GetIOSize(io);
+    if (len <= 0) { SDL_CloseIO(io); return NULL; }
+    char* data = (char*)SDL_malloc((size_t)len + 1);
+    if (!data) { SDL_CloseIO(io); return NULL; }
+    size_t rd = SDL_ReadIO(io, data, (size_t)len);
+    SDL_CloseIO(io);
+    if (rd != (size_t)len) { SDL_free(data); return NULL; }
+    data[len] = '\0';
+    if (out_size) *out_size = (size_t)len;
+    return data;
+}
+
+// --- Minimal XML attribute integer reader: finds attr="123" ---
+static int xml_read_int_attr(const char* s, const char* key, int* out) {
+    char pat[128]; SDL_snprintf(pat, sizeof pat, "%s=\"", key);
+    const char* p = strstr(s, pat); if (!p) return 0; p += strlen(pat);
+    long v = 0; int any = 0; int sign=1; if (*p=='-'){ sign=-1; p++; }
+    while (*p && *p>='0' && *p<='9') { v = v*10 + (*p - '0'); p++; any=1; }
+    if (!any) return 0; *out = (int)(v*sign); return 1;
+}
+
+// --- Minimal XML attribute string reader: copies attr value into buf ---
+static int xml_read_str_attr(const char* s, const char* key, char* buf, size_t bufsz) {
+    char pat[128]; SDL_snprintf(pat, sizeof pat, "%s=\"", key);
+    const char* p = strstr(s, pat); if (!p) return 0; p += strlen(pat);
+    size_t i=0; while (*p && *p!='\"' && i+1<bufsz) { buf[i++] = *p++; }
+    if (*p!='\"') return 0; buf[i]=0; return 1;
+}
+
+// --- Layer rendering bundle ---
+typedef struct TileLayerRender {
+    AmeTilemap map;
+    AmeTilemapUvMesh uv; // legacy UV mesh (unused in new tile pass)
+    GLuint vbo_pos;      // legacy
+    GLuint vbo_uv;       // legacy
+    GLuint atlas_tex;    // source atlas texture for this layer's tileset
+    int atlas_w, atlas_h; // atlas pixel size
+    int columns;          // tileset columns
+    int firstgid;         // tileset firstgid for this layer
+    GLuint gid_tex;       // integer texture (R32I) storing GIDs per tile
+    bool is_collision;
+} TileLayerRender;
+
+#define MAX_LAYERS 16
+static TileLayerRender g_layers[MAX_LAYERS];
+static int g_layer_count = 0;
+
+// Tileset cache read from TSX
+typedef struct ParsedTileset {
+    int firstgid;
+    AmeTilesetInfo ts;
+    char image_path[256];
+    GLuint atlas_tex;
+} ParsedTileset;
+
+static int load_tsx(const char* tsx_path, AmeTilesetInfo* out_ts, char* out_img, size_t out_img_sz) {
+    size_t sz=0; char* xml = read_file_all(tsx_path, &sz); if (!xml) return 0;
+    AmeTilesetInfo ts; memset(&ts, 0, sizeof ts);
+    (void)xml_read_int_attr(xml, "tilecount", &ts.tilecount);
+    (void)xml_read_int_attr(xml, "columns", &ts.columns);
+    (void)xml_read_int_attr(xml, "tilewidth", &ts.tile_width);
+    (void)xml_read_int_attr(xml, "tileheight", &ts.tile_height);
+    char img[256]={0};
+    (void)xml_read_str_attr(xml, "source", img, sizeof img); // from <image ...>
+    // Find <image ...> line
+    const char* img_tag = strstr(xml, "<image");
+    if (img_tag) {
+        (void)xml_read_str_attr(img_tag, "source", img, sizeof img);
+        (void)xml_read_int_attr(img_tag, "width", &ts.image_width);
+        (void)xml_read_int_attr(img_tag, "height", &ts.image_height);
     }
-    
-    fprintf(f, "%s", level_json);
-    
-    for (int i = 0; i < 300; i++) {
-        fprintf(f, "%d", level_data[i]);
-        if (i < 299) fprintf(f, ",");
-        if ((i + 1) % 20 == 0) fprintf(f, "\n");
-    }
-    
-    fprintf(f, "      ],\n"
-        "      \"height\": 15,\n"
-        "      \"id\": 1,\n"
-        "      \"name\": \"Tile Layer 1\",\n"
-        "      \"opacity\": 1,\n"
-        "      \"type\": \"tilelayer\",\n"
-        "      \"visible\": true,\n"
-        "      \"width\": 20,\n"
-        "      \"x\": 0,\n"
-        "      \"y\": 0\n"
-        "    }\n"
-        "  ],\n"
-        "  \"nextlayerid\": 2,\n"
-        "  \"nextobjectid\": 1,\n"
-        "  \"orientation\": \"orthogonal\",\n"
-        "  \"renderorder\": \"right-down\",\n"
-        "  \"tiledversion\": \"1.9.2\",\n"
-        "  \"tileheight\": 18,\n"
-        "  \"tilesets\": [\n"
-        "    {\n"
-        "      \"firstgid\": 1,\n"
-        "      \"name\": \"kenney_tiles\",\n"
-        "      \"tilecount\": 4,\n"
-        "      \"tileheight\": 18,\n"
-        "      \"tilewidth\": 18\n"
-        "    }\n"
-        "  ],\n"
-        "  \"tilewidth\": 18,\n"
-        "  \"type\": \"map\",\n"
-        "  \"version\": \"1.10\",\n"
-        "  \"width\": 20\n"
-        "}\n");
-    
-    fclose(f);
+    if (out_ts) *out_ts = ts;
+    if (out_img && out_img_sz>0) SDL_snprintf(out_img, out_img_sz, "%s", img);
+    SDL_free(xml);
+    return 1;
 }
 
 // Upload mesh data to GPU
@@ -435,6 +554,7 @@ static void draw_rect(float x, float y, float w, float h, float r, float g, floa
 
     if (u_use_tex >= 0) glUniform1i(u_use_tex, textured ? 1 : 0);
     glDrawArrays(GL_TRIANGLES, 0, 6);
+    g_draw_calls++;
 }
 
 // Load an image file using SDL_image and upload as an OpenGL RGBA8 texture
@@ -459,6 +579,7 @@ static GLuint load_texture_rgba8_with_size(const char* path, int* out_w, int* ou
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, conv->w, conv->h, 0, GL_RGBA, GL_UNSIGNED_BYTE, conv->pixels);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    // Use GL_CLAMP_TO_EDGE to prevent texture bleeding at edges
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
     SDL_DestroySurface(conv);
@@ -469,6 +590,68 @@ static GLuint load_texture_rgba8_with_size(const char* path, int* out_w, int* ou
 static GLuint load_texture_rgba8(const char* path)
 {
     return load_texture_rgba8_with_size(path, NULL, NULL);
+}
+
+// Generate a simple NxN RGBA texture with a distinct color/pattern per index
+static GLuint make_simple_tile_texture(uint8_t r, uint8_t g, uint8_t b)
+{
+    const int W=18, H=18; // match map tile size
+    uint8_t px[W*H*4];
+    for (int y=0;y<H;y++){
+        for(int x=0;x<W;x++){
+            int i=(y*W+x)*4;
+            // checker pattern
+            bool chk = (((x/3)+(y/3)) & 1) != 0;
+            px[i+0] = chk ? r : (uint8_t)(r/2);
+            px[i+1] = chk ? g : (uint8_t)(g/2);
+            px[i+2] = chk ? b : (uint8_t)(b/2);
+            // slight border
+            if (x==0||y==0||x==W-1||y==H-1){ px[i+0]=0; px[i+1]=0; px[i+2]=0; }
+            px[i+3] = 255;
+        }
+    }
+    GLuint tex; glGenTextures(1,&tex);
+    glBindTexture(GL_TEXTURE_2D, tex);
+    glTexImage2D(GL_TEXTURE_2D,0,GL_RGBA8,W,H,0,GL_RGBA,GL_UNSIGNED_BYTE,px);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    return tex;
+}
+
+static bool is_same_category(int gid, int base_gid, int variant_count) {
+    return gid >= base_gid && gid < base_gid + variant_count;
+}
+
+// Simple 4-neighbor autotile pass for one category (e.g., dirt)
+// Treat base_gid..base_gid+variant_count-1 as the same category.
+static void apply_simple_autotile(AmeTilemap* map, int base_gid, int variant_count)
+{
+    if (!map || variant_count <= 0) return;
+    const int w = map->width;
+    const int h = map->height;
+    int* data = map->layer0.data;
+    const int firstgid = (map->tileset.firstgid > 0 ? map->tileset.firstgid : 1);
+    const int max_gid = firstgid + (map->tileset.tilecount > 0 ? map->tileset.tilecount : 0) - 1;
+    for (int y=0; y<h; ++y){
+        for (int x=0; x<w; ++x){
+            int i = y*w + x;
+            if (!is_same_category(data[i], base_gid, variant_count)) continue;
+            int mask = 0;
+            if (y>0   && is_same_category(data[i - w], base_gid, variant_count)) mask |= 1;   // up
+            if (x<w-1 && is_same_category(data[i + 1], base_gid, variant_count)) mask |= 2;   // right
+            if (y<h-1 && is_same_category(data[i + w], base_gid, variant_count)) mask |= 4;   // down
+            if (x>0   && is_same_category(data[i - 1], base_gid, variant_count)) mask |= 8;   // left
+            int variant = mask % variant_count;
+            int gid = base_gid + variant;
+            if (max_gid >= firstgid && gid > max_gid) {
+                // Wrap within available range just in case
+                gid = firstgid + ((gid - firstgid) % (map->tileset.tilecount > 0 ? map->tileset.tilecount : variant_count));
+            }
+            data[i] = gid;
+        }
+    }
 }
 
 // ============ Systems (C) ============
@@ -499,8 +682,8 @@ static void SysGroundCheck(ecs_iter_t *it) {
         b2Body* body = pb[i].body;
         float px, py; ame_physics_get_position(body, &px, &py);
         const float halfw = (sz ? sz[i].w * 0.5f : 8.0f);
-        const float y0 = py + halfw + 1.0f;
-        const float y1 = py + halfw - 12.0f;
+        const float y0 = py + halfw - 1.0f;
+        const float y1 = py + halfw + 12.0f;
         const float ox[3] = { -halfw + 2.0f, 0.0f, halfw - 2.0f };
         bool on_ground = false;
         for (int j = 0; j < 3; ++j) {
@@ -528,7 +711,7 @@ static void SysMovementAndJump(ecs_iter_t *it) {
         if (jump_edge) in[i].jump_buffer = JUMP_BUFFER_TIME; else in[i].jump_buffer = fmaxf(0.0f, in[i].jump_buffer - dt);
         in[i].jump_trigger = false;
         if (in[i].jump_buffer > 0.0f && (gr[i].value || in[i].coyote_timer > 0.0f)) {
-            vy = -320.0f;
+            vy = -100.0f;
             in[i].jump_buffer = 0.0f;
             in[i].coyote_timer = 0.0f;
             in[i].jump_trigger = true;
@@ -543,8 +726,20 @@ static void SysCameraFollow(ecs_iter_t *it) {
     const CPhysicsBody *pb = (const CPhysicsBody*)ecs_field(it, CPhysicsBody, 1);
     float px = 0.0f, py = 0.0f;
     if (pb && pb[0].body) ame_physics_get_position(pb[0].body, &px, &py);
-    ame_camera_set_target(&cc[0].cam, px, py);
-    ame_camera_update(&cc[0].cam, it->delta_time);
+    
+    // Pixel-perfect camera: snap to integer pixels
+    // Center camera on player
+    float half_w = (float)g_w / cc[0].cam.zoom * 0.5f;
+    float half_h = (float)g_h / cc[0].cam.zoom * 0.5f;
+    
+    // Calculate camera position (top-left corner)
+    float cam_x = px - half_w;
+    float cam_y = py - half_h;
+    
+    // Snap to pixel grid for pixel-perfect rendering (Unity-style)
+    cc[0].cam.x = floorf(cam_x + 0.5f);
+    cc[0].cam.y = floorf(cam_y + 0.5f);
+    
     atomic_store(&g_cam_x, cc[0].cam.x);
     atomic_store(&g_cam_y, cc[0].cam.y);
     atomic_store(&g_cam_zoom, cc[0].cam.zoom);
@@ -584,7 +779,7 @@ static void SysAudioUpdate(ecs_iter_t *it) {
     AmeAudioRayParams rp;
     rp.listener_x = px; rp.listener_y = py;
     rp.source_x = aa[0].x; rp.source_y = aa[0].y;
-    rp.min_distance = 32.0f; rp.max_distance = 600.0f;
+    rp.min_distance = 32.0f; rp.max_distance = 6000.0f;
     rp.occlusion_db = 8.0f; rp.air_absorption_db_per_meter = 0.01f;
     float gl = 0.0f, gr = 0.0f;
     if (ame_audio_ray_compute(g_physics, &rp, &gl, &gr)) {
@@ -621,33 +816,177 @@ static bool register_components_and_entities(void) {
 }
 
 static bool load_map_and_gpu(void) {
-    create_level_data();
-    if (!ame_tilemap_load_tmj("examples/kenney_pixel-platformer/level.tmj", &g_map)) return false;
-    if (!ame_tilemap_build_mesh(&g_map, &g_mesh)) return false;
-    upload_mesh();
-    int atlas_w = 0, atlas_h = 0;
-    g_tile_atlas_tex = load_texture_rgba8_with_size("examples/kenney_pixel-platformer/Tilemap/tilemap_packed.png", &atlas_w, &atlas_h);
-    g_map.tileset.firstgid = (g_map.tileset.firstgid > 0 ? g_map.tileset.firstgid : 1);
-    g_map.tileset.tile_width = g_map.tile_width;
-    g_map.tileset.tile_height = g_map.tile_height;
-    if (atlas_w > 0 && atlas_h > 0 && g_map.tileset.tile_width > 0 && g_map.tileset.tile_height > 0) {
-        g_map.tileset.image_width = atlas_w;
-        g_map.tileset.image_height = atlas_h;
-        g_map.tileset.columns = atlas_w / g_map.tileset.tile_width;
-        int rows = atlas_h / g_map.tileset.tile_height;
-        g_map.tileset.tilecount = g_map.tileset.columns * rows;
-    } else {
-        if (g_map.tileset.columns == 0) g_map.tileset.columns = 20;
-        if (g_map.tileset.tilecount == 0) g_map.tileset.tilecount = 180;
+    // Parse TMX with multiple layers and tilesets
+    const char* tmx_path = "examples/kenney_pixel-platformer/Tiled/tilemap-example-a.tmx";
+    size_t tmx_sz = 0; char* tmx = read_file_all(tmx_path, &tmx_sz);
+    if (!tmx) { LOGD("Failed to read TMX: %s", tmx_path); return false; }
+
+    // Base map dimensions (tiles)
+    int map_w=0, map_h=0, map_tw=0, map_th=0;
+    (void)xml_read_int_attr(tmx, "width", &map_w);
+    (void)xml_read_int_attr(tmx, "height", &map_h);
+    (void)xml_read_int_attr(tmx, "tilewidth", &map_tw);
+    (void)xml_read_int_attr(tmx, "tileheight", &map_th);
+
+    // Parse tilesets referenced from TMX (TSX files)
+    ParsedTileset sets[8]; int set_count=0;
+    const char* p = tmx;
+    while ((p = strstr(p, "<tileset")) != NULL && set_count < 8) {
+        const char* end = strchr(p, '>'); if (!end) break;
+        int firstgid=0; char src_rel[256]={0};
+        (void)xml_read_int_attr(p, "firstgid", &firstgid);
+        (void)xml_read_str_attr(p, "source", src_rel, sizeof src_rel);
+        // Build absolute path to TSX based on TMX directory
+        char tsx_path[512]; SDL_snprintf(tsx_path, sizeof tsx_path, "examples/kenney_pixel-platformer/Tiled/%s", src_rel);
+        AmeTilesetInfo ts={0}; char img_rel[256]={0};
+        if (!load_tsx(tsx_path, &ts, img_rel, sizeof img_rel)) { LOGD("Failed to load TSX: %s", tsx_path); SDL_free(tmx); return false; }
+        // Build image path: handle ../ to go up from Tiled to parent dir
+        char img_path[512];
+        if (strstr(img_rel, "../") == img_rel) {
+            // Path starts with ../ so it's relative to parent of Tiled
+            SDL_snprintf(img_path, sizeof img_path, "examples/kenney_pixel-platformer/%s", img_rel + 3);
+        } else {
+            // Path is relative to Tiled dir
+            SDL_snprintf(img_path, sizeof img_path, "examples/kenney_pixel-platformer/Tiled/%s", img_rel);
+        }
+        LOGD("Loading tileset %d: TSX=%s, Image=%s", firstgid, tsx_path, img_path);
+        // Load atlas texture
+        int iw=0, ih=0; GLuint tex = load_texture_rgba8_with_size(img_path, &iw, &ih);
+        if (!tex) {
+            LOGD("WARNING: Failed to load tileset image: %s", img_path);
+        } else {
+            LOGD("Loaded tileset image %dx%d, texture ID %u", iw, ih, tex);
+        }
+        if (iw>0 && ih>0) { ts.image_width=iw; ts.image_height=ih; }
+        if (ts.columns==0 && ts.image_width>0 && ts.tile_width>0) ts.columns = ts.image_width / ts.tile_width;
+        sets[set_count].firstgid = firstgid;
+        sets[set_count].ts = ts;
+        SDL_snprintf(sets[set_count].image_path, sizeof sets[set_count].image_path, "%s", img_path);
+        sets[set_count].atlas_tex = tex;
+        set_count++;
+        p = end + 1;
     }
-    if (ame_tilemap_build_uv_mesh(&g_map, &g_uvmesh)) {
-        glBindBuffer(GL_ARRAY_BUFFER, g_tile_vbo_pos);
-        glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)(g_uvmesh.vert_count * 2 * sizeof(float)), g_uvmesh.vertices, GL_STATIC_DRAW);
-        glBindBuffer(GL_ARRAY_BUFFER, g_tile_vbo_uv);
-        glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)(g_uvmesh.vert_count * 2 * sizeof(float)), g_uvmesh.uvs, GL_STATIC_DRAW);
+    // Determine max firstgid to infer nextgid for comparisons
+    // We'll sort by firstgid asc for selection
+    for (int i=0;i<set_count;i++){
+        for (int j=i+1;j<set_count;j++){
+            if (sets[j].firstgid < sets[i].firstgid) { ParsedTileset tmp=sets[i]; sets[i]=sets[j]; sets[j]=tmp; }
+        }
     }
-    if (!g_tile_atlas_tex) g_tile_atlas_tex = ame_tilemap_make_test_atlas_texture(&g_map);
-    return true;
+
+    // Parse each <layer ...> ... <data encoding="csv"> ...
+    g_layer_count = 0; int collision_layer_index = -1;
+    const char* lp = tmx;
+    while ((lp = strstr(lp, "<layer")) != NULL && g_layer_count < MAX_LAYERS) {
+        const char* layer_end = strstr(lp, "</layer>"); if (!layer_end) break;
+        // Extract width/height override if present (else map values)
+        int lw=map_w, lh=map_h;
+        (void)xml_read_int_attr(lp, "width", &lw);
+        (void)xml_read_int_attr(lp, "height", &lh);
+        // Find <data ...>
+        const char* dp = strstr(lp, "<data"); if (!dp || dp>layer_end) { lp = layer_end + 7; continue; }
+        // Ensure CSV encoding
+        if (!strstr(dp, "encoding=\"csv\"")) { lp = layer_end + 7; continue; }
+        // Find start of CSV numbers
+        const char* csv = strchr(dp, '>'); if (!csv || csv>layer_end) { lp = layer_end + 7; continue; }
+        csv++;
+        // Allocate and parse gids
+        int count = lw * lh; int32_t* data = (int32_t*)SDL_malloc(sizeof(int32_t)* (size_t)count);
+        if (!data) { SDL_free(tmx); return false; }
+        int idx=0; const char* q = csv; const uint32_t FLIP_MASK = 0x1FFFFFFF;
+        while (q < layer_end && idx < count) {
+            while (q < layer_end && (*q==' '||*q=='\n'||*q=='\r'||*q=='\t'||*q==',')) q++;
+            if (q>=layer_end || *q=='<') break;
+            int sign=1; if (*q=='-'){ sign=-1; q++; }
+            uint64_t v=0; int any=0;
+            while (q<layer_end && *q>='0'&&*q<='9'){ v = v*10 + (uint64_t)(*q - '0'); q++; any=1; }
+            uint32_t raw = (uint32_t)(sign>0? v : (uint64_t)(-(int64_t)v));
+            uint32_t gid = raw & FLIP_MASK;
+            data[idx++] = (int32_t)gid;
+            while (q<layer_end && *q!=',' && *q!='<' ) q++;
+            if (*q==',') q++;
+        }
+        // If not enough, fill rest with zeros
+        while (idx < count) data[idx++] = 0;
+
+        // Decide which tileset this layer belongs to by counting occurrences in ranges
+        int best_set = -1; int best_hits = -1;
+        for (int si=0; si<set_count; si++) {
+            int next_first = (si+1<set_count) ? sets[si+1].firstgid : 0x7FFFFFFF;
+            int hits=0;
+            for (int i=0;i<count;i++){
+                int gid = data[i]; if (gid==0) continue;
+                if (gid >= sets[si].firstgid && gid < next_first) hits++;
+            }
+            if (hits > best_hits) { best_hits = hits; best_set = si; }
+        }
+        if (best_set < 0) { best_set = 0; }
+
+        // Zero out any gids not in the chosen tileset range
+        int next_first = (best_set+1<set_count) ? sets[best_set+1].firstgid : 0x7FFFFFFF;
+        for (int i=0;i<count;i++){
+            int gid = data[i];
+            if (gid==0) continue;
+            if (!(gid >= sets[best_set].firstgid && gid < next_first)) data[i] = 0;
+        }
+
+        // Build AmeTilemap for this layer
+        TileLayerRender* L = &g_layers[g_layer_count];
+        memset(L, 0, sizeof *L);
+        L->map.width = lw; L->map.height = lh; L->map.tile_width = map_tw; L->map.tile_height = map_th;
+        L->map.tileset = sets[best_set].ts; L->map.tileset.firstgid = sets[best_set].firstgid;
+        L->map.layer0.width = lw; L->map.layer0.height = lh; L->map.layer0.data = data;
+        L->atlas_tex = sets[best_set].atlas_tex;
+        L->firstgid = sets[best_set].firstgid;
+        L->columns = sets[best_set].ts.columns;
+        L->atlas_w = sets[best_set].ts.image_width;
+        L->atlas_h = sets[best_set].ts.image_height;
+        // Create integer GID texture (R32I)
+        glGenTextures(1, &L->gid_tex);
+        glBindTexture(GL_TEXTURE_2D, L->gid_tex);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
+        // Upload CSV GIDs as-is; we handle Y orientation in the shader when fetching
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_R32I, lw, lh, 0, GL_RED_INTEGER, GL_INT, data);
+        // Legacy UV mesh path remains for reference but is not used in the new pass
+        if (ame_tilemap_build_uv_mesh(&L->map, &L->uv)) {
+            LOGD("Layer %d: Built UV mesh with %zu vertices (legacy path)", g_layer_count, L->uv.vert_count);
+            glGenBuffers(1, &L->vbo_pos);
+            glGenBuffers(1, &L->vbo_uv);
+            glBindBuffer(GL_ARRAY_BUFFER, L->vbo_pos);
+            glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)(L->uv.vert_count * 2 * sizeof(float)), L->uv.vertices, GL_STATIC_DRAW);
+            glBindBuffer(GL_ARRAY_BUFFER, L->vbo_uv);
+            glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)(L->uv.vert_count * 2 * sizeof(float)), L->uv.uvs, GL_STATIC_DRAW);
+        } else {
+            LOGD("Layer %d: No UV mesh built (empty or failed)", g_layer_count);
+        }
+        // Heuristics: first non-empty tiles layer that uses the "tiles" atlas (not characters) becomes collision
+        // We check by tile size matching the map tile size and name containing "Tiles" if available
+        char lname[64]={0}; (void)xml_read_str_attr(lp, "name", lname, sizeof lname);
+        bool looks_tiles = strstr(lname, "Tiles")!=NULL;
+        if (collision_layer_index<0 && looks_tiles && best_hits>0) {
+            L->is_collision = true;
+            collision_layer_index = g_layer_count;
+        } else {
+            L->is_collision = false;
+        }
+        g_layer_count++;
+        lp = layer_end + 7;
+    }
+
+    SDL_free(tmx);
+
+    LOGD("Loaded %d layers from TMX", g_layer_count);
+
+    // Fallback: if no collision layer picked, use the first non-empty layer
+    if (collision_layer_index < 0) {
+        for (int i=0;i<g_layer_count;i++){ if (g_layers[i].uv.vert_count>0){ g_layers[i].is_collision=true; break; } }
+    }
+
+    return (g_layer_count>0);
 }
 
 static bool setup_audio(void) {
@@ -663,8 +1002,11 @@ static bool setup_audio(void) {
 
 static void instantiate_world_entities(void) {
     ecs_world_t* w = (ecs_world_t*)ame_ecs_world_ptr(g_world);
-    CTilemapRef tref = { .map = &g_map, .uvmesh = &g_uvmesh, .atlas_tex = g_tile_atlas_tex };
-    ecs_set_id(w, g_e_world, EcsCTilemapRef, sizeof(CTilemapRef), &tref);
+    // Expose the first layer as the map reference for compatibility
+    if (g_layer_count > 0) {
+        CTilemapRef tref = { .map = &g_layers[0].map, .uvmesh = &g_layers[0].uv, .atlas_tex = g_layers[0].atlas_tex };
+        ecs_set_id(w, g_e_world, EcsCTilemapRef, sizeof(CTilemapRef), &tref);
+    }
     CTextures texs; texs.player[0]=g_player_textures[0]; texs.player[1]=g_player_textures[1]; texs.player[2]=g_player_textures[2]; texs.player[3]=g_player_textures[3];
     ecs_set_id(w, g_e_world, EcsCTextures, sizeof(CTextures), &texs);
     CAudioRefs arefs = { .music=&g_music, .ambient=&g_ambient, .jump=&g_jump_sfx };
@@ -675,17 +1017,23 @@ static void instantiate_world_entities(void) {
     CCamera cc; ame_camera_init(&cc.cam); cc.cam.zoom = 3.0f; ame_camera_set_viewport(&cc.cam, g_w, g_h);
     ecs_set_id(w, g_e_camera, EcsCCamera, sizeof(CCamera), &cc);
 
-    CPlayerTag tag = {0}; ecs_set_id(w, g_e_player, EcsCPlayerTag, sizeof(CPlayerTag), &tag);
+    CPlayerTag tag = (CPlayerTag){0}; ecs_set_id(w, g_e_player, EcsCPlayerTag, sizeof(CPlayerTag), &tag);
     CSize sz = { .w = g_player_size, .h = g_player_size }; ecs_set_id(w, g_e_player, EcsCSize, sizeof(CSize), &sz);
 
     g_physics = ame_physics_world_create(0.0f, 100.0f, fixed_dt);
-    ame_physics_create_tilemap_collision(g_physics, g_map.layer0.data, g_map.width, g_map.height, (float)g_map.tile_width);
+    // Use the collision layer if available
+    const AmeTilemap* coll_map = NULL;
+    for (int i=0;i<g_layer_count;i++){ if (g_layers[i].is_collision) { coll_map = &g_layers[i].map; break; } }
+    if (!coll_map && g_layer_count>0) coll_map = &g_layers[0].map;
+    if (coll_map) {
+        ame_physics_create_tilemap_collision(g_physics, coll_map->layer0.data, coll_map->width, coll_map->height, (float)coll_map->tile_width);
+    }
     g_player_body = ame_physics_create_body(g_physics, g_player_x, g_player_y, g_player_size, g_player_size, AME_BODY_DYNAMIC, false, NULL);
     CPhysicsBody pb = { .body = g_player_body }; ecs_set_id(w, g_e_player, EcsCPhysicsBody, sizeof(CPhysicsBody), &pb);
 
     CGrounded gr = { .value = false }; ecs_set_id(w, g_e_player, EcsCGrounded, sizeof(CGrounded), &gr);
-    CInput in = {0}; ecs_set_id(w, g_e_player, EcsCInput, sizeof(CInput), &in);
-    CAnimation an = { .frame = 0, .time = 0.0f }; ecs_set_id(w, g_e_player, EcsCAnimation, sizeof(CAnimation), &an);
+    CInput in = (CInput){0}; ecs_set_id(w, g_e_player, EcsCInput, sizeof(CInput), &in);
+    CAnimation an = (CAnimation){ .frame = 0, .time = 0.0f }; ecs_set_id(w, g_e_player, EcsCAnimation, sizeof(CAnimation), &an);
 }
 
 static void register_systems(void) {
@@ -936,49 +1284,121 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
     
     update_game(dt);
 
+    // Increment frame counter and reset draw calls
+    g_frame_count++;
+    g_draw_calls = 0;
+    
+    // Log draw calls at frame 2
+    if (g_frame_count == 2) {
+        LOGD("===== Frame 2: Draw Call Analysis =====");
+    }
+
     // Audio is now handled in a dedicated thread for low latency
     glUseProgram(g_prog);
     if (u_res >= 0) glUniform2f(u_res, (float)g_w, (float)g_h);
-    if (u_camera >= 0) glUniform4f(u_camera, g_camera.x, g_camera.y, g_camera.zoom, g_camera.rotation);
+    
+    // Apply pixel-perfect camera snapping for Unity-like behavior
+    float snapped_cam_x = floorf(g_camera.x + 0.5f);
+    float snapped_cam_y = floorf(g_camera.y + 0.5f);
+    if (u_camera >= 0) glUniform4f(u_camera, snapped_cam_x, snapped_cam_y, g_camera.zoom, g_camera.rotation);
     
     glBindVertexArray(g_vao);
     glClear(GL_COLOR_BUFFER_BIT);
 
-// Draw tilemap (textured)
-    if (g_uvmesh.vert_count > 0 && g_tile_atlas_tex != 0) {
-        if (u_use_tex >= 0) glUniform1i(u_use_tex, 1);
-        glActiveTexture(GL_TEXTURE0);
-        if (u_tex >= 0) glUniform1i(u_tex, 0);
-        glBindTexture(GL_TEXTURE_2D, g_tile_atlas_tex);
-
-        glEnableVertexAttribArray(0);
-        glBindBuffer(GL_ARRAY_BUFFER, g_tile_vbo_pos);
-        glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, sizeof(float)*2, (void*)0);
-
-        // Provide a constant white color for tiles so texture shows as-is
-        glDisableVertexAttribArray(1);
-        glVertexAttrib4f(1, 1.0f, 1.0f, 1.0f, 1.0f);
-
-        glEnableVertexAttribArray(2);
-        glBindBuffer(GL_ARRAY_BUFFER, g_tile_vbo_uv);
-        glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, sizeof(float)*2, (void*)0);
-
-        glDrawArrays(GL_TRIANGLES, 0, (GLsizei)g_uvmesh.vert_count);
-
-        // Restore color attrib array state for subsequent draws if needed
-        glEnableVertexAttribArray(1);
+    // First pass: draw all tilemap layers via full-screen compositing shader
+    glUseProgram(g_tile_prog);
+    if (tu_res >= 0) glUniform2f(tu_res, (float)g_w, (float)g_h);
+    // reuse snapped_cam_x/y computed earlier
+    if (tu_camera >= 0) glUniform4f(tu_camera, snapped_cam_x, snapped_cam_y, g_camera.zoom, g_camera.rotation);
+    if (g_layer_count > 0) {
+        // Assume all layers share map size and tile size (per TMX)
+        if (tu_map_size >= 0) glUniform2i(tu_map_size, g_layers[0].map.width, g_layers[0].map.height);
+        if (tu_tile_size >= 0) glUniform2i(tu_tile_size, g_layers[0].map.tile_width, g_layers[0].map.tile_height);
+    } else {
+        if (tu_map_size >= 0) glUniform2i(tu_map_size, 0, 0);
+        if (tu_tile_size >= 0) glUniform2i(tu_tile_size, 1, 1);
     }
-    
-    // Draw player
-    if (u_use_tex >= 0) glUniform1i(u_use_tex, 0); // player uses its own texture with per-vertex color disabled
-    glActiveTexture(GL_TEXTURE0);
-    if (u_tex >= 0) glUniform1i(u_tex, 0);
+    int lc = g_layer_count; if (lc > 16) lc = 16;
+    if (tu_layer_count >= 0) glUniform1i(tu_layer_count, lc);
+    // Bind textures: assign fixed units
+    GLint atlas_units[16]; GLint gid_units[16];
+    for (int i=0;i<lc;i++){ atlas_units[i] = 1 + i; gid_units[i] = 1 + 16 + i; }
+    // Upload sampler arrays
+    if (tu_atlas >= 0) glUniform1iv(tu_atlas, lc, atlas_units);
+    if (tu_gidtex >= 0) glUniform1iv(tu_gidtex, lc, gid_units);
+    // Per-layer metadata uniforms (packed arrays)
+    if (tu_firstgid >= 0) {
+        int vals[16]; for (int i=0;i<lc;i++) vals[i] = g_layers[i].firstgid; glUniform1iv(tu_firstgid, lc, vals);
+    }
+    if (tu_columns >= 0) {
+        int vals[16]; for (int i=0;i<lc;i++) vals[i] = g_layers[i].columns; glUniform1iv(tu_columns, lc, vals);
+    }
+    if (tu_atlas_tex_size >= 0) {
+        int vals[32]; for (int i=0;i<lc;i++){ vals[i*2+0]=g_layers[i].atlas_w; vals[i*2+1]=g_layers[i].atlas_h; }
+        glUniform2iv(tu_atlas_tex_size, lc, vals);
+    }
+    // Bind actual textures to units
+    for (int i=0;i<lc;i++){
+        glActiveTexture(GL_TEXTURE0 + atlas_units[i]);
+        glBindTexture(GL_TEXTURE_2D, g_layers[i].atlas_tex);
+        glActiveTexture(GL_TEXTURE0 + gid_units[i]);
+        glBindTexture(GL_TEXTURE_2D, g_layers[i].gid_tex);
+    }
+    glBindVertexArray(g_fullscreen_vao);
+    glDrawArrays(GL_TRIANGLES, 0, 3);
+    g_draw_calls++; // count the tile pass as 1 call
+
+    // Second pass: dynamic batch for player and other sprites
+    ame_scene2d_batch_reset(&g_batch);
+
+    // Append player (after tiles so it appears on top)
     int pframe = atomic_load(&g_player_frame_atomic);
     float px = atomic_load(&g_player_x_atomic);
     float py = atomic_load(&g_player_y_atomic);
     GLuint tex = g_player_textures[pframe % 4];
-    glBindTexture(GL_TEXTURE_2D, tex);
-    draw_rect(px - g_player_size/2, py - g_player_size/2, g_player_size, g_player_size, 1.0f, 1.0f, 1.0f, 1.0f, true);
+    float snapped_px = floorf(px + 0.5f);
+    float snapped_py = floorf(py + 0.5f);
+    ame_scene2d_batch_append_rect(&g_batch, tex,
+                                  snapped_px - g_player_size/2, snapped_py - g_player_size/2,
+                                  g_player_size, g_player_size,
+                                  1.0f,1.0f,1.0f,1.0f);
+
+    // Finalize and upload batch
+    ame_scene2d_batch_finalize(&g_batch);
+    glUseProgram(g_prog);
+    if (u_res >= 0) glUniform2f(u_res, (float)g_w, (float)g_h);
+    if (u_camera >= 0) glUniform4f(u_camera, snapped_cam_x, snapped_cam_y, g_camera.zoom, g_camera.rotation);
+    glBindVertexArray(g_vao);
+    glBindBuffer(GL_ARRAY_BUFFER, g_batch_vbo);
+    glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)(g_batch.count * sizeof(AmeVertex2D)), g_batch.verts, GL_DYNAMIC_DRAW);
+
+    // Set interleaved attribs: pos(0), col(1), uv(2)
+    const GLsizei stride = (GLsizei)sizeof(AmeVertex2D);
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, stride, (void*)(uintptr_t)0);
+    glEnableVertexAttribArray(1);
+    glVertexAttribPointer(1, 4, GL_FLOAT, GL_FALSE, stride, (void*)(uintptr_t)(2*sizeof(float)));
+    glEnableVertexAttribArray(2);
+    glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, stride, (void*)(uintptr_t)(6*sizeof(float)));
+
+    // Draw per texture range
+    glActiveTexture(GL_TEXTURE0);
+    if (u_tex >= 0) glUniform1i(u_tex, 0);
+    for (uint32_t i = 0; i < g_batch.range_count; ++i) {
+        const AmeDrawRange* R = &g_batch.ranges[i];
+        if (u_use_tex >= 0) glUniform1i(u_use_tex, R->tex ? 1 : 0);
+        glBindTexture(GL_TEXTURE_2D, R->tex);
+        glDrawArrays(GL_TRIANGLES, (GLint)R->first, (GLsizei)R->count);
+        g_draw_calls++;
+    }
+
+    // Log draw calls at frame 2 after rendering is complete
+    if (g_frame_count == 2) {
+        LOGD("Total draw calls: %d", g_draw_calls);
+        LOGD("  - tilemap pass: 1 draw call for %d layer(s)", g_layer_count);
+        LOGD("  - 1 player sprite");
+        LOGD("=======================================\n");
+    }
     
     SDL_GL_SwapWindow(g_window);
     return SDL_APP_CONTINUE;
@@ -1001,8 +1421,17 @@ void SDL_AppQuit(void *appstate, SDL_AppResult result) {
         g_physics = NULL;
     }
     
-    ame_tilemap_free_mesh(&g_mesh);
-    ame_tilemap_free(&g_map);
+    // Free layer resources
+    for (int i=0;i<g_layer_count;i++) {
+        TileLayerRender* L = &g_layers[i];
+        ame_tilemap_free_uv_mesh(&L->uv);
+        ame_tilemap_free(&L->map);
+        if (L->vbo_pos) { GLuint b=L->vbo_pos; glDeleteBuffers(1, &b); L->vbo_pos=0; }
+        if (L->vbo_uv)  { GLuint b=L->vbo_uv;  glDeleteBuffers(1, &b); L->vbo_uv=0; }
+        if (L->gid_tex) { GLuint t=L->gid_tex; glDeleteTextures(1, &t); L->gid_tex=0; }
+        // atlas_tex is owned by tileset textures; they may be shared across layers.
+        // We'll leave deletion to shutdown_gl() where textures are cleaned if needed.
+    }
     ame_ecs_world_destroy(g_world);
     
     ni_shutdown();
