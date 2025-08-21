@@ -37,14 +37,21 @@ set(BOX2D_BUILD_TESTBED OFF CACHE BOOL "" FORCE)
 set(BOX2D_BUILD_DOCS OFF CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(box2d)
 
-# Bring in the sibling asyncinput library for examples
-add_subdirectory(${CMAKE_CURRENT_LIST_DIR}/../asyncinput ${CMAKE_CURRENT_BINARY_DIR}/asyncinput_build)
+# Bring in asyncinput as a subproject via FetchContent (vendored under third_party)
+include(FetchContent)
+FetchContent_Declare(
+  asyncinput
+  GIT_REPOSITORY https://github.com/cockMelon/asyncinput.git
+  GIT_TAG main
+  GIT_SHALLOW TRUE
+)
+FetchContent_MakeAvailable(asyncinput)
 
 # Public headers
 include_directories(
     ${CMAKE_CURRENT_LIST_DIR}/include
-    ${CMAKE_CURRENT_LIST_DIR}/../asyncinput/include
     ${CMAKE_CURRENT_LIST_DIR}/src
+    ${asyncinput_SOURCE_DIR}/include
 )
 
 # Engine objects (initial modules)
@@ -92,6 +99,22 @@ if(UNIX AND NOT APPLE)
 endif()
 
 target_include_directories(ame PUBLIC ${CMAKE_CURRENT_LIST_DIR}/include)
+
+# --------------------------
+# Unity-like C++ façade lib
+# --------------------------
+add_library(unitylike STATIC
+    cpp/unitylike/Scene.cpp
+    cpp/unitylike/InputTime.cpp
+)
+
+target_include_directories(unitylike PUBLIC
+    ${CMAKE_CURRENT_LIST_DIR}/cpp
+    ${CMAKE_CURRENT_LIST_DIR}/include
+    ${asyncinput_SOURCE_DIR}/include
+)
+
+target_link_libraries(unitylike PUBLIC ame flecs)
 
 # Ensure story route header is public
 install(FILES include/ame_story_route.h DESTINATION include)
@@ -184,6 +207,17 @@ elseif(TARGET asyncinput_static)
     target_link_libraries(pixel_platformer PRIVATE asyncinput_static)
     target_link_libraries(audio_pan_example PRIVATE asyncinput_static)
     target_link_libraries(audio_ray_example PRIVATE asyncinput_static)
+elseif(TARGET asyncinput)
+    target_link_libraries(line_draw PRIVATE asyncinput)
+    target_link_libraries(rhythm_game PRIVATE asyncinput)
+    target_link_libraries(raymarch_arcade PRIVATE asyncinput)
+    target_link_libraries(dialogue_example PRIVATE asyncinput)
+    target_link_libraries(dialogue_ui_example PRIVATE asyncinput)
+    target_link_libraries(flecs_scene PRIVATE asyncinput)
+    target_link_libraries(tilemap_render PRIVATE asyncinput)
+    target_link_libraries(pixel_platformer PRIVATE asyncinput)
+    target_link_libraries(audio_pan_example PRIVATE asyncinput)
+    target_link_libraries(audio_ray_example PRIVATE asyncinput)
 else()
     message(FATAL_ERROR "asyncinput library targets not found")
 endif()
@@ -233,6 +267,8 @@ target_link_libraries(pixel_platformer PRIVATE SDL3::SDL3 Threads::Threads ame S
             target_link_libraries(text_editor PRIVATE asyncinput_shared)
         elseif(TARGET asyncinput_static)
             target_link_libraries(text_editor PRIVATE asyncinput_static)
+        elseif(TARGET asyncinput)
+            target_link_libraries(text_editor PRIVATE asyncinput)
         endif()
     endif()
  endif()
