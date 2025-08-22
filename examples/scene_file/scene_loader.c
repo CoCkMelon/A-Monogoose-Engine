@@ -431,8 +431,8 @@ static component_value_t parse_component_value(parse_context_t* ctx, yaml_node_t
                 count++;
             }
             
-            value.object_count = count;
-            value.object_val = calloc(count, sizeof(*value.object_val));
+            value.object_val.count = count;
+            value.object_val.items = calloc(count, sizeof(*value.object_val.items));
             
             size_t i = 0;
             for (pair = node->data.mapping.pairs.start; 
@@ -440,9 +440,9 @@ static component_value_t parse_component_value(parse_context_t* ctx, yaml_node_t
                 yaml_node_t* key = yaml_document_get_node(ctx->document, pair->key);
                 yaml_node_t* val = yaml_document_get_node(ctx->document, pair->value);
                 
-                value.object_val[i].key = SAFE_STRDUP(get_scalar_value(ctx->document, key));
-                value.object_val[i].value = malloc(sizeof(component_value_t));
-                *value.object_val[i].value = parse_component_value(ctx, val);
+                value.object_val.items[i].key = SAFE_STRDUP(get_scalar_value(ctx->document, key));
+                value.object_val.items[i].value = malloc(sizeof(component_value_t));
+                *value.object_val.items[i].value = parse_component_value(ctx, val);
                 i++;
             }
             break;
@@ -755,12 +755,12 @@ static void free_component_value(component_value_t* value) {
             break;
             
         case COMPONENT_TYPE_OBJECT:
-            for (size_t i = 0; i < value->object_count; i++) {
-                free(value->object_val[i].key);
-                free_component_value(value->object_val[i].value);
-                free(value->object_val[i].value);
+            for (size_t i = 0; i < value->object_val.count; i++) {
+                free(value->object_val.items[i].key);
+                free_component_value(value->object_val.items[i].value);
+                free(value->object_val.items[i].value);
             }
-            free(value->object_val);
+            free(value->object_val.items);
             break;
             
         default:
@@ -798,6 +798,7 @@ void scene_free(scene_t* scene) {
         for (size_t j = 0; j < entity->properties_count; j++) {
             free(entity->properties[j].key);
             free_component_value(&entity->properties[j].value);
+            // No extra free for entity->properties[j].value since it's not heap-allocated as a pointer
         }
         free(entity->properties);
     }

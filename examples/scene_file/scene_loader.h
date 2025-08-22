@@ -75,10 +75,12 @@ typedef struct component_value_t {
             size_t count;
         } array_val;
         struct {
-            char* key;
-            struct component_value_t* value;
-        }* object_val;
-        size_t object_count;
+            struct {
+                char* key;
+                struct component_value_t* value;
+            }* items;
+            size_t count;
+        } object_val;
     };
 } component_value_t;
 

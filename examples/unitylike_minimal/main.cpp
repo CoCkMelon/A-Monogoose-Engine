@@ -1,9 +1,9 @@
 #include "unitylike/Scene.h"
 extern "C" {
-    #include "ame/ecs.h"
-    #include "ame/physics.h"
-    #include "ame/scene2d.h"
-    #include "ame/audio.h"
+#include "ame/ecs.h"
+#include "ame/physics.h"
+#include "ame/scene2d.h"
+#include "ame/audio.h"
 }
 
 #include <SDL3/SDL.h>
@@ -83,7 +83,7 @@ int main() {
         glBindTexture(GL_TEXTURE_2D, tex_white);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-;
+
         unsigned int px = 0xFFFFFFFFu; // white
         glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, &px);
 
@@ -230,7 +230,7 @@ int main() {
     auto s3 = scene.Create("S3"); s3.AddComponent<Transform>().position({500.0f,100.0f,0}); s3.AddComponent<SpriteRenderer>(); s3.AddScript<class SpriteMover>().tileIndex = 3;
 
     // Gravity for player
-    float vy = 0.0f; const float gravity = 900.0f; const float ground_y = 600.0f; // pixels
+    float vy = 0.0f; const float gravity = 900.0f; const float ground_y = 300.0f; // pixels
 
     // Simple loop
     const float fixed_dt = 0.001f;
