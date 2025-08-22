@@ -7,10 +7,18 @@
 #include <cstdint>
 #include <vector>
 #include <type_traits>
+#include <functional>
 #include <glm/vec2.hpp>
 #include <glm/vec3.hpp>
+#include <glm/vec4.hpp>
 #include <glm/gtc/quaternion.hpp>
 #include <flecs.h>
+
+extern "C" {
+#include "ame/physics.h"   // AmeTransform2D, AmePhysicsBody
+#include "ame/tilemap.h"   // AmeTilemap
+#include "ame/camera.h"    // AmeCamera
+}
 
 struct ecs_world_t; // from flecs
 
@@ -32,6 +40,33 @@ extern ecs_entity_t g_comp_script_host;
 // Internal: register an entity as having scripts (used by AddScript)
 void __register_script_entity(ecs_world_t* w, std::uint64_t e);
 
+// Forward declaration of internal component id holder
+struct CompIds {
+    ecs_entity_t transform;
+    ecs_entity_t body;
+    ecs_entity_t scale2d;
+    ecs_entity_t sprite;
+    ecs_entity_t material;
+    ecs_entity_t tilemap;
+    ecs_entity_t mesh;
+    ecs_entity_t camera;
+    ecs_entity_t text;
+    ecs_entity_t collider2d;
+};
+extern CompIds g_comp;
+
+// Internal component PODs (façade data stored in ECS)
+struct Scale2D { float sx; float sy; };
+struct SpriteData { std::uint32_t tex; float u0,v0,u1,v1; float w,h; float r,g,b,a; int visible; int sorting_layer; int order_in_layer; float z; int dirty; };
+struct MaterialData { float r,g,b,a; int dirty; };
+struct TilemapRefData { AmeTilemap* map; int layer; };
+struct MeshData { const float* pos; const float* uv; const float* col; std::size_t count; };
+struct TextData { const char* text_ptr; std::uint32_t font; float r,g,b,a; float size; int wrap_px; int request_set; char request_buf[256]; };
+struct Col2D { int type; float w,h; float radius; int isTrigger; int dirty; };
+
+// Internal registration helper (defined in Components.cpp)
+void ensure_components_registered(ecs_world_t* w);
+
 class Scene {
 public:
     // Create a façade Scene over an existing Flecs world (owned by C core)
@@ -44,6 +79,7 @@ public:
     // Tick
     void Step(float dt);
     void StepFixed(float fdt);
+
 
     // Access underlying world
     ecs_world_t* world() const { return world_; }
@@ -112,15 +148,24 @@ public:
     Transform& transform();
 
     void __set_owner(const GameObject& go) { owner_ = go; }
-private:
+protected:
     GameObject owner_{};
 };
 
-namespace Input {
+class InputAPI {
+public:
     bool GetKey(int key);
     bool GetKeyDown(int key);
     bool GetKeyUp(int key);
-}
+    // Mouse (Unity-like)
+    // button: 0=left, 1=right, 2=middle
+    bool GetMouseButton(int button);
+    bool GetMouseButtonDown(int button);
+    bool GetMouseButtonUp(int button);
+    glm::vec2 mousePosition();
+};
+
+extern InputAPI Input;
 
 namespace Time {
     float deltaTime();
@@ -139,6 +184,116 @@ private:
     GameObject owner_;
 };
 
+// Simple material with a tint color (RGBA)
+class Material {
+public:
+    explicit Material(GameObject owner) : owner_(owner) {}
+    glm::vec4 color() const;
+    void color(const glm::vec4& c);
+private:
+    GameObject owner_;
+};
+
+// Sprite renderer: texture id, size in pixels, uv rect, tint, visibility
+class SpriteRenderer {
+public:
+    explicit SpriteRenderer(GameObject owner) : owner_(owner) {}
+    void texture(std::uint32_t tex);
+    std::uint32_t texture() const;
+    void size(const glm::vec2& s);
+    glm::vec2 size() const;
+    void uv(float u0, float v0, float u1, float v1);
+    glm::vec4 uv() const; // (u0,v0,u1,v1)
+    void color(const glm::vec4& c);
+    glm::vec4 color() const;
+    void enabled(bool v);
+    bool enabled() const;
+    void sortingLayer(int l);
+    int sortingLayer() const;
+    void orderInLayer(int o);
+    int orderInLayer() const;
+    void z(float z);
+    float z() const;
+private:
+    GameObject owner_;
+};
+
+// Tilemap renderer component referencing an AmeTilemap
+class TilemapRenderer {
+public:
+    explicit TilemapRenderer(GameObject owner) : owner_(owner) {}
+    void map(AmeTilemap* m);
+    AmeTilemap* map() const;
+    void layer(int idx);
+    int layer() const;
+private:
+    GameObject owner_;
+};
+
+// Mesh renderer (MVP placeholder): raw pointers to client vertex data
+class MeshRenderer {
+public:
+    explicit MeshRenderer(GameObject owner) : owner_(owner) {}
+    void setData(const float* positions, const float* uvs, const float* colors, std::size_t vertCount);
+    std::size_t vertexCount() const;
+    const float* positions() const;
+    const float* uvs() const;
+    const float* colors() const;
+private:
+    GameObject owner_;
+};
+
+// Text renderer façade (data only)
+class TextRenderer {
+public:
+    explicit TextRenderer(GameObject owner) : owner_(owner) {}
+    void text(const std::string& s);
+    std::string text() const;
+    void color(const glm::vec4& c);
+    glm::vec4 color() const;
+    void font(std::uint32_t id);
+    std::uint32_t font() const;
+    void size(float px);
+    float size() const;
+    void wrapWidth(int px);
+    int wrapWidth() const;
+private:
+    GameObject owner_;
+};
+
+// Collider2D façade (data only)
+class Collider2D {
+public:
+    enum class Type { Box = 0, Circle = 1 };
+    explicit Collider2D(GameObject owner) : owner_(owner) {}
+    void type(Type t);
+    Type type() const;
+    void boxSize(const glm::vec2& wh);
+    glm::vec2 boxSize() const;
+    void radius(float r);
+    float radius() const;
+    void isTrigger(bool v);
+    bool isTrigger() const;
+private:
+    GameObject owner_;
+};
+
+// Camera component wrapper
+auto constexpr kDefaultZoom = 3.0f; // hint only; engine decides default
+class Camera {
+public:
+    explicit Camera(GameObject owner) : owner_(owner) {}
+    AmeCamera get() const; // full struct copyout for C side configuration
+    void set(const AmeCamera& c);
+    float zoom() const;
+    void zoom(float z);
+    void viewport(int w, int h);
+    glm::vec2 position() const; // returns top-left x,y
+    void position(const glm::vec2& xy);
+private:
+    GameObject owner_;
+};
+
 // Template implementations
 
 // Note: The façade only supports a small set of component types in the MVP.
@@ -147,8 +302,13 @@ private:
 
 template<typename T, typename... Args>
 T& GameObject::AddComponent(Args&&...) {
-    static_assert(std::is_same_v<T, Transform> || std::is_same_v<T, Rigidbody2D>,
-                  "AddComponent<T>: MVP only supports Transform and Rigidbody2D");
+static_assert(
+        std::is_same_v<T, Transform> || std::is_same_v<T, Rigidbody2D> ||
+        std::is_same_v<T, SpriteRenderer> || std::is_same_v<T, Material> ||
+        std::is_same_v<T, TilemapRenderer> || std::is_same_v<T, MeshRenderer> || std::is_same_v<T, Camera> ||
+        std::is_same_v<T, TextRenderer> || std::is_same_v<T, Collider2D>,
+        "AddComponent<T>: MVP supports Transform, Rigidbody2D, Sprite, Material, Tilemap, Mesh, Camera, Text, Collider2D"
+    );
     ecs_world_t* w = scene_->world();
     // Ensure underlying component ids are registered
     extern void ensure_components_registered(ecs_world_t*);
@@ -171,13 +331,60 @@ T& GameObject::AddComponent(Args&&...) {
         static thread_local Rigidbody2D rb{ GameObject() };
         rb = Rigidbody2D{ *this };
         return rb;
+    } else if constexpr (std::is_same_v<T, SpriteRenderer>) {
+        struct SpriteData { std::uint32_t tex; float u0,v0,u1,v1; float w,h; float r,g,b,a; int visible; int sorting_layer; int order_in_layer; float z; } s{0,0,0,1,1,16,16,1,1,1,1,1, 0, 0, 0.0f};
+        ecs_set_id(w, (ecs_entity_t)e_, g_comp.sprite, sizeof(s), &s);
+        static thread_local SpriteRenderer sr{ GameObject() };
+        sr = SpriteRenderer{ *this };
+        return sr;
+    } else if constexpr (std::is_same_v<T, Material>) {
+        struct MaterialData { float r,g,b,a; } m{1,1,1,1};
+        ecs_set_id(w, (ecs_entity_t)e_, g_comp.material, sizeof(m), &m);
+        static thread_local Material mat{ GameObject() };
+        mat = Material{ *this };
+        return mat;
+    } else if constexpr (std::is_same_v<T, TilemapRenderer>) {
+        struct TilemapRefData { AmeTilemap* map; int layer; } tr{nullptr, 0};
+        ecs_set_id(w, (ecs_entity_t)e_, g_comp.tilemap, sizeof(tr), &tr);
+        static thread_local TilemapRenderer t{ GameObject() };
+        t = TilemapRenderer{ *this };
+        return t;
+    } else if constexpr (std::is_same_v<T, MeshRenderer>) {
+        struct MeshData { const float* pos; const float* uv; const float* col; std::size_t count; } mr{nullptr,nullptr,nullptr,0};
+        ecs_set_id(w, (ecs_entity_t)e_, g_comp.mesh, sizeof(mr), &mr);
+        static thread_local MeshRenderer m{ GameObject() };
+        m = MeshRenderer{ *this };
+        return m;
+    } else if constexpr (std::is_same_v<T, Camera>) {
+        AmeCamera cam; ame_camera_init(&cam);
+        ecs_set_id(w, (ecs_entity_t)e_, g_comp.camera, sizeof(cam), &cam);
+        static thread_local Camera c{ GameObject() };
+        c = Camera{ *this };
+        return c;
+    } else if constexpr (std::is_same_v<T, TextRenderer>) {
+        struct TextData { const char* text_ptr; std::uint32_t font; float r,g,b,a; float size; int wrap_px; int request_set; char request_buf[256]; } td = { nullptr, 0, 1,1,1,1, 16.0f, 0, 0, {0} };
+        ecs_set_id(w, (ecs_entity_t)e_, g_comp.text, sizeof(td), &td);
+        static thread_local TextRenderer tr{ GameObject() };
+        tr = TextRenderer{ *this };
+        return tr;
+    } else if constexpr (std::is_same_v<T, Collider2D>) {
+        struct Col2D { int type; float w,h; float radius; int isTrigger; } cd = {0, 1,1, 0.5f, 0};
+        ecs_set_id(w, (ecs_entity_t)e_, g_comp.collider2d, sizeof(cd), &cd);
+        static thread_local Collider2D c2{ GameObject() };
+        c2 = Collider2D{ *this };
+        return c2;
     }
 }
 
 template<typename T>
 T* GameObject::TryGetComponent() {
-    static_assert(std::is_same_v<T, Transform> || std::is_same_v<T, Rigidbody2D>,
-                  "TryGetComponent<T>: MVP only supports Transform and Rigidbody2D");
+static_assert(
+        std::is_same_v<T, Transform> || std::is_same_v<T, Rigidbody2D> ||
+        std::is_same_v<T, SpriteRenderer> || std::is_same_v<T, Material> ||
+        std::is_same_v<T, TilemapRenderer> || std::is_same_v<T, MeshRenderer> || std::is_same_v<T, Camera> ||
+        std::is_same_v<T, TextRenderer> || std::is_same_v<T, Collider2D>,
+        "TryGetComponent<T>: supported types are Transform, Rigidbody2D, Sprite, Material, Tilemap, Mesh, Camera, Text, Collider2D"
+    );
     ecs_world_t* w = scene_->world();
     extern void ensure_components_registered(ecs_world_t*);
     ensure_components_registered(w);
@@ -194,6 +401,55 @@ T* GameObject::TryGetComponent() {
             static thread_local Rigidbody2D rb{ GameObject() };
             rb = Rigidbody2D{ *this };
             return &rb;
+        }
+        return nullptr;
+    } else if constexpr (std::is_same_v<T, SpriteRenderer>) {
+        if (ecs_get_id(w, (ecs_entity_t)e_, g_comp.sprite)) {
+            static thread_local SpriteRenderer sr{ GameObject() };
+            sr = SpriteRenderer{ *this };
+            return &sr;
+        }
+        return nullptr;
+    } else if constexpr (std::is_same_v<T, Material>) {
+        if (ecs_get_id(w, (ecs_entity_t)e_, g_comp.material)) {
+            static thread_local Material m{ GameObject() };
+            m = Material{ *this };
+            return &m;
+        }
+        return nullptr;
+    } else if constexpr (std::is_same_v<T, TilemapRenderer>) {
+        if (ecs_get_id(w, (ecs_entity_t)e_, g_comp.tilemap)) {
+            static thread_local TilemapRenderer t{ GameObject() };
+            t = TilemapRenderer{ *this };
+            return &t;
+        }
+        return nullptr;
+    } else if constexpr (std::is_same_v<T, MeshRenderer>) {
+        if (ecs_get_id(w, (ecs_entity_t)e_, g_comp.mesh)) {
+            static thread_local MeshRenderer mr{ GameObject() };
+            mr = MeshRenderer{ *this };
+            return &mr;
+        }
+        return nullptr;
+    } else if constexpr (std::is_same_v<T, Camera>) {
+        if (ecs_get_id(w, (ecs_entity_t)e_, g_comp.camera)) {
+            static thread_local Camera c{ GameObject() };
+            c = Camera{ *this };
+            return &c;
+        }
+        return nullptr;
+    } else if constexpr (std::is_same_v<T, TextRenderer>) {
+        if (ecs_get_id(w, (ecs_entity_t)e_, g_comp.text)) {
+            static thread_local TextRenderer tr{ GameObject() };
+            tr = TextRenderer{ *this };
+            return &tr;
+        }
+        return nullptr;
+    } else if constexpr (std::is_same_v<T, Collider2D>) {
+        if (ecs_get_id(w, (ecs_entity_t)e_, g_comp.collider2d)) {
+            static thread_local Collider2D c2{ GameObject() };
+            c2 = Collider2D{ *this };
+            return &c2;
         }
         return nullptr;
     }
@@ -235,6 +491,5 @@ T& GameObject::AddScript(Args&&... args) {
     return *script;
 }
 
-inline Transform& MongooseBehaviour::transform() { return owner_.transform(); }
 
 } // namespace unitylike

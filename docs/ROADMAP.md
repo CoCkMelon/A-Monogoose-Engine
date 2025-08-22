@@ -32,6 +32,7 @@ Phase 0 – Foundations and constraints
 Success criteria
 - Stable 60/120 Hz update/render with negligible input latency.
 - All visual elements align perfectly to pixel grid with nearest sampling.
+- Positions are correct.
 
 ---
 
@@ -171,8 +172,8 @@ Guidelines for AI agents
       #define LOGD(...) ((void)0)
       #endif
 
-- Remove noisy logs (like per-keypress spam) from examples; retain essential diagnostics under LOGD.
+- Retain essential diagnostics under LOGD.
 - Use plain ASCII in C source. Avoid special Unicode, HTML, or nonstandard escapes in code.
 - Make minimal, scoped changes and preserve current behavior in Release builds.
-- Use clear commit messages and, when requested, include: "Changes made by GPT-5 and Claude 4.1 Opus."
+- Use clear commit messages and add your model name if you are AI.
 

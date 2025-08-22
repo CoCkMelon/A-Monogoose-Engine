@@ -37,15 +37,23 @@ set(BOX2D_BUILD_TESTBED OFF CACHE BOOL "" FORCE)
 set(BOX2D_BUILD_DOCS OFF CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(box2d)
 
-# Bring in asyncinput as a subproject via FetchContent (vendored under third_party)
-include(FetchContent)
-FetchContent_Declare(
-  asyncinput
-  GIT_REPOSITORY https://github.com/cockMelon/asyncinput.git
-  GIT_TAG main
-  GIT_SHALLOW TRUE
-)
-FetchContent_MakeAvailable(asyncinput)
+# Bring in asyncinput: prefer local sibling checkout if present, otherwise FetchContent
+set(ASYNCINPUT_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(_LOCAL_ASYNCINPUT_DIR "${CMAKE_CURRENT_LIST_DIR}/../asyncinput")
+if(EXISTS "${_LOCAL_ASYNCINPUT_DIR}/CMakeLists.txt")
+  message(STATUS "Using local asyncinput at ${_LOCAL_ASYNCINPUT_DIR}")
+  add_subdirectory("${_LOCAL_ASYNCINPUT_DIR}" "${CMAKE_BINARY_DIR}/asyncinput_local")
+  set(asyncinput_SOURCE_DIR "${_LOCAL_ASYNCINPUT_DIR}")
+else()
+  include(FetchContent)
+  FetchContent_Declare(
+    asyncinput
+    GIT_REPOSITORY https://github.com/cockMelon/asyncinput.git
+    GIT_TAG main
+    GIT_SHALLOW TRUE
+  )
+  FetchContent_MakeAvailable(asyncinput)
+endif()
 
 # Public headers
 include_directories(
@@ -103,10 +111,35 @@ target_include_directories(ame PUBLIC ${CMAKE_CURRENT_LIST_DIR}/include)
 # --------------------------
 # Unity-like C++ façade lib
 # --------------------------
-add_library(unitylike STATIC
-    cpp/unitylike/Scene.cpp
-    cpp/unitylike/InputTime.cpp
+# Fetch glm (header-only) for the façade without adding as a subproject
+include(FetchContent)
+FetchContent_Declare(
+  glm
+  GIT_REPOSITORY https://github.com/g-truc/glm.git
+  GIT_TAG 0.9.9.8
+  GIT_SHALLOW TRUE
 )
+FetchContent_Populate(glm)
+
+add_library(unitylike STATIC
+    cpp/unitylike/Components.cpp
+    cpp/unitylike/SceneCore.cpp
+    cpp/unitylike/Transform.cpp
+    cpp/unitylike/Rigidbody2D.cpp
+    cpp/unitylike/Material.cpp
+    cpp/unitylike/SpriteRenderer.cpp
+    cpp/unitylike/TilemapRenderer.cpp
+    cpp/unitylike/MeshRenderer.cpp
+    cpp/unitylike/TextRenderer.cpp
+    cpp/unitylike/Collider2D.cpp
+    cpp/unitylike/CameraFacade.cpp
+    cpp/unitylike/Time.cpp
+)
+
+# Expose includes (cpp/ for headers, include/ for C APIs, asyncinput for input keys, glm)
+if(glm_SOURCE_DIR)
+  target_include_directories(unitylike PUBLIC ${glm_SOURCE_DIR})
+endif()
 
 target_include_directories(unitylike PUBLIC
     ${CMAKE_CURRENT_LIST_DIR}/cpp
@@ -183,6 +216,32 @@ add_executable(audio_opus_example
 add_executable(audio_ray_example
     examples/audio_ray_example/main.c
 )
+
+# Example: memory_game_cpp using the unity-like façade (pure C++)
+add_executable(memory_game_cpp
+    examples/memory_game_cpp/main.cpp
+    examples/memory_game_cpp/Game.cpp
+)
+# Link against façade and dependencies
+if(TARGET OpenGL::GL)
+    target_link_libraries(memory_game_cpp PRIVATE OpenGL::GL)
+else()
+    target_link_libraries(memory_game_cpp PRIVATE GL)
+endif()
+# SDL/Threads for timing/event base, unitylike/flecs/ame for engine core
+target_link_libraries(memory_game_cpp PRIVATE SDL3::SDL3 Threads::Threads unitylike ame flecs)
+# asyncinput choice similar to other examples
+if(TARGET asyncinput_shared)
+  target_link_libraries(memory_game_cpp PRIVATE asyncinput_shared)
+elseif(TARGET asyncinput_static)
+  target_link_libraries(memory_game_cpp PRIVATE asyncinput_static)
+elseif(TARGET asyncinput)
+  target_link_libraries(memory_game_cpp PRIVATE asyncinput)
+endif()
+# dl on Linux like other examples
+if(UNIX AND NOT APPLE)
+  target_link_libraries(memory_game_cpp PRIVATE dl)
+endif()
 
 # Prefer the shared lib if enabled, fall back to static otherwise
 if(TARGET asyncinput_shared)
