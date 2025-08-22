@@ -15,10 +15,9 @@ Minimum Viable API (MVP)
 - GameObject (create/destroy, name, active, component access)
 - Transform2D (position/rotation/scale; parenting optional in MVP)
 - MongooseBehaviour (Awake/Start/Update/FixedUpdate/LateUpdate/OnDestroy)
-- Input (per‑frame GetKey / GetKeyDown / GetKeyUp via a singleton object exposed to scripts)
 - Time (deltaTime, fixedDeltaTime)
-- Physics2D (Rigidbody2D, Collider2D; character‑like helpers optional)
-- Rendering (SpriteRenderer or direct sprite batch append via component)
+- Physics2D (Rigidbody2D, Collider2D data-only)
+- Rendering data-only: SpriteRenderer, Material, TilemapRenderer, MeshRenderer, Camera, TextRenderer (C engine consumes)
 
 Constraints and threading
 - Logic thread drives ecs_progress and physics step at fixed_dt.

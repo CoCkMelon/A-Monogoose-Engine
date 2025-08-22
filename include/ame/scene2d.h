@@ -17,6 +17,7 @@ typedef struct AmeVertex2D {
     float x, y;      // position
     float r, g, b, a;// color
     float u, v;      // uv
+    float l;         // texture layer (for sampler2DArray); default 0
 } AmeVertex2D;
 
 typedef struct AmeDrawRange {
@@ -111,7 +112,15 @@ static inline void ame_scene2d_batch_push(AmeScene2DBatch* b, GLuint tex,
                                           float u, float v) {
     ame_scene2d_batch_switch_texture(b, tex);
     ame_scene2d_batch_ensure(b, 1);
-    b->verts[b->count++] = (AmeVertex2D){ x, y, r, g, bl, a, u, v };
+    b->verts[b->count++] = (AmeVertex2D){ x, y, r, g, bl, a, u, v, 0.0f };
+}
+
+static inline void ame_scene2d_batch_push_ex(AmeScene2DBatch* b, GLuint tex,
+                                             float x, float y, float r, float g, float bl, float a,
+                                             float u, float v, float layer) {
+    ame_scene2d_batch_switch_texture(b, tex);
+    ame_scene2d_batch_ensure(b, 1);
+    b->verts[b->count++] = (AmeVertex2D){ x, y, r, g, bl, a, u, v, layer };
 }
 
 // Append a triangle list from separate position and uv arrays (length = vert_count)
@@ -126,7 +135,7 @@ static inline void ame_scene2d_batch_append_arrays(AmeScene2DBatch* b, GLuint te
         const float py = pos[i*2 + 1];
         const float tu = uv ? uv[i*2 + 0] : 0.0f;
         const float tv = uv ? uv[i*2 + 1] : 0.0f;
-        b->verts[b->count++] = (AmeVertex2D){ px, py, r, g, bl, a, tu, tv };
+        b->verts[b->count++] = (AmeVertex2D){ px, py, r, g, bl, a, tu, tv, 0.0f };
     }
 }
 

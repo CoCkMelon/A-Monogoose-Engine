@@ -7,7 +7,6 @@
 #include <cstdint>
 #include <vector>
 #include <type_traits>
-#include <functional>
 #include <glm/vec2.hpp>
 #include <glm/vec3.hpp>
 #include <glm/vec4.hpp>
@@ -152,20 +151,7 @@ protected:
     GameObject owner_{};
 };
 
-class InputAPI {
-public:
-    bool GetKey(int key);
-    bool GetKeyDown(int key);
-    bool GetKeyUp(int key);
-    // Mouse (Unity-like)
-    // button: 0=left, 1=right, 2=middle
-    bool GetMouseButton(int button);
-    bool GetMouseButtonDown(int button);
-    bool GetMouseButtonUp(int button);
-    glm::vec2 mousePosition();
-};
-
-extern InputAPI Input;
+// NOTE: Input singleton removed. Projects should define their own input handling.
 
 namespace Time {
     float deltaTime();

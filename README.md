@@ -24,6 +24,9 @@ From the build directory:
 Roadmap
 See docs/ROADMAP.md for the long-term plan and the current short-term focus on exploring gameplay without scene files or physics.
 
+Quick status and handoff
+See docs/AGENT_HANDOFF.md for a concise current status, pitfalls, and next actions for contributors and LLM agents.
+
 Architecture overview
 - SDL3 for windowing, timing, and app lifecycle; OpenGL 4.5 core for rendering.
 - libasyncinput provides low-latency input; flecs powers ECS where used.

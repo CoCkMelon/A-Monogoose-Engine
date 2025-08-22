@@ -1,5 +1,7 @@
 # A Mongoose Engine – Roadmap
 
+Quick link: For immediate next actions and recent pitfalls, see AGENT_HANDOFF.md.
+
 Purpose
 - Capture a pragmatic long-term plan for evolving this C engine into a lean C++ game framework.
 - Define a short-term exploration track that avoids scene files and physics to iterate on gameplay quickly.

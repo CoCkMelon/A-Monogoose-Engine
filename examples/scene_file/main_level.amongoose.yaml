@@ -1,0 +1,269 @@
+# scene_format_version: 2.0
+# file: main_level.flecs.yaml
+
+metadata:
+  name: "Main Level"
+  version: "1.0.0"
+  author: "Game Studio"
+  description: "The main gameplay level with combat arena"
+
+includes:
+  - path: "assets/scenes/ui_hud.flecs.yaml"
+    namespace: "HUD"
+  - path: "assets/scenes/enemy_spawner.flecs.yaml"
+    namespace: "Spawner"
+
+# Component schemas/templates
+schemas:
+  Transform:
+    position: { x: float, y: float, z: float }
+    rotation: { x: float, y: float, z: float, w: float }
+    scale: { x: float, y: float, z: float }
+
+# Pure entity definitions - ONLY components and tags
+entities:
+  Player:
+    _meta:
+      description: "Main player character controller"
+      notes: 
+        - "Spawns at checkpoint after death"
+        - "Max speed is 10 units/sec"
+    tags: ["Controllable", "Persistent"]
+    components:
+      Transform:
+        position: { x: 0, y: 1, z: 0 }
+        scale: { x: 1, y: 1, z: 1 }
+      Health: { current: 100, max: 100 }
+      Velocity: { x: 0, y: 0, z: 0 }
+
+  PlayerModel:
+    _meta:
+      description: "Visual mesh for player"
+    components:
+      Mesh: { path: "assets/player.mesh" }
+      Transform:
+        position: { x: 0, y: 0, z: 0 }
+
+  PlayerWeapon:
+    _meta:
+      description: "Currently equipped weapon"
+    components:
+      Transform:
+        position: { x: 0.5, y: 0, z: 0.2 }
+
+  WeaponMesh:
+    components:
+      Mesh: { path: "assets/sword.mesh" }
+
+  WeaponParticles:
+    _meta:
+      description: "Enchantment glow effect"
+      todo: "Add color variation based on enchantment type"
+    components:
+      ParticleEmitter: { type: "enchantment_glow" }
+
+  MainCamera:
+    _meta:
+      description: "Primary gameplay camera"
+    components:
+      Transform:
+        position: { x: 0, y: 5, z: -10 }
+      Camera:
+        fov: 60
+        near: 0.1
+        far: 1000
+
+  Enemy_1:
+    _meta:
+      description: "Patrolling guard near entrance"
+      behavior: "Patrols between waypoints, alerts others on sight"
+    prefab: "Spawner::EnemyPrefab"
+    components:
+      Transform:
+        position: { x: 10, y: 0, z: 5 }
+    properties:
+      patrol_route: "patrol_route_1"
+      alert_radius: 15.0
+
+  Enemy_2:
+    prefab: "Spawner::EnemyPrefab"
+    components:
+      Transform:
+        position: { x: -10, y: 0, z: 5 }
+
+  # Container entities (just tags, no components)
+  Enemies:
+    _meta:
+      description: "Container for all enemy entities"
+    tags: ["EntityGroup"]
+    
+  Lights:
+    _meta:
+      description: "Lighting group"
+    tags: ["EntityGroup"]
+
+  SunLight:
+    _meta:
+      description: "Primary directional light"
+      note: "Rotate for time-of-day effects"
+    components:
+      DirectionalLight:
+        color: { r: 1.0, g: 0.95, b: 0.8 }
+        intensity: 1.2
+      Transform:
+        rotation: { x: 45, y: 30, z: 0, w: 1 }
+
+  AmbientLight:
+    components:
+      AmbientLight:
+        color: { r: 0.1, g: 0.1, b: 0.2 }
+
+  NavPoint_A:
+    components:
+      NavigationNode: { position: { x: 0, y: 0, z: 0 } }
+      
+  NavPoint_B:
+    components:
+      NavigationNode: { position: { x: 10, y: 0, z: 0 } }
+      
+  NavPoint_C:
+    components:
+      NavigationNode: { position: { x: 10, y: 0, z: 10 } }
+
+# Hierarchy defined separately as relationships
+hierarchy:
+  _meta:
+    description: "Scene graph structure"
+    note: "Defines parent-child transform relationships"
+  
+  # Format 1: Tree notation
+  tree:
+    World:
+      - Player:
+          - PlayerModel
+          - PlayerWeapon:
+              - WeaponMesh
+              - WeaponParticles
+      - Terrain
+      - Enemies:
+          - Enemy_1
+          - Enemy_2
+      - Lights:
+          - SunLight
+          - AmbientLight
+  
+  # Format 2: Flat parent-child pairs (alternative, more explicit)
+  relations:
+    - { parent: Player, child: PlayerModel }
+    - { parent: Player, child: PlayerWeapon }
+    - { parent: PlayerWeapon, child: WeaponMesh }
+    - { parent: PlayerWeapon, child: WeaponParticles }
+    - { parent: Enemies, child: Enemy_1 }
+    - { parent: Enemies, child: Enemy_2 }
+    - { parent: Lights, child: SunLight }
+    - { parent: Lights, child: AmbientLight }
+
+# Other relationships
+relationships:
+  navigation:
+    _meta:
+      description: "AI pathfinding graph"
+    edges:
+      - { from: NavPoint_A, to: NavPoint_B, weight: 10, bidirectional: true }
+      - { from: NavPoint_B, to: NavPoint_C, weight: 10, bidirectional: true }
+      - { from: NavPoint_C, to: NavPoint_A, weight: 14.14, bidirectional: true }
+  
+  interactions:
+    _meta:
+      description: "Gameplay interaction rules"
+    rules:
+      - from: Player
+        to: Door_1
+        type: "CanOpen"
+        _meta: { note: "Requires key or lockpicking skill" }
+      - from: Key_1
+        to: Door_1
+        type: "Unlocks"
+
+  dependencies:
+    _meta:
+      description: "Entity dependency relationships"
+    rules:
+      - { entity: PlayerWeapon, requires: Player, type: "existence" }
+      - { entity: WeaponParticles, requires: PlayerWeapon, type: "existence" }
+
+# Prefab templates (for reuse)
+prefabs:
+  BasicEnemy:
+    _meta:
+      description: "Base enemy template"
+    components:
+      Health: { current: 50, max: 50 }
+      AI: { type: "aggressive" }
+      Faction: "evil"
+  
+  EliteEnemy:
+    extends: "BasicEnemy"  # Reference to base prefab
+    components:
+      Health: { current: 150, max: 150 }  # Override
+      Armor: { value: 20 }  # Addition
+
+# Named sequences and arrays
+sequences:
+  spawn_points:
+    _meta:
+      description: "Valid player respawn locations"
+    items:
+      - { name: "SpawnPoint_1", position: { x: 0, y: 0, z: 0 } }
+      - { name: "SpawnPoint_2", position: { x: 20, y: 0, z: 0 } }
+  
+  patrol_route_1:
+    _meta:
+      description: "Guard patrol through main corridor"
+    waypoints:
+      - entity: Waypoint_1
+        wait_time: 2.0
+        _meta: { action: "Look around corner" }
+      - entity: Waypoint_2
+        wait_time: 0.0
+      - entity: Waypoint_3
+        wait_time: 5.0
+        _meta: { action: "Guard post position" }
+
+# Physical constraints
+constraints:
+  joints:
+    - type: "hinge"
+      _meta: 
+        description: "Door rotation constraint"
+      entity_a: Door_1
+      entity_b: DoorFrame_1
+      axis: { x: 0, y: 1, z: 0 }
+      limits: { min: 0, max: 90 }
+
+# Logic rules
+rules:
+  - name: "enemy_aggro"
+    _meta:
+      description: "Enemy detection and aggression trigger"
+    when:
+      all:
+        - distance_less_than: { a: "$Enemy", b: "Player", value: 10 }
+        - has_line_of_sight: { from: "$Enemy", to: "Player" }
+    then:
+      - add_component: { entity: "$Enemy", component: "Aggressive" }
+      - set_target: { entity: "$Enemy", target: "Player" }
+
+# System configuration
+systems:
+  PhysicsSystem:
+    _meta:
+      description: "Physics and collision handling"
+    gravity: { x: 0, y: -9.81, z: 0 }
+    substeps: 2
+    
+  RenderSystem:
+    _meta:
+      description: "Renderer settings"
+    shadows: true
+    ambient_color: { r: 0.1, g: 0.1, b: 0.2 }

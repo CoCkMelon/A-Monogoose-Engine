@@ -11,7 +11,7 @@ extern "C" {
 #include "ame/scene2d.h"
 }
 
-#include "../../cpp/unitylike/Scene.h"
+#include "unitylike/Scene.h"
 
 using namespace unitylike;
 

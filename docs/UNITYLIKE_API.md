@@ -18,16 +18,23 @@ Core API (MVP, 2D)
 - MongooseBehaviour (script base)
   - virtual void Awake(), Start(), Update(float dt), FixedUpdate(float fdt), LateUpdate(), OnDestroy()
   - References: GameObject& gameObject(), Transform2D& transform()
-- Input
-  - bool GetKey(KeyCode k), bool GetKeyDown(KeyCode k), bool GetKeyUp(KeyCode k)
-  - Mouse helpers as needed; derived per‑frame edges computed at start of Update
+- TextRenderer (data-only)
+  - std::string text(); void text(const std::string&); uint32_t font(); void font(uint32_t);
+  - glm::vec4 color(); void color(const glm::vec4&); float size(); void size(float);
+  - int wrapWidth(); void wrapWidth(int);
+  - Engine-managed heap: façade writes request_buf + request_set; C engine copies to heap and updates text_ptr.
 - Time
   - float deltaTime(), float fixedDeltaTime(), float timeSinceStart()
 - Physics2D (thin wrappers over existing Box2D bridge)
-  - Rigidbody2D: velocity get/set, isKinematic, AddForce/Impulse (optional for MVP)
-  - Collider2D: box/circle; sensors; simple filters later
-- Rendering
-  - Optional SpriteRenderer component that binds a texture and draws via existing sprite batch.
+  - Rigidbody2D: velocity get/set
+  - Collider2D: Type Box/Circle, box size/radius, isTrigger (data-only, engine creates fixtures)
+- Rendering (data-only façade)
+  - SpriteRenderer: texture id, uv, size, color, enabled, sortingLayer, orderInLayer, z, dirty
+  - Material: tint color (RGBA, dirty)
+  - TilemapRenderer: AmeTilemap* map, layer index
+  - MeshRenderer: pointers to positions/uvs/colors and vertex count
+  - Camera: AmeCamera wrapper (zoom, viewport, position)
+  - TextRenderer: heap-managed text via request buffer; C engine updates text_ptr
 
 Mapping to current code (examples/kenney_pixel-platformer)
 - Input edges: derive from atomics gathered in asyncinput callback (see SysInputGather). Store prev states to compute GetKeyDown/GetKeyUp.

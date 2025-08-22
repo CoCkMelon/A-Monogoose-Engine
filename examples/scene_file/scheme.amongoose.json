@@ -1,0 +1,638 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "http://example.com/schemas/scene-v2.schema.json",
+  "title": "Flecs Scene Format v2.0",
+  "description": "A declarative schema for defining ECS scenes with separated concerns",
+  "type": "object",
+  "required": ["metadata", "entities"],
+  "properties": {
+    "metadata": {
+      "$ref": "#/$defs/metadata"
+    },
+    "includes": {
+      "type": "array",
+      "description": "External scene files to include",
+      "items": {
+        "$ref": "#/$defs/include"
+      }
+    },
+    "schemas": {
+      "type": "object",
+      "description": "Component type definitions",
+      "additionalProperties": {
+        "$ref": "#/$defs/component_schema"
+      }
+    },
+    "entities": {
+      "type": "object",
+      "description": "Entity definitions with components only",
+      "additionalProperties": {
+        "$ref": "#/$defs/entity"
+      }
+    },
+    "hierarchy": {
+      "$ref": "#/$defs/hierarchy"
+    },
+    "relationships": {
+      "type": "object",
+      "description": "Non-hierarchical entity relationships",
+      "additionalProperties": {
+        "$ref": "#/$defs/relationship_group"
+      }
+    },
+    "prefabs": {
+      "type": "object",
+      "description": "Reusable entity templates",
+      "additionalProperties": {
+        "$ref": "#/$defs/prefab"
+      }
+    },
+    "sequences": {
+      "type": "object",
+      "description": "Named arrays and sequences",
+      "additionalProperties": {
+        "$ref": "#/$defs/sequence"
+      }
+    },
+    "constraints": {
+      "$ref": "#/$defs/constraints"
+    },
+    "rules": {
+      "type": "array",
+      "description": "Logic rules and behaviors",
+      "items": {
+        "$ref": "#/$defs/rule"
+      }
+    },
+    "systems": {
+      "type": "object",
+      "description": "System configurations",
+      "additionalProperties": {
+        "$ref": "#/$defs/system_config"
+      }
+    }
+  },
+  "additionalProperties": false,
+
+  "$defs": {
+    "metadata": {
+      "type": "object",
+      "required": ["name", "version"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Scene name"
+        },
+        "version": {
+          "type": "string",
+          "pattern": "^\\d+\\.\\d+\\.\\d+$",
+          "description": "Scene version (semver)"
+        },
+        "author": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "created": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "modified": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
+    },
+
+    "preserved_meta": {
+      "type": "object",
+      "description": "Preserved metadata that survives regeneration",
+      "properties": {
+        "description": {
+          "type": "string"
+        },
+        "notes": {
+          "oneOf": [
+            { "type": "string" },
+            {
+              "type": "array",
+              "items": { "type": "string" }
+            }
+          ]
+        },
+        "author": {
+          "type": "string"
+        },
+        "modified": {
+          "type": "string",
+          "format": "date"
+        },
+        "todo": {
+          "type": "string"
+        },
+        "deprecated": {
+          "type": "boolean"
+        },
+        "version": {
+          "type": "integer"
+        }
+      },
+      "additionalProperties": true
+    },
+
+    "include": {
+      "type": "object",
+      "required": ["path"],
+      "properties": {
+        "path": {
+          "type": "string",
+          "description": "Path to external scene file"
+        },
+        "namespace": {
+          "type": "string",
+          "description": "Namespace prefix for imported entities"
+        },
+        "only": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Specific entities to import"
+        },
+        "exclude": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Entities to exclude from import"
+        }
+      }
+    },
+
+    "component_schema": {
+      "type": "object",
+      "description": "Schema definition for a component type",
+      "additionalProperties": {
+        "oneOf": [
+          { "type": "string", "enum": ["float", "int", "bool", "string"] },
+          { "type": "object" }
+        ]
+      }
+    },
+
+    "entity": {
+      "type": "object",
+      "properties": {
+        "_meta": {
+          "$ref": "#/$defs/preserved_meta"
+        },
+        "prefab": {
+          "type": "string",
+          "description": "Reference to a prefab template"
+        },
+        "tags": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Entity tags for querying and categorization"
+        },
+        "components": {
+          "type": "object",
+          "description": "Component instances attached to this entity",
+          "additionalProperties": {
+            "$ref": "#/$defs/component_data"
+          }
+        },
+        "properties": {
+          "type": "object",
+          "description": "Custom properties for this entity",
+          "additionalProperties": true
+        },
+        "enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Whether this entity starts enabled"
+        }
+      },
+      "additionalProperties": false
+    },
+
+    "component_data": {
+      "description": "Component instance data",
+      "oneOf": [
+        { "type": "object" },
+        { "type": "array" },
+        { "type": "string" },
+        { "type": "number" },
+        { "type": "boolean" },
+        { "type": "null" }
+      ]
+    },
+
+    "hierarchy": {
+      "type": "object",
+      "properties": {
+        "_meta": {
+          "$ref": "#/$defs/preserved_meta"
+        },
+        "tree": {
+          "$ref": "#/$defs/hierarchy_tree"
+        },
+        "relations": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/parent_child_relation"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+
+    "hierarchy_tree": {
+      "type": "object",
+      "description": "Tree representation of entity hierarchy",
+      "additionalProperties": {
+        "$ref": "#/$defs/hierarchy_node"
+      }
+    },
+
+    "hierarchy_node": {
+      "oneOf": [
+        {
+          "type": "array",
+          "items": {
+            "oneOf": [
+              { "type": "string" },
+              { "$ref": "#/$defs/hierarchy_tree" }
+            ]
+          }
+        },
+        { "type": "null" }
+      ]
+    },
+
+    "parent_child_relation": {
+      "type": "object",
+      "required": ["parent", "child"],
+      "properties": {
+        "parent": {
+          "type": "string",
+          "description": "Parent entity name"
+        },
+        "child": {
+          "type": "string",
+          "description": "Child entity name"
+        },
+        "order": {
+          "type": "integer",
+          "description": "Sibling order index"
+        }
+      }
+    },
+
+    "relationship_group": {
+      "type": "object",
+      "properties": {
+        "_meta": {
+          "$ref": "#/$defs/preserved_meta"
+        },
+        "edges": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/edge"
+          }
+        },
+        "rules": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/interaction_rule"
+          }
+        }
+      }
+    },
+
+    "edge": {
+      "type": "object",
+      "required": ["from", "to"],
+      "properties": {
+        "from": {
+          "type": "string",
+          "description": "Source entity"
+        },
+        "to": {
+          "type": "string",
+          "description": "Target entity"
+        },
+        "weight": {
+          "type": "number",
+          "description": "Edge weight for pathfinding"
+        },
+        "bidirectional": {
+          "type": "boolean",
+          "default": false
+        },
+        "type": {
+          "type": "string",
+          "description": "Relationship type"
+        },
+        "_meta": {
+          "$ref": "#/$defs/preserved_meta"
+        }
+      }
+    },
+
+    "interaction_rule": {
+      "type": "object",
+      "required": ["from", "to", "type"],
+      "properties": {
+        "from": {
+          "type": "string",
+          "description": "Source entity or pattern"
+        },
+        "to": {
+          "type": "string",
+          "description": "Target entity or pattern"
+        },
+        "type": {
+          "type": "string",
+          "description": "Interaction type"
+        },
+        "bidirectional": {
+          "type": "boolean",
+          "default": false
+        },
+        "_meta": {
+          "$ref": "#/$defs/preserved_meta"
+        }
+      }
+    },
+
+    "prefab": {
+      "type": "object",
+      "properties": {
+        "_meta": {
+          "$ref": "#/$defs/preserved_meta"
+        },
+        "extends": {
+          "type": "string",
+          "description": "Base prefab to extend"
+        },
+        "abstract": {
+          "type": "boolean",
+          "default": false,
+          "description": "If true, cannot be instantiated directly"
+        },
+        "components": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/component_data"
+          }
+        },
+        "tags": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "properties": {
+          "type": "object",
+          "additionalProperties": true
+        }
+      }
+    },
+
+    "sequence": {
+      "type": "object",
+      "properties": {
+        "_meta": {
+          "$ref": "#/$defs/preserved_meta"
+        },
+        "items": {
+          "type": "array",
+          "description": "Array items for simple sequences"
+        },
+        "waypoints": {
+          "type": "array",
+          "description": "Waypoint sequence for patrols",
+          "items": {
+            "$ref": "#/$defs/waypoint"
+          }
+        }
+      }
+    },
+
+    "waypoint": {
+      "type": "object",
+      "required": ["entity"],
+      "properties": {
+        "entity": {
+          "type": "string",
+          "description": "Reference to waypoint entity"
+        },
+        "wait_time": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Time to wait at waypoint"
+        },
+        "speed": {
+          "type": "number",
+          "description": "Movement speed to this waypoint"
+        },
+        "_meta": {
+          "$ref": "#/$defs/preserved_meta"
+        }
+      }
+    },
+
+    "constraints": {
+      "type": "object",
+      "properties": {
+        "joints": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/joint_constraint"
+          }
+        },
+        "distances": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/distance_constraint"
+          }
+        }
+      }
+    },
+
+    "joint_constraint": {
+      "type": "object",
+      "required": ["type", "entity_a", "entity_b"],
+      "properties": {
+        "_meta": {
+          "$ref": "#/$defs/preserved_meta"
+        },
+        "type": {
+          "type": "string",
+          "enum": ["hinge", "ball", "slider", "fixed", "spring"]
+        },
+        "entity_a": {
+          "type": "string"
+        },
+        "entity_b": {
+          "type": "string"
+        },
+        "axis": {
+          "$ref": "#/$defs/vector3"
+        },
+        "anchor_a": {
+          "$ref": "#/$defs/vector3"
+        },
+        "anchor_b": {
+          "$ref": "#/$defs/vector3"
+        },
+        "limits": {
+          "type": "object",
+          "properties": {
+            "min": { "type": "number" },
+            "max": { "type": "number" }
+          }
+        }
+      }
+    },
+
+    "distance_constraint": {
+      "type": "object",
+      "required": ["entities"],
+      "properties": {
+        "_meta": {
+          "$ref": "#/$defs/preserved_meta"
+        },
+        "entities": {
+          "type": "array",
+          "items": { "type": "string" },
+          "minItems": 2,
+          "maxItems": 2
+        },
+        "min": {
+          "type": "number",
+          "minimum": 0
+        },
+        "max": {
+          "type": "number",
+          "minimum": 0
+        }
+      }
+    },
+
+    "rule": {
+      "type": "object",
+      "required": ["name", "when", "then"],
+      "properties": {
+        "_meta": {
+          "$ref": "#/$defs/preserved_meta"
+        },
+        "name": {
+          "type": "string",
+          "description": "Unique rule identifier"
+        },
+        "enabled": {
+          "type": "boolean",
+          "default": true
+        },
+        "priority": {
+          "type": "integer",
+          "default": 0,
+          "description": "Execution priority (higher = earlier)"
+        },
+        "when": {
+          "$ref": "#/$defs/condition"
+        },
+        "then": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/action"
+          }
+        },
+        "else": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/action"
+          }
+        }
+      }
+    },
+
+    "condition": {
+      "type": "object",
+      "properties": {
+        "all": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/condition_item"
+          }
+        },
+        "any": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/condition_item"
+          }
+        },
+        "not": {
+          "$ref": "#/$defs/condition_item"
+        }
+      },
+      "additionalProperties": false
+    },
+
+    "condition_item": {
+      "type": "object",
+      "additionalProperties": true
+    },
+
+    "action": {
+      "type": "object",
+      "additionalProperties": true
+    },
+
+    "system_config": {
+      "type": "object",
+      "properties": {
+        "_meta": {
+          "$ref": "#/$defs/preserved_meta"
+        },
+        "enabled": {
+          "type": "boolean",
+          "default": true
+        }
+      },
+      "additionalProperties": true
+    },
+
+    "vector3": {
+      "type": "object",
+      "required": ["x", "y", "z"],
+      "properties": {
+        "x": { "type": "number" },
+        "y": { "type": "number" },
+        "z": { "type": "number" }
+      },
+      "additionalProperties": false
+    },
+
+    "vector4": {
+      "type": "object",
+      "required": ["x", "y", "z", "w"],
+      "properties": {
+        "x": { "type": "number" },
+        "y": { "type": "number" },
+        "z": { "type": "number" },
+        "w": { "type": "number" }
+      },
+      "additionalProperties": false
+    },
+
+    "color": {
+      "type": "object",
+      "required": ["r", "g", "b"],
+      "properties": {
+        "r": { "type": "number", "minimum": 0, "maximum": 1 },
+        "g": { "type": "number", "minimum": 0, "maximum": 1 },
+        "b": { "type": "number", "minimum": 0, "maximum": 1 },
+        "a": { "type": "number", "minimum": 0, "maximum": 1, "default": 1 }
+      },
+      "additionalProperties": false
+    }
+  }
+}

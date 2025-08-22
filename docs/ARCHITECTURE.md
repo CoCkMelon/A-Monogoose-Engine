@@ -2,6 +2,8 @@
 
 This document describes the high-level architecture of the engine and how its subsystems interact.
 
+Note: For the latest status and agent-oriented handoff (pitfalls and next steps), see AGENT_HANDOFF.md.
+
 Overview
 - Language: C for the engine and examples, with a small C++ file for Box2D integration.
 - Platform: SDL3 for windowing, timing, GL context, and app lifecycle (SDL_AppInit/Event/Iterate/Quit).

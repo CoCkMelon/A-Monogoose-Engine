@@ -5,9 +5,9 @@
 
 namespace unitylike {
 
-// Globals declared in header
-CompIds g_comp{};
-ecs_entity_t g_comp_script_host = 0;
+// Globals declared in header (remove duplicate definitions)
+// CompIds g_comp{};
+// ecs_entity_t g_comp_script_host = 0;
 
 static std::vector<ecs_entity_t> g_script_entities;
 

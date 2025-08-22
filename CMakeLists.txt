@@ -74,6 +74,8 @@ add_library(ame STATIC
     src/audio.c
     src/physics.cpp
     src/audio_ray.c
+    src/text_system.c
+    src/collider2d_system.c
 )
 
 # If generated dialogues are present, compile them and enable the macro
@@ -217,31 +219,12 @@ add_executable(audio_ray_example
     examples/audio_ray_example/main.c
 )
 
-# Example: memory_game_cpp using the unity-like façade (pure C++)
-add_executable(memory_game_cpp
-    examples/memory_game_cpp/main.cpp
-    examples/memory_game_cpp/Game.cpp
-)
-# Link against façade and dependencies
-if(TARGET OpenGL::GL)
-    target_link_libraries(memory_game_cpp PRIVATE OpenGL::GL)
-else()
-    target_link_libraries(memory_game_cpp PRIVATE GL)
-endif()
-# SDL/Threads for timing/event base, unitylike/flecs/ame for engine core
-target_link_libraries(memory_game_cpp PRIVATE SDL3::SDL3 Threads::Threads unitylike ame flecs)
-# asyncinput choice similar to other examples
-if(TARGET asyncinput_shared)
-  target_link_libraries(memory_game_cpp PRIVATE asyncinput_shared)
-elseif(TARGET asyncinput_static)
-  target_link_libraries(memory_game_cpp PRIVATE asyncinput_static)
-elseif(TARGET asyncinput)
-  target_link_libraries(memory_game_cpp PRIVATE asyncinput)
-endif()
-# dl on Linux like other examples
-if(UNIX AND NOT APPLE)
-  target_link_libraries(memory_game_cpp PRIVATE dl)
-endif()
+# memory_game_cpp example removed (Input singleton eliminated)
+
+# ------------------------------
+# Example: unitylike_minimal demo
+# ------------------------------
+add_subdirectory(examples/unitylike_minimal)
 
 # Prefer the shared lib if enabled, fall back to static otherwise
 if(TARGET asyncinput_shared)
