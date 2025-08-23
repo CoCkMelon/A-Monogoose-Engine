@@ -499,7 +499,29 @@ static bool parse_hierarchy(parse_context_t* ctx, yaml_node_t* node) {
 }
 
 static bool parse_relationships(parse_context_t* ctx, yaml_node_t* node) {
-    // TODO: Implement full relationship parsing
+    // Parse constraints.joints if present
+    yaml_node_t* constraints = get_map_value(ctx->document, node, "constraints");
+    if (constraints && constraints->type == YAML_MAPPING_NODE) {
+        yaml_node_t* joints = get_map_value(ctx->document, constraints, "joints");
+        if (joints && joints->type == YAML_SEQUENCE_NODE) {
+            size_t count = joints->data.sequence.items.top - joints->data.sequence.items.start;
+            ctx->scene->constraints.joints = calloc(count, sizeof(*ctx->scene->constraints.joints));
+            ctx->scene->constraints.joints_count = count;
+            size_t i = 0;
+            for (yaml_node_item_t* item = joints->data.sequence.items.start; item < joints->data.sequence.items.top; item++) {
+                yaml_node_t* jn = yaml_document_get_node(ctx->document, *item);
+                if (jn && jn->type == YAML_MAPPING_NODE) {
+                    yaml_node_t* type = get_map_value(ctx->document, jn, "type");
+                    yaml_node_t* a = get_map_value(ctx->document, jn, "entity_a");
+                    yaml_node_t* b = get_map_value(ctx->document, jn, "entity_b");
+                    ctx->scene->constraints.joints[i].type = SAFE_STRDUP(get_scalar_value(ctx->document, type));
+                    ctx->scene->constraints.joints[i].entity_a = SAFE_STRDUP(get_scalar_value(ctx->document, a));
+                    ctx->scene->constraints.joints[i].entity_b = SAFE_STRDUP(get_scalar_value(ctx->document, b));
+                    i++;
+                }
+            }
+        }
+    }
     return true;
 }
 
@@ -819,6 +841,14 @@ void scene_free(scene_t* scene) {
     }
     free(scene->systems);
     
+    // Free constraints
+    for (size_t i = 0; i < scene->constraints.joints_count; i++) {
+        free(scene->constraints.joints[i].type);
+        free(scene->constraints.joints[i].entity_a);
+        free(scene->constraints.joints[i].entity_b);
+    }
+    free(scene->constraints.joints);
+
     // TODO: Free other sections
     
     free(scene);

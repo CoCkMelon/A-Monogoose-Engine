@@ -151,6 +151,20 @@ typedef struct {
     component_value_t config;
 } system_config_t;
 
+// Joint constraint
+typedef struct {
+    char* type;         // e.g., "hinge"
+    char* entity_a;
+    char* entity_b;
+    // optional parameters omitted for now
+} joint_constraint_t;
+
+// Constraints block
+typedef struct {
+    joint_constraint_t* joints;
+    size_t joints_count;
+} constraints_t;
+
 // Complete scene
 struct scene_t {
     // Metadata
@@ -184,6 +198,9 @@ struct scene_t {
     // Systems
     system_config_t* systems;
     size_t systems_count;
+
+    // Constraints
+    constraints_t constraints;
     
     // Error info
     scene_error_info_t last_error;

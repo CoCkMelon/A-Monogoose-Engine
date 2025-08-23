@@ -72,7 +72,8 @@ static GLint u_res = -1, u_camera = -1, u_use_tex = -1, u_tex = -1;
 // Tilemap full-screen pass state
 static GLuint g_tile_prog = 0;
 static GLuint g_fullscreen_vao = 0;
-static GLint tu_res = -1, tu_camera = -1, tu_map_size = -1, tu_tile_size = -1, tu_layer_count = -1;
+static GLint tu_res = -1, tu_camera = -1, tu_map_size = -1, tu_layer_count = -1;
+static GLint tu_tile_size_arr = -1;
 static GLint tu_atlas = -1, tu_gidtex = -1, tu_atlas_tex_size = -1, tu_firstgid = -1, tu_columns = -1;
 
 // Single-pass batch state
@@ -96,7 +97,7 @@ static ecs_entity_t g_e_world = 0;
 
 // Player state
 static b2Body* g_player_body = NULL;
-static float g_player_x = 100.0f, g_player_y = 100.0f;
+static float g_player_x = 100.0f, g_player_y = 300.0f;
 static float g_player_size = 16.0f;
 static bool g_on_ground = false;
 
@@ -158,7 +159,7 @@ static const char* vs_src =
     "  // Apply camera transform\n"
     "  vec2 cam_pos = a_pos - u_camera.xy;\n"
     "  cam_pos *= u_camera.z; // zoom\n"
-    "  vec2 ndc = vec2( (cam_pos.x / u_res.x) * 2.0 - 1.0, 1.0 - (cam_pos.y / u_res.y) * 2.0 );\n"
+    "  vec2 ndc = vec2( (cam_pos.x / u_res.x) * 2.0 - 1.0, (cam_pos.y / u_res.y) * 2.0 - 1.0 );\n"
     "  gl_Position = vec4(ndc, 0.0, 1.0);\n"
     "  v_col = a_col;\n"
     "  v_uv = a_uv;\n"
@@ -173,7 +174,8 @@ static const char* fs_src =
     "out vec4 frag;\n"
     "void main(){\n"
     "  vec4 col = v_col;\n"
-    "  if (u_use_tex) { col *= texture(u_tex, v_uv); }\n"
+    "  vec2 uv = vec2(v_uv.x, 1.0 - v_uv.y); // Y-up: flip V at sample time\n"
+    "  if (u_use_tex) { col *= texture(u_tex, uv); }\n"
     "  frag = col;\n"
     "}\n";
 
@@ -192,11 +194,11 @@ static const char* tile_fs_src =
     "in vec2 v_uv;\n"
     "uniform vec2 u_res;\n"
     "uniform vec4 u_camera; // x, y, zoom, rot\n"
-    "uniform ivec2 u_map_size; // tiles (width, height)\n"
-    "uniform ivec2 u_tile_size; // pixels (w, h)\n"
+    "uniform ivec2 u_map_size; // tiles (width, height) -- assumed same for all layers\n"
     "uniform int u_layer_count;\n"
+    "uniform ivec2 u_tile_size_arr[16]; // per-layer tile size in pixels (w, h)\n"
     "uniform sampler2D u_atlas[16];\n"
-    "uniform isampler2D u_gidtex[16];\n"
+    "uniform usampler2D u_gidtex[16]; // raw GIDs with Tiled flip flags\n"
     "uniform ivec2 u_atlas_tex_size[16];\n"
     "uniform int u_firstgid[16];\n"
     "uniform int u_columns[16];\n"
@@ -206,32 +208,39 @@ static const char* tile_fs_src =
     "  vec2 screen_px = v_uv * u_res;\n"
     "  // Convert to world pixel coordinates\n"
     "  vec2 world_px = screen_px / max(u_camera.z, 0.00001) + u_camera.xy;\n"
-    "  // Tile coordinates in the map grid\n"
-    "  ivec2 tcoord = ivec2(floor(world_px / vec2(u_tile_size)));\n"
-    "  // Early out if tile is outside the map\n"
-    "  if (any(lessThan(tcoord, ivec2(0))) || any(greaterThanEqual(tcoord, u_map_size))) {\n"
-    "    frag = vec4(0.0);\n"
-    "    return;\n"
-    "  }\n"
-    "  // Pixel within the tile\n"
-    "  vec2 tile_frac = fract(world_px / vec2(u_tile_size));\n"
-    "  ivec2 in_tile_px = ivec2(tile_frac * vec2(u_tile_size));\n"
     "  vec4 outc = vec4(0.0);\n"
     "  // Loop through layers\n"
     "  for (int i = 0; i < u_layer_count; i++) {\n"
-    "    int gid = texelFetch(u_gidtex[i], tcoord, 0).r;\n"
+    "    ivec2 tile_size = u_tile_size_arr[i];\n"
+    "    // Compute tile coord for this layer's tile size\n"
+    "    ivec2 tcoord = ivec2(floor(world_px / vec2(tile_size)));\n"
+    "    if (any(lessThan(tcoord, ivec2(0))) || any(greaterThanEqual(tcoord, u_map_size))) {\n"
+    "      continue;\n"
+    "    }\n"
+    "    // Pixel within the tile (Y-up), integer coords 0..tile_size-1\n"
+    "    vec2 tile_frac = fract(world_px / vec2(tile_size));\n"
+    "    ivec2 in_tile_px = ivec2(tile_frac * vec2(tile_size));\n"
+    "    // Fetch raw gid with flip flags\n"
+    "    uint raw = texelFetch(u_gidtex[i], tcoord, 0).r;\n"
+    "    bool flipH = (raw & 0x80000000u) != 0u;\n"
+    "    bool flipV = (raw & 0x40000000u) != 0u;\n"
+    "    bool flipD = (raw & 0x20000000u) != 0u; // diagonal (unsupported: we'll approximate)\n"
+    "    int gid = int(raw & 0x1FFFFFFFu);\n"
     "    int local = gid - u_firstgid[i];\n"
-    "    // Skip if gid is less than or equal to zero or local < 0\n"
-    "    float mask = float(gid > 0 && local >= 0);\n"
-    "    if (mask == 0.0) continue;\n"
+    "    if (!(gid > 0 && local >= 0)) continue;\n"
     "    int cols = max(u_columns[i], 1);\n"
     "    int tile_x = local % cols;\n"
     "    int tile_y = local / cols;\n"
-    "    ivec2 atlas_px = ivec2(tile_x * u_tile_size.x + in_tile_px.x,\n"
-    "                           tile_y * u_tile_size.y + in_tile_px.y);\n"
+    "    int px_x = in_tile_px.x;\n"
+    "    int px_y = (tile_size.y - 1 - in_tile_px.y); // flip Y for atlas row addressing\n"
+    "    // Apply flips to in-tile pixel coordinate\n"
+    "    if (flipH) px_x = tile_size.x - 1 - px_x;\n"
+    "    if (flipV) px_y = tile_size.y - 1 - px_y;\n"
+    "    if (flipD) { int tmp = px_x; px_x = px_y; px_y = tmp; }\n"
+    "    ivec2 atlas_px = ivec2(tile_x * tile_size.x + px_x, tile_y * tile_size.y + px_y);\n"
     "    ivec2 atlas_size = u_atlas_tex_size[i];\n"
     "    vec2 uv = (vec2(atlas_px) + 0.5) / vec2(atlas_size);\n"
-    "    vec4 tex_color = texture(u_atlas[i], uv) * mask;\n"
+    "    vec4 tex_color = texture(u_atlas[i], uv);\n"
     "    outc = tex_color + outc * (1.0 - tex_color.a);\n"
     "  }\n"
     "  frag = outc;\n"
@@ -318,8 +327,8 @@ glGenBuffers(1, &g_tile_vbo_pos);
     tu_res = glGetUniformLocation(g_tile_prog, "u_res");
     tu_camera = glGetUniformLocation(g_tile_prog, "u_camera");
     tu_map_size = glGetUniformLocation(g_tile_prog, "u_map_size");
-    tu_tile_size = glGetUniformLocation(g_tile_prog, "u_tile_size");
     tu_layer_count = glGetUniformLocation(g_tile_prog, "u_layer_count");
+    tu_tile_size_arr = glGetUniformLocation(g_tile_prog, "u_tile_size_arr[0]");
     tu_atlas = glGetUniformLocation(g_tile_prog, "u_atlas[0]");
     tu_gidtex = glGetUniformLocation(g_tile_prog, "u_gidtex[0]");
     tu_atlas_tex_size = glGetUniformLocation(g_tile_prog, "u_atlas_tex_size[0]");
@@ -639,9 +648,9 @@ static void apply_simple_autotile(AmeTilemap* map, int base_gid, int variant_cou
             int i = y*w + x;
             if (!is_same_category(data[i], base_gid, variant_count)) continue;
             int mask = 0;
-            if (y>0   && is_same_category(data[i - w], base_gid, variant_count)) mask |= 1;   // up
+            if (y<h-1 && is_same_category(data[i + w], base_gid, variant_count)) mask |= 1;   // up (Y-up)
             if (x<w-1 && is_same_category(data[i + 1], base_gid, variant_count)) mask |= 2;   // right
-            if (y<h-1 && is_same_category(data[i + w], base_gid, variant_count)) mask |= 4;   // down
+            if (y>0   && is_same_category(data[i - w], base_gid, variant_count)) mask |= 4;   // down (Y-up)
             if (x>0   && is_same_category(data[i - 1], base_gid, variant_count)) mask |= 8;   // left
             int variant = mask % variant_count;
             int gid = base_gid + variant;
@@ -682,8 +691,8 @@ static void SysGroundCheck(ecs_iter_t *it) {
         b2Body* body = pb[i].body;
         float px, py; ame_physics_get_position(body, &px, &py);
         const float halfw = (sz ? sz[i].w * 0.5f : 8.0f);
-        const float y0 = py + halfw - 1.0f;
-        const float y1 = py + halfw + 12.0f;
+        const float y0 = py - halfw;
+        const float y1 = py - halfw - 3.0f;
         const float ox[3] = { -halfw + 2.0f, 0.0f, halfw - 2.0f };
         bool on_ground = false;
         for (int j = 0; j < 3; ++j) {
@@ -711,7 +720,7 @@ static void SysMovementAndJump(ecs_iter_t *it) {
         if (jump_edge) in[i].jump_buffer = JUMP_BUFFER_TIME; else in[i].jump_buffer = fmaxf(0.0f, in[i].jump_buffer - dt);
         in[i].jump_trigger = false;
         if (in[i].jump_buffer > 0.0f && (gr[i].value || in[i].coyote_timer > 0.0f)) {
-            vy = -100.0f;
+            vy = 100.0f;
             in[i].jump_buffer = 0.0f;
             in[i].coyote_timer = 0.0f;
             in[i].jump_trigger = true;
@@ -732,13 +741,15 @@ static void SysCameraFollow(ecs_iter_t *it) {
     float half_w = (float)g_w / cc[0].cam.zoom * 0.5f;
     float half_h = (float)g_h / cc[0].cam.zoom * 0.5f;
     
-    // Calculate camera position (top-left corner)
+    // Calculate camera position (bottom-left corner)
     float cam_x = px - half_w;
     float cam_y = py - half_h;
     
     // Snap to pixel grid for pixel-perfect rendering (Unity-style)
-    cc[0].cam.x = floorf(cam_x + 0.5f);
-    cc[0].cam.y = floorf(cam_y + 0.5f);
+    // cc[0].cam.x = floorf(cam_x + 0.5f);
+    // cc[0].cam.y = floorf(cam_y + 0.5f);
+    cc[0].cam.x = cam_x;
+    cc[0].cam.y = cam_y;
     
     atomic_store(&g_cam_x, cc[0].cam.x);
     atomic_store(&g_cam_y, cc[0].cam.y);
@@ -890,10 +901,12 @@ static bool load_map_and_gpu(void) {
         // Find start of CSV numbers
         const char* csv = strchr(dp, '>'); if (!csv || csv>layer_end) { lp = layer_end + 7; continue; }
         csv++;
-        // Allocate and parse gids
-        int count = lw * lh; int32_t* data = (int32_t*)SDL_malloc(sizeof(int32_t)* (size_t)count);
-        if (!data) { SDL_free(tmx); return false; }
-        int idx=0; const char* q = csv; const uint32_t FLIP_MASK = 0x1FFFFFFF;
+        // Allocate and parse gids (write directly with Y flipped so row 0 is bottom)
+        int count = lw * lh;
+        int32_t* data = (int32_t*)SDL_calloc((size_t)count, sizeof(int32_t));
+        uint32_t* data_raw = (uint32_t*)SDL_calloc((size_t)count, sizeof(uint32_t));
+        if (!data || !data_raw) { if (data) SDL_free(data); if (data_raw) SDL_free(data_raw); SDL_free(tmx); return false; }
+        int idx=0; const char* q = csv;
         while (q < layer_end && idx < count) {
             while (q < layer_end && (*q==' '||*q=='\n'||*q=='\r'||*q=='\t'||*q==',')) q++;
             if (q>=layer_end || *q=='<') break;
@@ -901,13 +914,19 @@ static bool load_map_and_gpu(void) {
             uint64_t v=0; int any=0;
             while (q<layer_end && *q>='0'&&*q<='9'){ v = v*10 + (uint64_t)(*q - '0'); q++; any=1; }
             uint32_t raw = (uint32_t)(sign>0? v : (uint64_t)(-(int64_t)v));
-            uint32_t gid = raw & FLIP_MASK;
-            data[idx++] = (int32_t)gid;
+            uint32_t gid = raw & 0x1FFFFFFFu; // masked gid without flip flags (for CPU systems)
+            int x = idx % lw;
+            int y = idx / lw;
+            int flipped_y = (lh - 1 - y);
+            int di = flipped_y * lw + x;
+            data[di] = (int32_t)gid;
+            data_raw[di] = raw; // preserve flip flags for GPU sampling
+            idx++;
             while (q<layer_end && *q!=',' && *q!='<' ) q++;
             if (*q==',') q++;
         }
-        // If not enough, fill rest with zeros
-        while (idx < count) data[idx++] = 0;
+        // Remaining entries (if any) are already zero due to calloc
+        (void)count;
 
         // Decide which tileset this layer belongs to by counting occurrences in ranges
         int best_set = -1; int best_hits = -1;
@@ -941,7 +960,7 @@ static bool load_map_and_gpu(void) {
         L->columns = sets[best_set].ts.columns;
         L->atlas_w = sets[best_set].ts.image_width;
         L->atlas_h = sets[best_set].ts.image_height;
-        // Create integer GID texture (R32I)
+        // Create unsigned integer GID texture (R32UI) with raw GIDs (including flip flags)
         glGenTextures(1, &L->gid_tex);
         glBindTexture(GL_TEXTURE_2D, L->gid_tex);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
@@ -949,8 +968,10 @@ static bool load_map_and_gpu(void) {
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
         glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
-        // Upload CSV GIDs as-is; we handle Y orientation in the shader when fetching
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_R32I, lw, lh, 0, GL_RED_INTEGER, GL_INT, data);
+        // Upload raw GIDs with rows already flipped to match OpenGL's bottom-left origin
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_R32UI, lw, lh, 0, GL_RED_INTEGER, GL_UNSIGNED_INT, data_raw);
+        // We can free data_raw after uploading since CPU systems use the masked 'data'
+        SDL_free(data_raw);
         // Legacy UV mesh path remains for reference but is not used in the new pass
         if (ame_tilemap_build_uv_mesh(&L->map, &L->uv)) {
             LOGD("Layer %d: Built UV mesh with %zu vertices (legacy path)", g_layer_count, L->uv.vert_count);
@@ -963,6 +984,7 @@ static bool load_map_and_gpu(void) {
         } else {
             LOGD("Layer %d: No UV mesh built (empty or failed)", g_layer_count);
         }
+        // Free the masked data will be managed by ame_tilemap_free via L->map, do not free here.
         // Heuristics: first non-empty tiles layer that uses the "tiles" atlas (not characters) becomes collision
         // We check by tile size matching the map tile size and name containing "Tiles" if available
         char lname[64]={0}; (void)xml_read_str_attr(lp, "name", lname, sizeof lname);
@@ -1020,7 +1042,7 @@ static void instantiate_world_entities(void) {
     CPlayerTag tag = (CPlayerTag){0}; ecs_set_id(w, g_e_player, EcsCPlayerTag, sizeof(CPlayerTag), &tag);
     CSize sz = { .w = g_player_size, .h = g_player_size }; ecs_set_id(w, g_e_player, EcsCSize, sizeof(CSize), &sz);
 
-    g_physics = ame_physics_world_create(0.0f, 100.0f, fixed_dt);
+    g_physics = ame_physics_world_create(0.0f, -100.0f, fixed_dt);
     // Use the collision layer if available
     const AmeTilemap* coll_map = NULL;
     for (int i=0;i<g_layer_count;i++){ if (g_layers[i].is_collision) { coll_map = &g_layers[i].map; break; } }
@@ -1185,8 +1207,8 @@ static bool check_on_ground(void) {
     ame_physics_get_position(g_player_body, &px, &py);
 
     const float half = g_player_size * 0.5f;
-    const float y0 = py + half + 1.0f;
-    const float y1 = py + half - 12.0f; // This way works.
+    const float y0 = py - half - 1.0f;
+    const float y1 = py - half - 12.0f; // Y-up: cast downward from bottom of player
     const float ox[3] = { -half + 2.0f, 0.0f, half - 2.0f };
 
     for (int i = 0; i < 3; ++i) {
@@ -1311,15 +1333,18 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
     // reuse snapped_cam_x/y computed earlier
     if (tu_camera >= 0) glUniform4f(tu_camera, snapped_cam_x, snapped_cam_y, g_camera.zoom, g_camera.rotation);
     if (g_layer_count > 0) {
-        // Assume all layers share map size and tile size (per TMX)
+        // Map size shared across layers in TMX
         if (tu_map_size >= 0) glUniform2i(tu_map_size, g_layers[0].map.width, g_layers[0].map.height);
-        if (tu_tile_size >= 0) glUniform2i(tu_tile_size, g_layers[0].map.tile_width, g_layers[0].map.tile_height);
     } else {
         if (tu_map_size >= 0) glUniform2i(tu_map_size, 0, 0);
-        if (tu_tile_size >= 0) glUniform2i(tu_tile_size, 1, 1);
     }
     int lc = g_layer_count; if (lc > 16) lc = 16;
     if (tu_layer_count >= 0) glUniform1i(tu_layer_count, lc);
+    // Per-layer tile sizes
+    if (tu_tile_size_arr >= 0) {
+        int vals[32]; for (int i=0;i<lc;i++){ vals[i*2+0]=g_layers[i].map.tile_width; vals[i*2+1]=g_layers[i].map.tile_height; }
+        glUniform2iv(tu_tile_size_arr, lc, vals);
+    }
     // Bind textures: assign fixed units
     GLint atlas_units[16]; GLint gid_units[16];
     for (int i=0;i<lc;i++){ atlas_units[i] = 1 + i; gid_units[i] = 1 + 16 + i; }

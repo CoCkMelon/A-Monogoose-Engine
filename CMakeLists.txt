@@ -1,3 +1,14 @@
+# Enforce out-of-source builds
+if(CMAKE_SOURCE_DIR STREQUAL CMAKE_BINARY_DIR)
+  message(FATAL_ERROR "
+  FATAL: In-source builds are not allowed.
+  Please create a separate build directory:
+      mkdir build
+      cd build
+      cmake ..
+  ")
+endif()
+
 cmake_minimum_required(VERSION 3.16)
 project(a_mongoose_engine C CXX)
 
@@ -233,13 +244,24 @@ add_subdirectory(examples/unitylike_minimal)
 pkg_check_modules(LIBYAML REQUIRED IMPORTED_TARGET yaml-0.1)
 add_executable(scene_yaml_to_flecs_json
     examples/scene_file/scene_loader.c
-    examples/scene_file/scene_yaml_to_flecs_json.c
-)
+    examples/scene_file/scene_yaml_to_flecs_json.c)
+
+add_executable(scene_roundtrip
+    examples/scene_file/scene_loader.c
+    tests/scene_roundtrip.c)
+# Ensure test can include scene_loader.h
+target_include_directories(scene_roundtrip PRIVATE ${CMAKE_CURRENT_LIST_DIR}/examples/scene_file)
 # Link minimal deps: libyaml, flecs, and m on Linux
 # Note: scene_loader.c is self-contained and does not require SDL/OpenGL
 # System math library for strtod/strtoll on some platforms
 if(UNIX AND NOT APPLE)
-    target_link_libraries(scene_yaml_to_flecs_json PRIVATE PkgConfig::LIBYAML flecs m)
+target_link_libraries(scene_yaml_to_flecs_json PRIVATE flecs yaml m)
+# roundtrip test links
+if (TARGET flecs)
+  target_link_libraries(scene_roundtrip PRIVATE flecs yaml m)
+else()
+  target_link_libraries(scene_roundtrip PRIVATE flecs_static yaml m)
+endif()
 else()
     target_link_libraries(scene_yaml_to_flecs_json PRIVATE PkgConfig::LIBYAML flecs)
 endif()
