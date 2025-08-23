@@ -6,6 +6,12 @@ add_executable(unitylike_minimal
   input_local.cpp
 )
 
+# Place the executable alongside other examples (e.g., build/line_draw)
+# CMAKE_BINARY_DIR points to the top-level build directory
+set_target_properties(unitylike_minimal PROPERTIES
+  RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}
+)
+
 # Link to engine and façade
 if(TARGET OpenGL::GL)
   target_link_libraries(unitylike_minimal PRIVATE OpenGL::GL)

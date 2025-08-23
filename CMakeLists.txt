@@ -226,6 +226,24 @@ add_executable(audio_ray_example
 # ------------------------------
 add_subdirectory(examples/unitylike_minimal)
 
+# ------------------------------
+# Example: scene YAML -> Flecs JSON converter
+# ------------------------------
+# libyaml via pkg-config
+pkg_check_modules(LIBYAML REQUIRED IMPORTED_TARGET yaml-0.1)
+add_executable(scene_yaml_to_flecs_json
+    examples/scene_file/scene_loader.c
+    examples/scene_file/scene_yaml_to_flecs_json.c
+)
+# Link minimal deps: libyaml, flecs, and m on Linux
+# Note: scene_loader.c is self-contained and does not require SDL/OpenGL
+# System math library for strtod/strtoll on some platforms
+if(UNIX AND NOT APPLE)
+    target_link_libraries(scene_yaml_to_flecs_json PRIVATE PkgConfig::LIBYAML flecs m)
+else()
+    target_link_libraries(scene_yaml_to_flecs_json PRIVATE PkgConfig::LIBYAML flecs)
+endif()
+
 # Prefer the shared lib if enabled, fall back to static otherwise
 if(TARGET asyncinput_shared)
     target_link_libraries(line_draw PRIVATE asyncinput_shared)
@@ -342,4 +360,5 @@ if(UNIX AND NOT APPLE)
     target_link_libraries(audio_pan_example PRIVATE dl)
     target_link_libraries(audio_opus_example PRIVATE dl)
     target_link_libraries(audio_ray_example PRIVATE dl)
+    # converter has no dl needs
 endif()
