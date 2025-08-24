@@ -10,6 +10,7 @@
 #include <flecs.h>
 
 #include "scene_loader.h"
+#include "world_to_scene.h"
 
 // --- Simple component type definitions & meta registration for this example ---
 typedef struct { float x, y, z; } Position3;
@@ -548,10 +549,14 @@ int main(int argc, char **argv) {
     bool print_json = false;
     bool world_json_mode = false;
     bool names_as_paths = false;
+    bool dump_world_json = false;
+    bool print_yaml = false;
     for (int i = 2; i < argc; i++) {
         if (strcmp(argv[i], "--print-json") == 0) print_json = true;
         else if (strcmp(argv[i], "--world-json") == 0) world_json_mode = true;
         else if (strcmp(argv[i], "--names-as-paths") == 0) names_as_paths = true;
+        else if (strcmp(argv[i], "--dump-world-json") == 0) dump_world_json = true;
+        else if (strcmp(argv[i], "--print-yaml") == 0) print_yaml = true;
     }
 
     scene_error_info_t err = {0};
@@ -616,6 +621,33 @@ int main(int argc, char **argv) {
             }
         }
         printf("Loaded %zu entities into Flecs world via entity_from_json.\n", scene->entities_count);
+    }
+
+    // Optionally dump world -> Flecs JSON after load
+    if (dump_world_json) {
+        ecs_world_to_json_desc_t d = {0};
+        // Keep defaults; world_to_json returns a full snapshot
+        char *wj = ecs_world_to_json(world, &d);
+        if (wj) {
+            puts(wj);
+            ecs_os_free(wj);
+        }
+    }
+
+    // Optionally print YAML from the original scene model
+    if (print_yaml) {
+        char *yaml = scene_to_yaml(scene);
+        if (yaml) { puts(yaml); free(yaml); }
+    }
+
+    // Also demonstrate reconstructing YAML from the ECS world
+    if (print_yaml) {
+        scene_t *from_world = scene_from_world(world, scene->metadata.name, scene->metadata.version);
+        if (from_world) {
+            char *yaml2 = scene_to_yaml(from_world);
+            if (yaml2) { puts("--- yaml from world ---"); puts(yaml2); free(yaml2); }
+            scene_free(from_world);
+        }
     }
 
     ecs_fini(world);

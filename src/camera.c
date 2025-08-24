@@ -65,18 +65,17 @@ void ame_camera_update(AmeCamera* cam, float dt)
 void ame_camera_make_pixel_perfect(float cam_x, float cam_y, int win_w, int win_h, int zoom, float* m_out)
 {
     if (zoom < 1) zoom = 1;
-    // Snap camera to integer pixels in world space at current zoom
-    float snap_x = floorf(cam_x + 0.5f);
-    float snap_y = floorf(cam_y + 0.5f);
+    // Interpret cam_x, cam_y as TOP-LEFT in world pixels (consistent with ame_camera_update)
+    // Snap top-left to integer pixels
+    float left = floorf(cam_x + 0.5f);
+    float top  = floorf(cam_y + 0.5f);
 
-    float half_w = (float)win_w / (float)zoom * 0.5f;
-    float half_h = (float)win_h / (float)zoom * 0.5f;
+    float view_w = (float)win_w / (float)zoom;
+    float view_h = (float)win_h / (float)zoom;
 
-    float left   = snap_x - half_w;
-    float right  = snap_x + half_w;
-    float top    = snap_y - half_h;
-    float bottom = snap_y + half_h;
+    float right  = left + view_w;
+    float bottom = top  + view_h;
 
-    // Top-left origin means we pass (left,right, top,bottom) in that order
+    // Top-left origin orthographic matrix
     ortho_top_left(left, right, top, bottom, -1.0f, 1.0f, m_out);
 }

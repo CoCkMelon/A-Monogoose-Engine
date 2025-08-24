@@ -76,12 +76,15 @@ include_directories(
 # Engine objects (initial modules)
 add_library(ame STATIC
     src/camera.c
+    src/render_pipeline_ecs.cpp
     src/gl_loader.c
     src/dialogue.c
     src/embedded_dialogues.c
     src/story_route.c
     src/ecs.c
     src/tilemap.c
+    src/tilemap_tmx.c
+    src/render_pipeline.c
     src/audio.c
     src/physics.cpp
     src/audio_ray.c
@@ -112,14 +115,14 @@ target_link_libraries(ame PUBLIC glad flecs box2d)
 pkg_check_modules(PORTAUDIO REQUIRED IMPORTED_TARGET portaudio-2.0)
 pkg_check_modules(OPUSFILE REQUIRED IMPORTED_TARGET opusfile)
 
-target_link_libraries(ame PUBLIC PkgConfig::PORTAUDIO PkgConfig::OPUSFILE)
+target_link_libraries(ame PUBLIC PkgConfig::PORTAUDIO PkgConfig::OPUSFILE SDL3_image::SDL3_image)
 
 # Link math library where needed (Linux)
 if(UNIX AND NOT APPLE)
     target_link_libraries(ame PUBLIC m)
 endif()
 
-target_include_directories(ame PUBLIC ${CMAKE_CURRENT_LIST_DIR}/include)
+target_include_directories(ame PUBLIC ${CMAKE_CURRENT_LIST_DIR}/include ${CMAKE_CURRENT_LIST_DIR}/cpp)
 
 # --------------------------
 # Unity-like C++ façade lib
@@ -205,6 +208,11 @@ add_executable(flecs_scene
     examples/flecs_scene/main.c
 )
 
+# Example: flecs_script_scene (script-defined scene rendered with GL)
+add_executable(flecs_script_scene
+    examples/flecs_script_scene/main.c
+)
+
 # Example: tilemap_render (Tiled JSON tilemap rendering)
 add_executable(tilemap_render
     examples/tilemap_render/main.c
@@ -238,32 +246,21 @@ add_executable(audio_ray_example
 add_subdirectory(examples/unitylike_minimal)
 
 # ------------------------------
-# Example: scene YAML -> Flecs JSON converter
+# Example: unitylike_pixel_platformer (Kenney)
 # ------------------------------
-# libyaml via pkg-config
-pkg_check_modules(LIBYAML REQUIRED IMPORTED_TARGET yaml-0.1)
-add_executable(scene_yaml_to_flecs_json
-    examples/scene_file/scene_loader.c
-    examples/scene_file/scene_yaml_to_flecs_json.c)
+add_subdirectory(examples/unitylike_pixel_platformer)
 
-add_executable(scene_roundtrip
-    examples/scene_file/scene_loader.c
-    tests/scene_roundtrip.c)
-# Ensure test can include scene_loader.h
-target_include_directories(scene_roundtrip PRIVATE ${CMAKE_CURRENT_LIST_DIR}/examples/scene_file)
-# Link minimal deps: libyaml, flecs, and m on Linux
-# Note: scene_loader.c is self-contained and does not require SDL/OpenGL
-# System math library for strtod/strtoll on some platforms
-if(UNIX AND NOT APPLE)
-target_link_libraries(scene_yaml_to_flecs_json PRIVATE flecs yaml m)
-# roundtrip test links
+# ------------------------------
+# Example: Flecs Script loader
+# ------------------------------
+add_executable(scene_script_example
+    examples/scene_file/scene_script_example.c)
+
+# Link script/json addons via flecs
 if (TARGET flecs)
-  target_link_libraries(scene_roundtrip PRIVATE flecs yaml m)
+  target_link_libraries(scene_script_example PRIVATE flecs)
 else()
-  target_link_libraries(scene_roundtrip PRIVATE flecs_static yaml m)
-endif()
-else()
-    target_link_libraries(scene_yaml_to_flecs_json PRIVATE PkgConfig::LIBYAML flecs)
+  target_link_libraries(scene_script_example PRIVATE flecs_static)
 endif()
 
 # Prefer the shared lib if enabled, fall back to static otherwise
@@ -274,6 +271,7 @@ if(TARGET asyncinput_shared)
     target_link_libraries(dialogue_example PRIVATE asyncinput_shared)
     target_link_libraries(dialogue_ui_example PRIVATE asyncinput_shared)
     target_link_libraries(flecs_scene PRIVATE asyncinput_shared)
+    target_link_libraries(flecs_script_scene PRIVATE asyncinput_shared)
     target_link_libraries(tilemap_render PRIVATE asyncinput_shared)
     target_link_libraries(pixel_platformer PRIVATE asyncinput_shared)
     target_link_libraries(audio_pan_example PRIVATE asyncinput_shared)
@@ -285,6 +283,7 @@ elseif(TARGET asyncinput_static)
     target_link_libraries(dialogue_example PRIVATE asyncinput_static)
     target_link_libraries(dialogue_ui_example PRIVATE asyncinput_static)
     target_link_libraries(flecs_scene PRIVATE asyncinput_static)
+    target_link_libraries(flecs_script_scene PRIVATE asyncinput_static)
     target_link_libraries(tilemap_render PRIVATE asyncinput_static)
     target_link_libraries(pixel_platformer PRIVATE asyncinput_static)
     target_link_libraries(audio_pan_example PRIVATE asyncinput_static)
@@ -296,6 +295,7 @@ elseif(TARGET asyncinput)
     target_link_libraries(dialogue_example PRIVATE asyncinput)
     target_link_libraries(dialogue_ui_example PRIVATE asyncinput)
     target_link_libraries(flecs_scene PRIVATE asyncinput)
+    target_link_libraries(flecs_script_scene PRIVATE asyncinput)
     target_link_libraries(tilemap_render PRIVATE asyncinput)
     target_link_libraries(pixel_platformer PRIVATE asyncinput)
     target_link_libraries(audio_pan_example PRIVATE asyncinput)
@@ -315,6 +315,7 @@ if(TARGET OpenGL::GL)
     target_link_libraries(dialogue_example PRIVATE OpenGL::GL)
     target_link_libraries(dialogue_ui_example PRIVATE OpenGL::GL)
     target_link_libraries(flecs_scene PRIVATE OpenGL::GL)
+    target_link_libraries(flecs_script_scene PRIVATE OpenGL::GL)
     target_link_libraries(tilemap_render PRIVATE OpenGL::GL)
     target_link_libraries(pixel_platformer PRIVATE OpenGL::GL)
     target_link_libraries(audio_pan_example PRIVATE OpenGL::GL)
@@ -330,6 +331,7 @@ else()
     target_link_libraries(dialogue_example PRIVATE GL)
     target_link_libraries(dialogue_ui_example PRIVATE GL)
     target_link_libraries(flecs_scene PRIVATE GL)
+    target_link_libraries(flecs_script_scene PRIVATE GL)
     target_link_libraries(tilemap_render PRIVATE GL)
     target_link_libraries(pixel_platformer PRIVATE GL)
     target_link_libraries(audio_pan_example PRIVATE GL)
@@ -357,6 +359,8 @@ target_link_libraries(pixel_platformer PRIVATE SDL3::SDL3 Threads::Threads ame S
 target_link_libraries(dialogue_ui_example PRIVATE SDL3::SDL3 Threads::Threads ame SDL3_ttf::SDL3_ttf glad)
 # Link flecs example
 target_link_libraries(flecs_scene PRIVATE SDL3::SDL3 Threads::Threads ame flecs)
+# Link flecs script GL example
+target_link_libraries(flecs_script_scene PRIVATE SDL3::SDL3 Threads::Threads ame flecs)
 # Link tilemap example
 target_link_libraries(tilemap_render PRIVATE SDL3::SDL3 Threads::Threads ame flecs)
 # Link audio example
@@ -377,6 +381,7 @@ if(UNIX AND NOT APPLE)
     target_link_libraries(dialogue_example PRIVATE dl)
     target_link_libraries(dialogue_ui_example PRIVATE dl)
     target_link_libraries(flecs_scene PRIVATE dl)
+    target_link_libraries(flecs_script_scene PRIVATE dl)
     target_link_libraries(tilemap_render PRIVATE dl)
     target_link_libraries(pixel_platformer PRIVATE dl)
     target_link_libraries(audio_pan_example PRIVATE dl)

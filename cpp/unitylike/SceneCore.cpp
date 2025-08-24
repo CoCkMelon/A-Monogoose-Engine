@@ -1,6 +1,7 @@
 #include "Scene.h"
 #include <flecs.h>
 #include <cassert>
+#include <unordered_map>
 #include <vector>
 
 namespace unitylike {
@@ -10,11 +11,26 @@ namespace unitylike {
 // ecs_entity_t g_comp_script_host = 0;
 
 static std::vector<ecs_entity_t> g_script_entities;
+static std::unordered_map<ecs_entity_t, ScriptHost> g_script_hosts;
 
 void __register_script_entity(ecs_world_t* /*w*/, std::uint64_t e) {
     ecs_entity_t ee = (ecs_entity_t)e;
     for (auto id : g_script_entities) { if (id == ee) return; }
     g_script_entities.push_back(ee);
+}
+
+ScriptHost* __get_script_host(std::uint64_t e){
+    auto it = g_script_hosts.find((ecs_entity_t)e);
+    if (it == g_script_hosts.end()) return nullptr;
+    return &it->second;
+}
+void __ensure_script_host(std::uint64_t e){
+    auto ee = (ecs_entity_t)e;
+    if (!g_script_hosts.count(ee)) g_script_hosts.emplace(ee, ScriptHost{});
+}
+void __remove_script_host(std::uint64_t e){
+    auto ee = (ecs_entity_t)e;
+    g_script_hosts.erase(ee);
 }
 
 // Scene core
@@ -35,10 +51,11 @@ GameObject Scene::Create(const std::string& name) {
 
 void Scene::Destroy(GameObject& go) {
     if (!go.id()) return;
-    ScriptHost* host = (ScriptHost*)ecs_get_id(world_, (ecs_entity_t)go.id(), g_comp_script_host);
+    ScriptHost* host = __get_script_host(go.id());
     if (host) {
         for (auto* s : host->scripts) { if (s) { s->OnDestroy(); delete s; } }
         host->scripts.clear();
+        __remove_script_host(go.id());
     }
     ecs_delete(world_, (ecs_entity_t)go.id());
 }
@@ -50,7 +67,7 @@ void Scene::Step(float dt) {
     ensure_components_registered(world_);
     unitylike_begin_update(dt);
     for (ecs_entity_t e : g_script_entities) {
-        ScriptHost* shp = (ScriptHost*)ecs_get_id(world_, e, g_comp_script_host);
+        ScriptHost* shp = __get_script_host(e);
         if (!shp) continue;
         ScriptHost& sh = *shp;
         if (!sh.awoken) { for (auto* s : sh.scripts) if (s) s->Awake(); sh.awoken = true; }
@@ -64,7 +81,7 @@ void Scene::StepFixed(float fdt) {
     ensure_components_registered(world_);
     unitylike_set_fixed_dt(fdt);
     for (ecs_entity_t e : g_script_entities) {
-        ScriptHost* shp = (ScriptHost*)ecs_get_id(world_, e, g_comp_script_host);
+        ScriptHost* shp = __get_script_host(e);
         if (!shp) continue;
         ScriptHost& sh = *shp;
         for (auto* s : sh.scripts) if (s) s->FixedUpdate(fdt);

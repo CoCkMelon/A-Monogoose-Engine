@@ -45,6 +45,45 @@ static yaml_node_t* get_map_value(yaml_document_t* doc, yaml_node_t* map, const 
 
 // Implementation
 
+// ---- Hierarchy helpers ----
+static hierarchy_node_t* hierarchy_create_node(const char* name, hierarchy_node_t* parent) {
+    hierarchy_node_t* n = (hierarchy_node_t*)calloc(1, sizeof(hierarchy_node_t));
+    if (!n) return NULL;
+    n->entity_name = SAFE_STRDUP(name);
+    n->parent = parent;
+    return n;
+}
+
+static void hierarchy_append_child(hierarchy_node_t* parent, hierarchy_node_t* child) {
+    if (!parent || !child) return;
+    parent->children = (hierarchy_node_t**)realloc(parent->children, (parent->children_count + 1) * sizeof(hierarchy_node_t*));
+    parent->children[parent->children_count++] = child;
+}
+
+static void hierarchy_free(hierarchy_node_t* node) {
+    if (!node) return;
+    for (size_t i = 0; i < node->children_count; i++) {
+        hierarchy_free(node->children[i]);
+    }
+    free(node->children);
+    free(node->entity_name);
+    free(node);
+}
+
+static hierarchy_node_t* hierarchy_find(hierarchy_node_t* node, const char* name) {
+    if (!node || !name) return NULL;
+    if (node->entity_name && strcmp(node->entity_name, name) == 0) return node;
+    for (size_t i = 0; i < node->children_count; i++) {
+        hierarchy_node_t* f = hierarchy_find(node->children[i], name);
+        if (f) return f;
+    }
+    return NULL;
+}
+
+// Forward decl for tree parsing
+static bool parse_hierarchy_tree_map(parse_context_t* ctx, yaml_node_t* map_node, hierarchy_node_t** out_root);
+static bool parse_hierarchy_children_seq(parse_context_t* ctx, yaml_node_t* seq_node, hierarchy_node_t* parent);
+
 scene_t* scene_load(const char* filename, scene_error_info_t* error) {
     FILE* file = fopen(filename, "rb");
     if (!file) {
@@ -460,8 +499,12 @@ static bool parse_hierarchy(parse_context_t* ctx, yaml_node_t* node) {
     // Parse tree format if present
     yaml_node_t* tree = get_map_value(ctx->document, node, "tree");
     if (tree) {
-        // TODO: Implement tree parsing
-        // This would build the hierarchy_root structure
+        // Tree can be a mapping of root -> [children]
+        hierarchy_node_t* maybe_root = NULL;
+        if (!parse_hierarchy_tree_map(ctx, tree, &maybe_root)) {
+            return false;
+        }
+        ctx->scene->hierarchy_root = maybe_root;
     }
     
     // Parse flat relations if present
@@ -826,6 +869,9 @@ void scene_free(scene_t* scene) {
     }
     free(scene->entities);
     
+    // Free hierarchy tree
+    hierarchy_free(scene->hierarchy_root);
+    
     // Free hierarchy relations
     for (size_t i = 0; i < scene->hierarchy_relations_count; i++) {
         free(scene->hierarchy_relations[i].parent);
@@ -852,4 +898,348 @@ void scene_free(scene_t* scene) {
     // TODO: Free other sections
     
     free(scene);
+}
+
+// ---- New public API additions ----
+scene_t* scene_load_from_string(const char* yaml_string, scene_error_info_t* error) {
+    if (!yaml_string) {
+        if (error) { error->code = SCENE_ERR_PARSE_ERROR; strcpy(error->message, "NULL yaml string"); }
+        return NULL;
+    }
+
+    scene_t* scene = calloc(1, sizeof(scene_t));
+    if (!scene) {
+        if (error) { error->code = SCENE_ERR_MEMORY; strcpy(error->message, "Out of memory"); }
+        return NULL;
+    }
+
+    parse_context_t ctx = {0};
+    ctx.scene = scene;
+    ctx.error = error;
+
+    yaml_parser_initialize(&ctx.parser);
+    yaml_parser_set_input_string(&ctx.parser, (const unsigned char*)yaml_string, strlen(yaml_string));
+
+    yaml_document_t document;
+    if (!yaml_parser_load(&ctx.parser, &document)) {
+        if (error) {
+            error->code = SCENE_ERR_PARSE_ERROR;
+            snprintf(error->message, sizeof(error->message),
+                     "YAML parse error at line %zu: %s",
+                     ctx.parser.mark.line, ctx.parser.problem);
+            error->line = ctx.parser.mark.line;
+            error->column = ctx.parser.mark.column;
+        }
+        yaml_parser_delete(&ctx.parser);
+        free(scene);
+        return NULL;
+    }
+
+    ctx.document = &document;
+    bool success = parse_document(&ctx);
+
+    yaml_document_delete(&document);
+    yaml_parser_delete(&ctx.parser);
+
+    if (!success) {
+        scene_free(scene);
+        return NULL;
+    }
+
+    if (!scene_validate(scene, error)) {
+        scene_free(scene);
+        return NULL;
+    }
+
+    return scene;
+}
+
+bool scene_validate_schema(const scene_t* scene, const char* schema_path, scene_error_info_t* error) {
+    (void)scene; (void)schema_path; (void)error;
+    // Stub: schema validation not implemented in this lightweight loader.
+    return true;
+}
+
+hierarchy_node_t* scene_find_hierarchy_node(const scene_t* scene, const char* entity_name) {
+    if (!scene || !entity_name) return NULL;
+    if (scene->hierarchy_root) {
+        return hierarchy_find(scene->hierarchy_root, entity_name);
+    }
+    return NULL;
+}
+
+// Helpers to emit component_value_t to YAML recursively
+static void emit_yaml_indent(char **out, size_t *len, size_t *cap, int indent) {
+    for (int i = 0; i < indent; i++) {
+        const char *s = "  ";
+        size_t n = 2;
+        if (*len + n + 1 > *cap) { size_t nc = *cap? *cap*2:1024; while (nc < *len+n+1) nc*=2; char *nb=(char*)realloc(*out,nc); if(!nb){ free(*out); *out=NULL; return; } *out=nb; *cap=nc; }
+        memcpy(*out + *len, s, n); *len += n; (*out)[*len] = '\0';
+    }
+}
+
+static void emit_yaml_str(char **out, size_t *len, size_t *cap, const char *s) {
+    size_t n = strlen(s);
+    if (*len + n + 1 > *cap) { size_t nc = *cap? *cap*2:1024; while (nc < *len+n+1) nc*=2; char *nb=(char*)realloc(*out,nc); if(!nb){ free(*out); *out=NULL; return; } *out=nb; *cap=nc; }
+    memcpy(*out + *len, s, n); *len += n; (*out)[*len] = '\0';
+}
+
+static void emit_yaml_newline(char **out, size_t *len, size_t *cap) { emit_yaml_str(out, len, cap, "\n"); }
+
+static void emit_yaml_value(char **out, size_t *len, size_t *cap, const component_value_t *v, int indent);
+
+static void emit_yaml_object(char **out, size_t *len, size_t *cap, const component_value_t *v, int indent) {
+    for (size_t i = 0; i < v->object_val.count; i++) {
+        emit_yaml_indent(out, len, cap, indent);
+        if (!*out) return;
+        // Key
+        const char *key = v->object_val.items[i].key ? v->object_val.items[i].key : "";
+        emit_yaml_str(out, len, cap, key);
+        emit_yaml_str(out, len, cap, ": ");
+        // Value
+        component_value_t *cv = v->object_val.items[i].value;
+        if (cv && (cv->type == COMPONENT_TYPE_OBJECT || cv->type == COMPONENT_TYPE_ARRAY)) {
+            // Start complex on new line if empty? For arrays we put newline after '-'
+            // For objects, if it has items, we put newline and indent
+            emit_yaml_newline(out, len, cap);
+            emit_yaml_value(out, len, cap, cv, indent + 1);
+        } else {
+            emit_yaml_value(out, len, cap, cv, -1);
+            emit_yaml_newline(out, len, cap);
+        }
+        if (!*out) return;
+    }
+}
+
+static void emit_yaml_array(char **out, size_t *len, size_t *cap, const component_value_t *v, int indent) {
+    for (size_t i = 0; i < v->array_val.count; i++) {
+        emit_yaml_indent(out, len, cap, indent);
+        if (!*out) return;
+        emit_yaml_str(out, len, cap, "- ");
+        const component_value_t *elem = &v->array_val.values[i];
+        if (elem->type == COMPONENT_TYPE_OBJECT) {
+            emit_yaml_newline(out, len, cap);
+            emit_yaml_value(out, len, cap, elem, indent + 1);
+        } else if (elem->type == COMPONENT_TYPE_ARRAY) {
+            emit_yaml_newline(out, len, cap);
+            emit_yaml_array(out, len, cap, elem, indent + 1);
+        } else {
+            emit_yaml_value(out, len, cap, elem, -1);
+            emit_yaml_newline(out, len, cap);
+        }
+        if (!*out) return;
+    }
+}
+
+static void emit_yaml_scalar(char **out, size_t *len, size_t *cap, const component_value_t *v) {
+    char buf[128];
+    switch (v ? v->type : COMPONENT_TYPE_NULL) {
+        case COMPONENT_TYPE_NULL:
+            emit_yaml_str(out, len, cap, "null");
+            break;
+        case COMPONENT_TYPE_BOOL:
+            emit_yaml_str(out, len, cap, v->bool_val ? "true" : "false");
+            break;
+        case COMPONENT_TYPE_INT:
+            snprintf(buf, sizeof buf, "%lld", (long long)v->int_val);
+            emit_yaml_str(out, len, cap, buf);
+            break;
+        case COMPONENT_TYPE_FLOAT: {
+            // Use %g formatting
+            snprintf(buf, sizeof buf, "%g", v->float_val);
+            emit_yaml_str(out, len, cap, buf);
+            break;
+        }
+        case COMPONENT_TYPE_STRING: {
+            // Quote string
+            emit_yaml_str(out, len, cap, "\"");
+            emit_yaml_str(out, len, cap, v->string_val ? v->string_val : "");
+            emit_yaml_str(out, len, cap, "\"");
+            break;
+        }
+        default:
+            emit_yaml_str(out, len, cap, "null");
+            break;
+    }
+}
+
+static void emit_yaml_value(char **out, size_t *len, size_t *cap, const component_value_t *v, int indent) {
+    if (!v) { emit_yaml_str(out, len, cap, "null"); return; }
+    switch (v->type) {
+        case COMPONENT_TYPE_OBJECT:
+            emit_yaml_object(out, len, cap, v, indent < 0 ? 0 : indent);
+            break;
+        case COMPONENT_TYPE_ARRAY:
+            emit_yaml_array(out, len, cap, v, indent < 0 ? 0 : indent);
+            break;
+        default:
+            emit_yaml_scalar(out, len, cap, v);
+            break;
+    }
+}
+
+char* scene_to_yaml(const scene_t* scene) {
+    if (!scene) return NULL;
+    size_t cap = 2048, len = 0;
+    char *out = (char*)malloc(cap);
+    if (!out) return NULL;
+    out[0] = '\0';
+
+    // Metadata
+    emit_yaml_str(&out, &len, &cap, "metadata:\n");
+    emit_yaml_str(&out, &len, &cap, "  name: "); emit_yaml_str(&out, &len, &cap, scene->metadata.name ? scene->metadata.name : ""); emit_yaml_newline(&out, &len, &cap);
+    emit_yaml_str(&out, &len, &cap, "  version: "); emit_yaml_str(&out, &len, &cap, scene->metadata.version ? scene->metadata.version : "0.0.0"); emit_yaml_newline(&out, &len, &cap);
+    if (scene->metadata.author) { emit_yaml_str(&out, &len, &cap, "  author: "); emit_yaml_str(&out, &len, &cap, scene->metadata.author); emit_yaml_newline(&out, &len, &cap); }
+    if (scene->metadata.description) { emit_yaml_str(&out, &len, &cap, "  description: "); emit_yaml_str(&out, &len, &cap, scene->metadata.description); emit_yaml_newline(&out, &len, &cap); }
+
+    // Entities
+    emit_yaml_str(&out, &len, &cap, "entities:\n");
+    for (size_t i = 0; i < scene->entities_count; i++) {
+        const entity_t *e = &scene->entities[i];
+        emit_yaml_str(&out, &len, &cap, "  "); emit_yaml_str(&out, &len, &cap, e->name ? e->name : "Entity"); emit_yaml_str(&out, &len, &cap, ":\n");
+        // _meta minimal (skip unless present)
+        if (e->meta && (e->meta->description || e->meta->author || e->meta->notes_count || e->meta->deprecated || e->meta->version || e->meta->custom_fields_count)) {
+            emit_yaml_str(&out, &len, &cap, "    _meta:\n");
+            if (e->meta->description) { emit_yaml_str(&out, &len, &cap, "      description: \""); emit_yaml_str(&out, &len, &cap, e->meta->description); emit_yaml_str(&out, &len, &cap, "\"\n"); }
+            if (e->meta->author) { emit_yaml_str(&out, &len, &cap, "      author: \""); emit_yaml_str(&out, &len, &cap, e->meta->author); emit_yaml_str(&out, &len, &cap, "\"\n"); }
+            if (e->meta->notes_count) {
+                emit_yaml_str(&out, &len, &cap, "      notes:\n");
+                for (size_t ni=0; ni<e->meta->notes_count; ni++) {
+                    emit_yaml_str(&out, &len, &cap, "        - \""); emit_yaml_str(&out, &len, &cap, e->meta->notes[ni]); emit_yaml_str(&out, &len, &cap, "\"\n");
+                }
+            }
+            if (e->meta->deprecated) { emit_yaml_str(&out, &len, &cap, "      deprecated: true\n"); }
+            if (e->meta->version) { char b[64]; snprintf(b,sizeof b,"%d", e->meta->version); emit_yaml_str(&out, &len, &cap, "      version: "); emit_yaml_str(&out, &len, &cap, b); emit_yaml_newline(&out,&len,&cap); }
+            for (size_t ci=0; ci<e->meta->custom_fields_count; ci++) {
+                emit_yaml_str(&out, &len, &cap, "      "); emit_yaml_str(&out, &len, &cap, e->meta->custom_fields[ci].key);
+                emit_yaml_str(&out, &len, &cap, ": \""); emit_yaml_str(&out, &len, &cap, e->meta->custom_fields[ci].value); emit_yaml_str(&out, &len, &cap, "\"\n");
+            }
+        }
+        if (e->prefab && e->prefab[0]) { emit_yaml_str(&out, &len, &cap, "    prefab: "); emit_yaml_str(&out, &len, &cap, e->prefab); emit_yaml_newline(&out, &len, &cap); }
+        if (!e->enabled) { emit_yaml_str(&out, &len, &cap, "    enabled: false\n"); }
+        if (e->tags_count) {
+            emit_yaml_str(&out, &len, &cap, "    tags:\n");
+            for (size_t ti=0; ti<e->tags_count; ti++) {
+                emit_yaml_str(&out, &len, &cap, "      - "); emit_yaml_str(&out, &len, &cap, e->tags[ti] ? e->tags[ti] : ""); emit_yaml_newline(&out, &len, &cap);
+            }
+        }
+        if (e->components_count) {
+            emit_yaml_str(&out, &len, &cap, "    components:\n");
+            for (size_t ci=0; ci<e->components_count; ci++) {
+                const component_t *c = &e->components[ci];
+                emit_yaml_str(&out, &len, &cap, "      "); emit_yaml_str(&out, &len, &cap, c->type_name ? c->type_name : "Component"); emit_yaml_str(&out, &len, &cap, ": ");
+                if (c->data.type == COMPONENT_TYPE_OBJECT || c->data.type == COMPONENT_TYPE_ARRAY) {
+                    emit_yaml_newline(&out, &len, &cap);
+                    emit_yaml_value(&out, &len, &cap, &c->data, 4);
+                } else {
+                    emit_yaml_value(&out, &len, &cap, &c->data, -1);
+                    emit_yaml_newline(&out, &len, &cap);
+                }
+            }
+        }
+    }
+
+    // Hierarchy (flat relations)
+    if (scene->hierarchy_relations_count) {
+        emit_yaml_str(&out, &len, &cap, "hierarchy:\n");
+        emit_yaml_str(&out, &len, &cap, "  relations:\n");
+        for (size_t i=0;i<scene->hierarchy_relations_count;i++) {
+            const parent_child_relation_t *r = &scene->hierarchy_relations[i];
+            emit_yaml_str(&out, &len, &cap, "    - parent: "); emit_yaml_str(&out, &len, &cap, r->parent ? r->parent : ""); emit_yaml_newline(&out, &len, &cap);
+            emit_yaml_str(&out, &len, &cap, "      child: "); emit_yaml_str(&out, &len, &cap, r->child ? r->child : ""); emit_yaml_newline(&out, &len, &cap);
+            if (r->order) { char b[64]; snprintf(b,sizeof b, "%d", r->order); emit_yaml_str(&out, &len, &cap, "      order: "); emit_yaml_str(&out, &len, &cap, b); emit_yaml_newline(&out, &len, &cap); }
+        }
+    }
+
+    // Relationships -> constraints
+    if (scene->constraints.joints_count) {
+        emit_yaml_str(&out, &len, &cap, "relationships:\n");
+        emit_yaml_str(&out, &len, &cap, "  constraints:\n");
+        emit_yaml_str(&out, &len, &cap, "    joints:\n");
+        for (size_t i=0;i<scene->constraints.joints_count;i++) {
+            const joint_constraint_t *j = &scene->constraints.joints[i];
+            emit_yaml_str(&out, &len, &cap, "      - type: "); emit_yaml_str(&out, &len, &cap, j->type ? j->type : ""); emit_yaml_newline(&out, &len, &cap);
+            if (j->entity_a) { emit_yaml_str(&out, &len, &cap, "        entity_a: "); emit_yaml_str(&out, &len, &cap, j->entity_a); emit_yaml_newline(&out, &len, &cap); }
+            if (j->entity_b) { emit_yaml_str(&out, &len, &cap, "        entity_b: "); emit_yaml_str(&out, &len, &cap, j->entity_b); emit_yaml_newline(&out, &len, &cap); }
+        }
+    }
+
+    return out;
+}
+
+// ---- Hierarchy parsing (tree format) ----
+static bool parse_hierarchy_tree_map(parse_context_t* ctx, yaml_node_t* map_node, hierarchy_node_t** out_root) {
+    if (!map_node || map_node->type != YAML_MAPPING_NODE) {
+        SET_ERROR(ctx, SCENE_ERR_INVALID_TYPE, "hierarchy.tree must be a mapping");
+        return false;
+    }
+    hierarchy_node_t* synthetic_root = NULL;
+    size_t roots = 0;
+
+    for (yaml_node_pair_t* pair = map_node->data.mapping.pairs.start; pair < map_node->data.mapping.pairs.top; pair++) {
+        yaml_node_t* key = yaml_document_get_node(ctx->document, pair->key);
+        yaml_node_t* val = yaml_document_get_node(ctx->document, pair->value);
+        const char* key_name = get_scalar_value(ctx->document, key);
+        if (!key_name) continue;
+
+        hierarchy_node_t* root_child = hierarchy_create_node(key_name, NULL);
+        if (!root_child) { SET_ERROR(ctx, SCENE_ERR_MEMORY, "Out of memory"); return false; }
+
+        if (val && val->type == YAML_SEQUENCE_NODE) {
+            if (!parse_hierarchy_children_seq(ctx, val, root_child)) return false;
+        }
+
+        if (!synthetic_root && roots == 0) {
+            // Single root: return it directly
+            *out_root = root_child;
+        } else if (roots == 1 && !synthetic_root) {
+            // Need to create a synthetic root to hold multiple top-level roots
+            synthetic_root = hierarchy_create_node("__ROOT__", NULL);
+            if (!synthetic_root) { SET_ERROR(ctx, SCENE_ERR_MEMORY, "Out of memory"); return false; }
+            // Move previously set out_root under synthetic_root
+            hierarchy_append_child(synthetic_root, *out_root);
+            (*out_root)->parent = synthetic_root;
+            // Also add the new root_child
+            hierarchy_append_child(synthetic_root, root_child);
+            root_child->parent = synthetic_root;
+            *out_root = synthetic_root;
+        } else if (synthetic_root) {
+            hierarchy_append_child(synthetic_root, root_child);
+            root_child->parent = synthetic_root;
+        }
+        roots++;
+    }
+    if (roots == 0) {
+        // empty tree is fine
+        *out_root = NULL;
+    }
+    return true;
+}
+
+static bool parse_hierarchy_children_seq(parse_context_t* ctx, yaml_node_t* seq_node, hierarchy_node_t* parent) {
+    if (!seq_node || seq_node->type != YAML_SEQUENCE_NODE) return true;
+    for (yaml_node_item_t* item = seq_node->data.sequence.items.start; item < seq_node->data.sequence.items.top; item++) {
+        yaml_node_t* n = yaml_document_get_node(ctx->document, *item);
+        if (!n) continue;
+        if (n->type == YAML_SCALAR_NODE) {
+            const char* child_name = get_scalar_value(ctx->document, n);
+            hierarchy_node_t* child = hierarchy_create_node(child_name, parent);
+            if (!child) { SET_ERROR(ctx, SCENE_ERR_MEMORY, "Out of memory"); return false; }
+            hierarchy_append_child(parent, child);
+        } else if (n->type == YAML_MAPPING_NODE) {
+            // Expect single entry: name -> sequence(children)
+            for (yaml_node_pair_t* p = n->data.mapping.pairs.start; p < n->data.mapping.pairs.top; p++) {
+                yaml_node_t* k = yaml_document_get_node(ctx->document, p->key);
+                yaml_node_t* v = yaml_document_get_node(ctx->document, p->value);
+                const char* name = get_scalar_value(ctx->document, k);
+                hierarchy_node_t* child = hierarchy_create_node(name, parent);
+                if (!child) { SET_ERROR(ctx, SCENE_ERR_MEMORY, "Out of memory"); return false; }
+                hierarchy_append_child(parent, child);
+                if (v && v->type == YAML_SEQUENCE_NODE) {
+                    if (!parse_hierarchy_children_seq(ctx, v, child)) return false;
+                }
+            }
+        }
+    }
+    return true;
 }

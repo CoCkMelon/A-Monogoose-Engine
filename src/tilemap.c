@@ -1,5 +1,7 @@
 #include "ame/tilemap.h"
+#include "ame/camera.h"
 #include <SDL3/SDL.h>
+#include <glad/gl.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -197,7 +199,7 @@ void ame_tilemap_free_mesh(AmeTilemapMesh* mesh) {
     mesh->vert_count = 0;
 }
 
-bool ame_tilemap_build_uv_mesh(const AmeTilemap* m, AmeTilemapUvMesh* mesh) {
+bool ame_tilemap_build_uv_mesh(const AmeTilemap* m, AmeTilemapUVMesh* mesh) {
     if (!m || !mesh) return false;
     memset(mesh, 0, sizeof(*mesh));
     int w = m->layer0.width;
@@ -257,7 +259,7 @@ bool ame_tilemap_build_uv_mesh(const AmeTilemap* m, AmeTilemapUvMesh* mesh) {
     return true;
 }
 
-void ame_tilemap_free_uv_mesh(AmeTilemapUvMesh* mesh) {
+void ame_tilemap_free_uv_mesh(AmeTilemapUVMesh* mesh) {
     if (!mesh) return;
     if (mesh->vertices) { SDL_free(mesh->vertices); mesh->vertices=NULL; }
     if (mesh->uvs) { SDL_free(mesh->uvs); mesh->uvs=NULL; }
@@ -310,4 +312,165 @@ unsigned int ame_tilemap_make_test_atlas_texture(const AmeTilemap* m) {
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, W, H, 0, GL_RGBA, GL_UNSIGNED_BYTE, buf);
     SDL_free(buf);
     return tex;
+}
+
+// ---------------- GPU Tilemap Renderer (full-screen pass) ----------------
+
+// Stored state
+static GLuint g_tile_prog = 0;
+static GLuint g_fullscreen_vao = 0;
+static GLint tu_res = -1, tu_camera = -1, tu_camera_rot = -1, tu_map_size = -1, tu_layer_count = -1;
+static GLint tu_tile_size_arr = -1, tu_atlas = -1, tu_gidtex = -1, tu_atlas_tex_size = -1, tu_firstgid = -1, tu_columns = -1;
+
+static GLuint compile_shader(GLenum type, const char* src) {
+    GLuint s = glCreateShader(type);
+    glShaderSource(s, 1, &src, NULL);
+    glCompileShader(s);
+    return s;
+}
+static GLuint link_program(GLuint vs, GLuint fs) {
+    GLuint p = glCreateProgram();
+    glAttachShader(p, vs);
+    glAttachShader(p, fs);
+    glLinkProgram(p);
+    return p;
+}
+
+void ame_tilemap_renderer_init(void) {
+    if (g_tile_prog) return;
+    const char* tile_vs_src =
+        "#version 450 core\n"
+        "out vec2 v_uv;\n"
+        "void main(){\n"
+        "  vec2 p = vec2((gl_VertexID==1)?3.0:-1.0, (gl_VertexID==2)?3.0:-1.0);\n"
+        "  v_uv = (p+1.0)*0.5;\n"
+        "  gl_Position = vec4(p,0,1);\n"
+        "}\n";
+    const char* tile_fs_src =
+        "#version 450 core\n"
+        "in vec2 v_uv;\n"
+        "uniform vec2 u_res;\n"
+        "uniform vec4 u_camera;\n"
+        "uniform float u_camera_rot;\n"
+        "uniform ivec2 u_map_size;\n"
+        "uniform int u_layer_count;\n"
+        "uniform ivec2 u_tile_size_arr[16];\n"
+        "uniform sampler2D u_atlas[16];\n"
+        "uniform usampler2D u_gidtex[16];\n"
+        "uniform ivec2 u_atlas_tex_size[16];\n"
+        "uniform int u_firstgid[16];\n"
+        "uniform int u_columns[16];\n"
+        "out vec4 frag;\n"
+        "void main(){\n"
+        "  vec2 screen_px = v_uv * u_res;\n"
+        "  vec2 world_px = screen_px / max(u_camera.z, 0.00001) + u_camera.xy;\n"
+        "  vec4 outc = vec4(0.0);\n"
+        "  for (int i=0;i<u_layer_count;i++){\n"
+        "    ivec2 tile_size = u_tile_size_arr[i];\n"
+        "    ivec2 tcoord = ivec2(floor(world_px / vec2(tile_size)));\n"
+        "    if (any(lessThan(tcoord, ivec2(0))) || any(greaterThanEqual(tcoord, u_map_size))) continue;\n"
+        "    vec2 tile_frac = fract(world_px / vec2(tile_size));\n"
+        "    ivec2 in_tile_px = ivec2(tile_frac * vec2(tile_size));\n"
+        "    uint raw = texelFetch(u_gidtex[i], tcoord, 0).r;\n"
+        "    bool flipH = (raw & 0x80000000u) != 0u;\n"
+        "    bool flipV = (raw & 0x40000000u) != 0u;\n"
+        "    bool flipD = (raw & 0x20000000u) != 0u;\n"
+        "    int gid = int(raw & 0x1FFFFFFFu);\n"
+        "    int local = gid - u_firstgid[i]; if (!(gid>0 && local>=0)) continue;\n"
+        "    int cols = max(u_columns[i], 1);\n"
+        "    int tile_x = local % cols; int tile_y = local / cols;\n"
+        "    int px_x = in_tile_px.x; int px_y = (tile_size.y - 1 - in_tile_px.y);\n"
+        "    if (flipH) px_x = tile_size.x - 1 - px_x;\n"
+        "    if (flipV) px_y = tile_size.y - 1 - px_y;\n"
+        "    if (flipD) { int tmp=px_x; px_x=px_y; px_y=tmp; }\n"
+        "    ivec2 atlas_px = ivec2(tile_x*tile_size.x + px_x, tile_y*tile_size.y + px_y);\n"
+        "    ivec2 atlas_size = u_atlas_tex_size[i];\n"
+        "    vec2 uv = (vec2(atlas_px) + 0.5) / vec2(atlas_size);\n"
+        "    vec4 tex_color = texture(u_atlas[i], uv);\n"
+        "    outc = tex_color + outc * (1.0 - tex_color.a);\n"
+        "  }\n"
+        "  frag = outc;\n"
+        "}\n";
+    GLuint vs = compile_shader(GL_VERTEX_SHADER, tile_vs_src);
+    GLuint fs = compile_shader(GL_FRAGMENT_SHADER, tile_fs_src);
+    g_tile_prog = link_program(vs, fs);
+    glDeleteShader(vs);
+    glDeleteShader(fs);
+    glGenVertexArrays(1, &g_fullscreen_vao);
+
+    tu_res = glGetUniformLocation(g_tile_prog, "u_res");
+    tu_camera = glGetUniformLocation(g_tile_prog, "u_camera");
+    tu_camera_rot = glGetUniformLocation(g_tile_prog, "u_camera_rot");
+    tu_map_size = glGetUniformLocation(g_tile_prog, "u_map_size");
+    tu_layer_count = glGetUniformLocation(g_tile_prog, "u_layer_count");
+    tu_tile_size_arr = glGetUniformLocation(g_tile_prog, "u_tile_size_arr[0]");
+    tu_atlas = glGetUniformLocation(g_tile_prog, "u_atlas[0]");
+    tu_gidtex = glGetUniformLocation(g_tile_prog, "u_gidtex[0]");
+    tu_atlas_tex_size = glGetUniformLocation(g_tile_prog, "u_atlas_tex_size[0]");
+    tu_firstgid = glGetUniformLocation(g_tile_prog, "u_firstgid[0]");
+    tu_columns = glGetUniformLocation(g_tile_prog, "u_columns[0]");
+}
+
+void ame_tilemap_renderer_shutdown(void) {
+    if (g_tile_prog) { GLuint p=g_tile_prog; glDeleteProgram(p); g_tile_prog=0; }
+    if (g_fullscreen_vao) { GLuint a=g_fullscreen_vao; glDeleteVertexArrays(1,&a); g_fullscreen_vao=0; }
+}
+
+unsigned int ame_tilemap_build_gid_texture_u32(const uint32_t* raw_gids, int width, int height) {
+    if (!raw_gids || width<=0 || height<=0) return 0;
+    GLuint tex=0; glGenTextures(1, &tex);
+    glBindTexture(GL_TEXTURE_2D, tex);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_R32UI, width, height, 0, GL_RED_INTEGER, GL_UNSIGNED_INT, raw_gids);
+    return tex;
+}
+
+void ame_tilemap_render_layers(const AmeCamera* cam, int screen_w, int screen_h,
+                               int map_w, int map_h,
+                               const AmeTileLayerGpuDesc* layers, int layer_count) {
+    if (!g_tile_prog || !cam || !layers || layer_count<=0) return;
+    glUseProgram(g_tile_prog);
+    glBindVertexArray(g_fullscreen_vao);
+
+    if (tu_res>=0) glUniform2f(tu_res, (float)screen_w, (float)screen_h);
+    if (tu_camera>=0) glUniform4f(tu_camera, cam->x, cam->y, cam->zoom, 0.0f);
+    if (tu_camera_rot>=0) glUniform1f(tu_camera_rot, cam->rotation);
+    if (tu_map_size>=0) glUniform2f(tu_map_size, (float)map_w, (float)map_h);
+    if (tu_layer_count>=0) glUniform1i(tu_layer_count, layer_count);
+
+    // Set array uniforms for up to 16 layers
+    int tw_arr[32]; int atsz_arr[32]; int firstgid_arr[16]; int columns_arr[16];
+    for (int i=0;i<layer_count && i<16;i++){
+        tw_arr[i*2+0] = layers[i].tile_w;
+        tw_arr[i*2+1] = layers[i].tile_h;
+        atsz_arr[i*2+0] = layers[i].atlas_w;
+        atsz_arr[i*2+1] = layers[i].atlas_h;
+        firstgid_arr[i] = layers[i].firstgid;
+        columns_arr[i] = layers[i].columns;
+        // Bind textures to texture units
+        glActiveTexture(GL_TEXTURE0 + i);
+        glBindTexture(GL_TEXTURE_2D, layers[i].atlas_tex);
+        glActiveTexture(GL_TEXTURE16 + i);
+        glBindTexture(GL_TEXTURE_2D, layers[i].gid_tex);
+    }
+    if (tu_tile_size_arr>=0) glUniform2iv(tu_tile_size_arr, layer_count, tw_arr);
+    if (tu_atlas_tex_size>=0) glUniform2iv(tu_atlas_tex_size, layer_count, atsz_arr);
+    if (tu_firstgid>=0) glUniform1iv(tu_firstgid, layer_count, firstgid_arr);
+    if (tu_columns>=0) glUniform1iv(tu_columns, layer_count, columns_arr);
+
+    // Setup sampler indices
+    if (tu_atlas>=0) {
+        int samplers[16]; for (int i=0;i<layer_count && i<16;i++) samplers[i] = i; // 0..15
+        glUniform1iv(tu_atlas, layer_count, samplers);
+    }
+    if (tu_gidtex>=0) {
+        int samplers[16]; for (int i=0;i<layer_count && i<16;i++) samplers[i] = 16 + i; // 16..31
+        glUniform1iv(tu_gidtex, layer_count, samplers);
+    }
+
+    glDrawArrays(GL_TRIANGLES, 0, 3);
 }

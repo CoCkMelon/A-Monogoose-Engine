@@ -151,17 +151,6 @@ hierarchy:
       - Lights:
           - SunLight
           - AmbientLight
-  
-  # Format 2: Flat parent-child pairs (alternative, more explicit)
-  relations:
-    - { parent: Player, child: PlayerModel }
-    - { parent: Player, child: PlayerWeapon }
-    - { parent: PlayerWeapon, child: WeaponMesh }
-    - { parent: PlayerWeapon, child: WeaponParticles }
-    - { parent: Enemies, child: Enemy_1 }
-    - { parent: Enemies, child: Enemy_2 }
-    - { parent: Lights, child: SunLight }
-    - { parent: Lights, child: AmbientLight }
 
 # Other relationships
 relationships:

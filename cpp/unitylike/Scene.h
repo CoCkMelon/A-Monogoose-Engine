@@ -27,7 +27,7 @@ class GameObject;
 class Transform;
 class MongooseBehaviour;
 
-// Internal script host component stored on entities that have scripts
+// Internal script host storage (managed outside ECS to avoid POD constraints)
 struct ScriptHost {
     std::vector<MongooseBehaviour*> scripts;
     bool awoken = false;
@@ -38,6 +38,10 @@ struct ScriptHost {
 extern ecs_entity_t g_comp_script_host;
 // Internal: register an entity as having scripts (used by AddScript)
 void __register_script_entity(ecs_world_t* w, std::uint64_t e);
+// Internal: host management (implemented in SceneCore.cpp)
+ScriptHost* __get_script_host(std::uint64_t e);
+void __ensure_script_host(std::uint64_t e);
+void __remove_script_host(std::uint64_t e);
 
 // Forward declaration of internal component id holder
 struct CompIds {
@@ -58,7 +62,18 @@ extern CompIds g_comp;
 struct Scale2D { float sx; float sy; };
 struct SpriteData { std::uint32_t tex; float u0,v0,u1,v1; float w,h; float r,g,b,a; int visible; int sorting_layer; int order_in_layer; float z; int dirty; };
 struct MaterialData { float r,g,b,a; int dirty; };
-struct TilemapRefData { AmeTilemap* map; int layer; };
+struct TilemapRefData {
+    AmeTilemap* map; // pointer to CPU-side map (layer0 data)
+    int layer;       // layer index in source TMX
+    // GPU resources and metadata needed for rendering
+    std::uint32_t atlas_tex;
+    std::uint32_t gid_tex;
+    int atlas_w, atlas_h;
+    int tile_w, tile_h;
+    int firstgid;
+    int columns;
+    int map_w, map_h; // store map size to avoid dangling pointers to TMX local
+};
 struct MeshData { const float* pos; const float* uv; const float* col; std::size_t count; };
 struct TextData { const char* text_ptr; std::uint32_t font; float r,g,b,a; float size; int wrap_px; int request_set; char request_buf[256]; };
 struct Col2D { int type; float w,h; float radius; int isTrigger; int dirty; };
@@ -330,8 +345,15 @@ static_assert(
         mat = Material{ *this };
         return mat;
     } else if constexpr (std::is_same_v<T, TilemapRenderer>) {
-        struct TilemapRefData { AmeTilemap* map; int layer; } tr{nullptr, 0};
-        ecs_set_id(w, (ecs_entity_t)e_, g_comp.tilemap, sizeof(tr), &tr);
+        TilemapRefData tr{};
+        tr.map = nullptr;
+        tr.layer = 0;
+        tr.atlas_tex = 0;
+        tr.gid_tex = 0;
+        tr.atlas_w = 0; tr.atlas_h = 0;
+        tr.tile_w = 0; tr.tile_h = 0;
+        tr.firstgid = 0; tr.columns = 0;
+        ecs_set_id(w, (ecs_entity_t)e_, g_comp.tilemap, sizeof(TilemapRefData), &tr);
         static thread_local TilemapRenderer t{ GameObject() };
         t = TilemapRenderer{ *this };
         return t;
@@ -460,15 +482,10 @@ T& GameObject::GetComponent() {
 
 template<typename T, typename... Args>
 T& GameObject::AddScript(Args&&... args) {
-    // Ensure ScriptHost component exists on this entity
+    // Ensure host exists (managed outside ECS to avoid moving non-POD types)
     ecs_world_t* w = scene_->world();
-    ScriptHost host_local;
-    ScriptHost* host = (ScriptHost*)ecs_get_id(w, (ecs_entity_t)e_, g_comp_script_host);
-    if (!host) {
-        host_local = ScriptHost{};
-        ecs_set_id(w, (ecs_entity_t)e_, g_comp_script_host, sizeof(ScriptHost), &host_local);
-        host = (ScriptHost*)ecs_get_id(w, (ecs_entity_t)e_, g_comp_script_host);
-    }
+    __ensure_script_host(e_);
+    ScriptHost* host = __get_script_host(e_);
     // Create script and attach
     T* script = new T(std::forward<Args>(args)...);
     script->__set_owner(*this);

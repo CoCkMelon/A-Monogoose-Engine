@@ -13,30 +13,31 @@ static SDL_Window* g_window = NULL;
 static SDL_GLContext g_gl = NULL;
 static int g_w = 800, g_h = 600;
 
-static GLuint g_prog = 0, g_vao = 0, g_vbo_pos = 0, g_vbo_col = 0;
-static GLint u_res = -1;
+static GLuint g_prog = 0, g_vao = 0, g_vbo_pos = 0, g_vbo_uv = 0, g_tex = 0;
+static GLint u_res = -1, u_tex = -1;
 
 static AmeTilemap g_map;
-static AmeTilemapMesh g_mesh;
+static AmeTilemapUVMesh g_mesh;
 static AmeEcsWorld* g_world = NULL;
 
 static const char* vs_src =
     "#version 450 core\n"
     "layout(location=0) in vec2 a_pos;\n"
-    "layout(location=1) in vec4 a_col;\n"
+    "layout(location=1) in vec2 a_uv;\n"
     "uniform vec2 u_res;\n"
-    "out vec4 v_col;\n"
+    "out vec2 v_uv;\n"
     "void main(){\n"
     "  vec2 ndc = vec2( (a_pos.x / u_res.x) * 2.0 - 1.0, 1.0 - (a_pos.y / u_res.y) * 2.0 );\n"
     "  gl_Position = vec4(ndc, 0.0, 1.0);\n"
-    "  v_col = a_col;\n"
+    "  v_uv = a_uv;\n"
     "}\n";
 
 static const char* fs_src =
     "#version 450 core\n"
-    "in vec4 v_col;\n"
+    "in vec2 v_uv;\n"
+    "uniform sampler2D u_tex;\n"
     "out vec4 frag;\n"
-    "void main(){ frag = v_col; }\n";
+    "void main(){ frag = texture(u_tex, v_uv); }\n";
 
 static GLuint sh_compile(GLenum type, const char* src){
     GLuint s = glCreateShader(type);
@@ -72,9 +73,10 @@ static int init_gl(void){
     glGenVertexArrays(1, &g_vao);
     glBindVertexArray(g_vao);
     glGenBuffers(1, &g_vbo_pos);
-    glGenBuffers(1, &g_vbo_col);
+    glGenBuffers(1, &g_vbo_uv);
 
     u_res = glGetUniformLocation(g_prog, "u_res");
+    u_tex = glGetUniformLocation(g_prog, "u_tex");
     glViewport(0,0,g_w,g_h);
     glClearColor(0.07f,0.07f,0.1f,1);
     return 1;
@@ -82,7 +84,8 @@ static int init_gl(void){
 static void shutdown_gl(void){
     if(g_prog) glUseProgram(0);
     if(g_vbo_pos){ GLuint b=g_vbo_pos; glDeleteBuffers(1,&b); g_vbo_pos=0; }
-    if(g_vbo_col){ GLuint b=g_vbo_col; glDeleteBuffers(1,&b); g_vbo_col=0; }
+    if(g_vbo_uv){ GLuint b=g_vbo_uv; glDeleteBuffers(1,&b); g_vbo_uv=0; }
+    if(g_tex){ GLuint t=g_tex; glDeleteTextures(1,&t); g_tex=0; }
     if(g_vao){ GLuint a=g_vao; glDeleteVertexArrays(1,&a); g_vao=0; }
     if(g_gl){ SDL_GL_DestroyContext(g_gl); g_gl=NULL; }
     if(g_window){ SDL_DestroyWindow(g_window); g_window=NULL; }
@@ -95,10 +98,10 @@ static void upload_mesh(void){
     glEnableVertexAttribArray(0);
     glVertexAttribPointer(0,2,GL_FLOAT,GL_FALSE, sizeof(float)*2, (void*)0);
 
-    glBindBuffer(GL_ARRAY_BUFFER, g_vbo_col);
-    glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)(g_mesh.vert_count*4*sizeof(float)), g_mesh.colors, GL_STATIC_DRAW);
+    glBindBuffer(GL_ARRAY_BUFFER, g_vbo_uv);
+    glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)(g_mesh.vert_count*2*sizeof(float)), g_mesh.uvs, GL_STATIC_DRAW);
     glEnableVertexAttribArray(1);
-    glVertexAttribPointer(1,4,GL_FLOAT,GL_FALSE, sizeof(float)*4, (void*)0);
+    glVertexAttribPointer(1,2,GL_FLOAT,GL_FALSE, sizeof(float)*2, (void*)0);
 }
 
 static SDL_AppResult init_world(void){
@@ -113,10 +116,13 @@ static SDL_AppResult init_world(void){
         SDL_Log("Failed to load sample.tmj");
         return SDL_APP_FAILURE;
     }
-    if(!ame_tilemap_build_mesh(&g_map, &g_mesh)){
+    if(!ame_tilemap_build_uv_mesh(&g_map, &g_mesh)){
         SDL_Log("Failed to build mesh");
         return SDL_APP_FAILURE;
     }
+    // Build a procedural atlas texture that matches tileset layout
+    g_tex = ame_tilemap_make_test_atlas_texture(&g_map);
+    if(!g_tex){ SDL_Log("Failed to make atlas texture"); return SDL_APP_FAILURE; }
     upload_mesh();
     return SDL_APP_CONTINUE;
 }
@@ -143,6 +149,7 @@ SDL_AppResult SDL_AppIterate(void *appstate){
     (void)appstate;
     glUseProgram(g_prog);
     if(u_res>=0) glUniform2f(u_res, (float)g_w, (float)g_h);
+    if(u_tex>=0){ glActiveTexture(GL_TEXTURE0); glBindTexture(GL_TEXTURE_2D, g_tex); glUniform1i(u_tex, 0); }
     glBindVertexArray(g_vao);
 
     glClear(GL_COLOR_BUFFER_BIT);
@@ -155,7 +162,7 @@ SDL_AppResult SDL_AppIterate(void *appstate){
 
 void SDL_AppQuit(void *appstate, SDL_AppResult result){
     (void)appstate; (void)result;
-    ame_tilemap_free_mesh(&g_mesh);
+    ame_tilemap_free_uv_mesh(&g_mesh);
     ame_tilemap_free(&g_map);
     ame_ecs_world_destroy(g_world);
     shutdown_gl();

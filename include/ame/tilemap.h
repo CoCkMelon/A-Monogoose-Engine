@@ -8,6 +8,7 @@ extern "C" {
 #include <stdbool.h>
 #include <stdint.h>
 #include <stddef.h>
+#include "ame/camera.h"
 
 // Very small Tiled (JSON .tmj) tilemap struct and loader.
 // Supports: orientation: orthogonal, renderorder: right-down, single tileset, integer layer data array.
@@ -59,18 +60,47 @@ typedef struct AmeTilemapMesh {
     size_t vert_count;
 } AmeTilemapMesh;
 
-typedef struct AmeTilemapUvMesh {
+typedef struct AmeTilemapUVMesh {
     float *vertices;    // size = vert_count * 2
     float *uvs;         // size = vert_count * 2
     size_t vert_count;
-} AmeTilemapUvMesh;
+} AmeTilemapUVMesh;
 
-bool ame_tilemap_build_mesh(const AmeTilemap* m, AmeTilemapMesh* mesh);
-void ame_tilemap_free_mesh(AmeTilemapMesh* mesh);
+bool ame_tilemap_build_uv_mesh(const AmeTilemap* m, AmeTilemapUVMesh* mesh);
+void ame_tilemap_free_uv_mesh(AmeTilemapUVMesh* mesh);
 
-// Build a UV mesh based on tileset grid layout. Non-zero gids become quads with UVs into an atlas.
-bool ame_tilemap_build_uv_mesh(const AmeTilemap* m, AmeTilemapUvMesh* mesh);
-void ame_tilemap_free_uv_mesh(AmeTilemapUvMesh* mesh);
+// Create a simple procedural RGBA atlas texture where each tile index gets a solid unique color.
+// Returns OpenGL texture id (GLuint). The atlas layout matches m->tileset.columns and tile size.
+unsigned int ame_tilemap_make_test_atlas_texture(const AmeTilemap* m);
+
+// -------------------------------
+// GPU tilemap full-screen renderer
+// -------------------------------
+// Engine-managed shader path that composites up to N layers by sampling per-tile GID textures.
+// This matches the approach used by the kenney_pixel-platformer example but is reusable engine-wide.
+// Note: Texture ids are GL texture names as returned by glGenTextures (use unsigned int here to avoid GL headers in this file).
+
+typedef struct AmeTileLayerGpuDesc {
+    unsigned int atlas_tex;   // GL texture id for tileset atlas (GL_TEXTURE_2D)
+    unsigned int gid_tex;     // GL texture id for unsigned integer GID texture (GL_R32UI)
+    int atlas_w, atlas_h;     // atlas pixel dimensions
+    int tile_w, tile_h;       // tile pixel size for this layer
+    int firstgid;             // starting gid for this tileset
+    int columns;              // tiles per row in the atlas
+} AmeTileLayerGpuDesc;
+
+// Build an R32UI texture from raw GID data (width*height, row-major, Y-up expected).
+// raw_gids should preserve Tiled flip flags if available; if not, pass masked gids as-is.
+unsigned int ame_tilemap_build_gid_texture_u32(const uint32_t* raw_gids, int width, int height);
+
+// Initialize/Shutdown renderer state (compiles shaders and creates a fullscreen VAO). Safe to call multiple times.
+void ame_tilemap_renderer_init(void);
+void ame_tilemap_renderer_shutdown(void);
+
+// Render the provided layers with the camera. Layers are composited in array order.
+void ame_tilemap_render_layers(const struct AmeCamera* cam, int screen_w, int screen_h,
+                               int map_w, int map_h,
+                               const struct AmeTileLayerGpuDesc* layers, int layer_count);
 
 // Create a simple procedural RGBA atlas texture where each tile index gets a solid unique color.
 // Returns OpenGL texture id (GLuint). The atlas layout matches m->tileset.columns and tile size.

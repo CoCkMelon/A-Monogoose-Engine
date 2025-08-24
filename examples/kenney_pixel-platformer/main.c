@@ -51,7 +51,7 @@ typedef struct CAmbientAudio { float x, y; float base_gain; } CAmbientAudio;
 
 typedef struct CCamera { AmeCamera cam; } CCamera;
 
-typedef struct CTilemapRef { AmeTilemap* map; AmeTilemapUvMesh* uvmesh; GLuint atlas_tex; } CTilemapRef;
+typedef struct CTilemapRef { AmeTilemap* map; AmeTilemapUVMesh* uvmesh; GLuint atlas_tex; } CTilemapRef;
 
 typedef struct CTextures { GLuint player[4]; } CTextures;
 
@@ -82,7 +82,7 @@ static AmeScene2DBatch g_batch;
 // Game systems
 static AmeTilemap g_map;
 static AmeTilemapMesh g_mesh; // colored mesh (legacy)
-static AmeTilemapUvMesh g_uvmesh; // uv mesh for textured tiles
+static AmeTilemapUVMesh g_uvmesh; // uv mesh for textured tiles
 static GLuint g_tile_atlas_tex = 0;
 // Additional per-index tile textures (1..4 used by our generated level)
 static GLuint g_tile_textures[5] = {0,0,0,0,0};
@@ -429,7 +429,7 @@ static int xml_read_str_attr(const char* s, const char* key, char* buf, size_t b
 // --- Layer rendering bundle ---
 typedef struct TileLayerRender {
     AmeTilemap map;
-    AmeTilemapUvMesh uv; // legacy UV mesh (unused in new tile pass)
+    AmeTilemapUVMesh uv; // legacy UV mesh (unused in new tile pass)
     GLuint vbo_pos;      // legacy
     GLuint vbo_uv;       // legacy
     GLuint atlas_tex;    // source atlas texture for this layer's tileset

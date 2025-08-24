@@ -1,0 +1,115 @@
+using flecs.core
+using flecs.meta
+
+// Platformer-friendly component definitions
+// These mirror the engine-side C structs used in the pixel platformer example
+
+// Optional 2D transform used for positioning (Y-up, pixels)
+struct AmeTransform2D {
+  x { member: { type: f32 } }
+  y { member: { type: f32 } }
+  angle { member: { type: f32 } }
+}
+
+// Size in pixels for simple AABB sprites or colliders
+struct CSize {
+  w { member: { type: f32 } }
+  h { member: { type: f32 } }
+}
+
+// Input state gathered each tick
+struct CInput {
+  move_dir { member: { type: i32 } }         // -1, 0, 1
+  jump_down { member: { type: bool } }
+  prev_jump_down { member: { type: bool } }
+  coyote_timer { member: { type: f32 } }
+  jump_buffer { member: { type: f32 } }
+  jump_trigger { member: { type: bool } }
+}
+
+// Grounded flag after ray checks
+struct CGrounded { value { member: { type: bool } } }
+
+// Simple animation state (frame index + timer)
+struct CAnimation {
+  frame { member: { type: i32 } }
+  time { member: { type: f32 } }
+}
+
+// Ambient audio source position and base gain (engine uses audio ray for panning/gain)
+struct CAmbientAudio {
+  x { member: { type: f32 } }
+  y { member: { type: f32 } }
+  base_gain { member: { type: f32 } }
+}
+
+// Camera structs matching engine API
+struct AmeCamera {
+  x { member: { type: f32 } }
+  y { member: { type: f32 } }
+  zoom { member: { type: f32 } }
+  rotation { member: { type: f32 } }
+  target_x { member: { type: f32 } }
+  target_y { member: { type: f32 } }
+  viewport_w { member: { type: i32 } }
+  viewport_h { member: { type: i32 } }
+}
+
+struct CCamera {
+  cam { member: { type: AmeCamera } }
+}
+
+// Tag identifying the player entity
+CPlayerTag {}
+
+// For quick visual testing with the current flecs_script_scene point renderer,
+// also define a Position component used for drawing points.
+struct Position {
+  x { member: { type: f32 } }
+  y { member: { type: f32 } }
+  z { member: { type: f32 } }
+}
+
+// ---------------------------------
+// Scene
+// ---------------------------------
+
+// Global world object holding shared references/settings
+World {
+  CAmbientAudio: { x: 360, y: 180, base_gain: 0.8 }
+}
+
+// Camera centered on the player with 3x zoom and 1280x720 viewport
+Camera {
+  CCamera: { cam: { x: 0, y: 0, zoom: 3.0, rotation: 0.0, target_x: 0, target_y: 0, viewport_w: 1280, viewport_h: 720 } }
+}
+
+// Player entity with size, input, animation, grounded flag and transform
+// Position is provided for compatibility with the point renderer example
+Player {
+  CPlayerTag
+  CSize: { w: 16, h: 16 }
+  CInput: { move_dir: 0, jump_down: false, prev_jump_down: false, coyote_timer: 0.0, jump_buffer: 0.0, jump_trigger: false }
+  CGrounded: { value: false }
+  CAnimation: { frame: 0, time: 0.0 }
+  AmeTransform2D: { x: 100, y: 300, angle: 0 }
+  Position: { x: 100, y: 300, z: 0 }
+}
+
+// A few simple platforms expressed as transform+size
+// In a full game you would import TMX and generate colliders, but these serve as placeholders
+Platform_Ground {
+  CSize: { w: 256, h: 16 }
+  AmeTransform2D: { x: 128, y: 200, angle: 0 }
+}
+
+Platform_Ledge1 {
+  CSize: { w: 96, h: 16 }
+  AmeTransform2D: { x: 260, y: 260, angle: 0 }
+}
+
+Platform_Ledge2 {
+  CSize: { w: 64, h: 16 }
+  AmeTransform2D: { x: 60, y: 260, angle: 0 }
+}
+
