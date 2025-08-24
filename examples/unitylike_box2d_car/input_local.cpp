@@ -3,12 +3,15 @@
 #include <atomic>
 
 static std::atomic<bool> g_should_quit{false};
+static std::atomic<int>  g_yaw_dir{0};     // -1,0,1
 static std::atomic<int>  g_move_dir{0};     // -1,0,1
 static std::atomic<bool> g_jump_down{false};
 static std::atomic<bool> g_prev_jump{false};
 static std::atomic<bool> g_jump_edge{false};
 static std::atomic<bool> g_left_down{false};
 static std::atomic<bool> g_right_down{false};
+static std::atomic<bool> g_top_down{false};
+static std::atomic<bool> g_bottom_down{false};
 
 static void on_input(const struct ni_event* ev, void* ud) {
     (void)ud;
@@ -18,14 +21,20 @@ static void on_input(const struct ni_event* ev, void* ud) {
             g_left_down.store(down, std::memory_order_relaxed);
         } else if (ev->code == NI_KEY_RIGHT || ev->code == NI_KEY_D) {
             g_right_down.store(down, std::memory_order_relaxed);
-        } else if (ev->code == NI_KEY_SPACE || ev->code == NI_KEY_W || ev->code == NI_KEY_UP) {
+        } else if (ev->code == NI_KEY_SPACE) {
             g_jump_down.store(down, std::memory_order_relaxed);
+        } else if (ev->code == NI_KEY_W || ev->code == NI_KEY_UP) {
+            g_top_down.store(down, std::memory_order_relaxed);
+        } else if (ev->code == NI_KEY_S || ev->code == NI_KEY_DOWN) {
+            g_bottom_down.store(down, std::memory_order_relaxed);
         }
         if (down && (ev->code == NI_KEY_ESC || ev->code == NI_KEY_Q)) {
             g_should_quit.store(true, std::memory_order_relaxed);
         }
-        int md = (g_right_down.load(std::memory_order_relaxed) ? 1 : 0) - (g_left_down.load(std::memory_order_relaxed) ? 1 : 0);
-        g_move_dir.store(md, std::memory_order_relaxed);
+        int ad = (g_right_down.load(std::memory_order_relaxed) ? 1 : 0) - (g_left_down.load(std::memory_order_relaxed) ? 1 : 0);
+        g_yaw_dir.store(ad, std::memory_order_relaxed);
+        int ws = (g_top_down.load(std::memory_order_relaxed) ? 1 : 0) - (g_bottom_down.load(std::memory_order_relaxed) ? 1 : 0);
+        g_move_dir.store(ws, std::memory_order_relaxed);
     }
 }
 
@@ -52,5 +61,6 @@ void input_begin_frame(void) {
 
 bool input_should_quit(void) { return g_should_quit.load(std::memory_order_relaxed); }
 int  input_move_dir(void)    { return g_move_dir.load(std::memory_order_relaxed); }
+int  input_yaw_dir(void)    { return g_yaw_dir.load(std::memory_order_relaxed); }
 bool input_jump_edge(void)   { return g_jump_edge.load(std::memory_order_relaxed); }
 

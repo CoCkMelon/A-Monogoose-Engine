@@ -20,7 +20,7 @@ public:
     float currentX = 0.0f;
     float currentY = 0.0f;
 
-    void Awake() override {
+    void Awake() {
         camera = gameObject().TryGetComponent<Camera>();
         if (!camera) camera = &gameObject().AddComponent<Camera>();
         camera->zoom(zoom);
@@ -28,7 +28,7 @@ public:
         camera->viewport(1280, 720);
     }
 
-    void LateUpdate() override {
+    void LateUpdate() {
         if (!target || !camera) return;
         auto tpos = target->transform().position();
         auto cam = camera->get();
