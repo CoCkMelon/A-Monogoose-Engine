@@ -60,18 +60,47 @@ void Scene::Destroy(GameObject& go) {
     ecs_delete(world_, (ecs_entity_t)go.id());
 }
 
+GameObject Scene::Find(const std::string& name) {
+    if (!world_ || name.empty()) return GameObject();
+    ecs_entity_t e = ecs_lookup(world_, name.c_str());
+    if (!e) return GameObject();
+    return GameObject(this, (GameObject::Entity)e);
+}
+
 extern void unitylike_begin_update(float dt);
 extern void unitylike_set_fixed_dt(float fdt);
 
 void Scene::Step(float dt) {
     ensure_components_registered(world_);
     unitylike_begin_update(dt);
+
+    // Pass 1: Awake all scripts on all entities before any Start
     for (ecs_entity_t e : g_script_entities) {
         ScriptHost* shp = __get_script_host(e);
         if (!shp) continue;
         ScriptHost& sh = *shp;
-        if (!sh.awoken) { for (auto* s : sh.scripts) if (s) s->Awake(); sh.awoken = true; }
-        if (!sh.started) { for (auto* s : sh.scripts) if (s) s->Start(); sh.started = true; }
+        if (!sh.awoken) {
+            for (auto* s : sh.scripts) if (s) s->Awake();
+            sh.awoken = true;
+        }
+    }
+
+    // Pass 2: Start all scripts on all entities after Awake pass
+    for (ecs_entity_t e : g_script_entities) {
+        ScriptHost* shp = __get_script_host(e);
+        if (!shp) continue;
+        ScriptHost& sh = *shp;
+        if (!sh.started) {
+            for (auto* s : sh.scripts) if (s) s->Start();
+            sh.started = true;
+        }
+    }
+
+    // Pass 3: Regular Update and LateUpdate
+    for (ecs_entity_t e : g_script_entities) {
+        ScriptHost* shp = __get_script_host(e);
+        if (!shp) continue;
+        ScriptHost& sh = *shp;
         for (auto* s : sh.scripts) if (s) s->Update(dt);
         for (auto* s : sh.scripts) if (s) s->LateUpdate();
     }
@@ -121,5 +150,12 @@ Transform& GameObject::transform() {
     t = Transform{*this};
     return t;
 }
+
+bool GameObject::IsValid() const {
+    if (!scene_ || !e_) return false;
+    ecs_world_t* w = scene_->world();
+    return ecs_is_alive(w, (ecs_entity_t)e_);
+}
+
 
 } // namespace unitylike

@@ -89,6 +89,7 @@ public:
     // Factory
     GameObject Create(const std::string& name = "");
     void Destroy(GameObject& go);
+    GameObject Find(const std::string& name);
 
     // Tick
     void Step(float dt);
@@ -127,6 +128,7 @@ public:
 
     Entity id() const { return e_; }
     Scene* scene() const { return scene_; }
+    bool IsValid() const;
 private:
     Scene* scene_ = nullptr;
     Entity e_ = 0;

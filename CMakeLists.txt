@@ -246,9 +246,9 @@ add_executable(audio_ray_example
 add_subdirectory(examples/unitylike_minimal)
 
 # ------------------------------
-# Example: unitylike_pixel_platformer (Kenney)
+# Example: unitylike_platformer_ecs (Unity-like with ECS rendering)
 # ------------------------------
-add_subdirectory(examples/unitylike_pixel_platformer)
+add_subdirectory(examples/unitylike_platformer_ecs)
 
 # ------------------------------
 # Example: Flecs Script loader

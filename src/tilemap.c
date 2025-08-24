@@ -439,7 +439,7 @@ void ame_tilemap_render_layers(const AmeCamera* cam, int screen_w, int screen_h,
     if (tu_res>=0) glUniform2f(tu_res, (float)screen_w, (float)screen_h);
     if (tu_camera>=0) glUniform4f(tu_camera, cam->x, cam->y, cam->zoom, 0.0f);
     if (tu_camera_rot>=0) glUniform1f(tu_camera_rot, cam->rotation);
-    if (tu_map_size>=0) glUniform2f(tu_map_size, (float)map_w, (float)map_h);
+    if (tu_map_size>=0) glUniform2i(tu_map_size, map_w, map_h);
     if (tu_layer_count>=0) glUniform1i(tu_layer_count, layer_count);
 
     // Set array uniforms for up to 16 layers
