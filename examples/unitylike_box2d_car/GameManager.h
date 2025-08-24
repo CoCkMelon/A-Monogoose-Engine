@@ -121,7 +121,7 @@ public:
             gr.uv(uvSolid.x, uvSolid.y, uvSolid.z, uvSolid.w);
             gr.color({0.15f, 0.18f, 0.20f, 1.0f});
             gr.size({200.0f, 1.0f});
-            gr.sortingLayer(0);
+            gr.sortingLayer(0); gr.orderInLayer(0); gr.z(0.0f);
             // Centered at (0, groundY-0.5)
             groundObj.transform().position({0.0f, groundY - 0.5f, 0.0f});
         }
@@ -172,7 +172,7 @@ public:
             sr.texture(atlasTex);
             sr.uv(uvNoise.x, uvNoise.y, uvNoise.z, uvNoise.w);
             sr.size({wHalf*2.0f, h});
-            sr.sortingLayer(0);
+            sr.sortingLayer(0); sr.orderInLayer(0); sr.z(0.0f);
             ob.transform().position({x, y, 0.0f});
 
             obstaclesSpawned++;

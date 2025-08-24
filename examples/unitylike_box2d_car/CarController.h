@@ -69,10 +69,10 @@ public:
 
         // Wheel sprites (start with texture 0; GameManager will assign atlas+UVs)
         auto& sr1 = wheelBO.AddComponent<SpriteRenderer>();
-        sr1.texture(0); sr1.size({wheelRadius*2, wheelRadius*2}); sr1.sortingLayer(0);
+        sr1.texture(0); sr1.size({wheelRadius*2, wheelRadius*2}); sr1.sortingLayer(0); sr1.orderInLayer(0); sr1.z(0.0f);
         wheelBRenderer = &sr1;
         auto& sr2 = wheelFO.AddComponent<SpriteRenderer>();
-        sr2.texture(0); sr2.size({wheelRadius*2, wheelRadius*2}); sr2.sortingLayer(0);
+        sr2.texture(0); sr2.size({wheelRadius*2, wheelRadius*2}); sr2.sortingLayer(0); sr2.orderInLayer(0); sr2.z(0.0f);
         wheelFRenderer = &sr2;
 
         // Car body as colored rectangle using SpriteRenderer
@@ -80,7 +80,7 @@ public:
         bs.texture(0);
         bs.size({bodyWidth, bodyHeight});
         bs.color({0.2f, 0.6f, 1.0f, 1.0f});
-        bs.sortingLayer(0);
+        bs.sortingLayer(0); bs.orderInLayer(0); bs.z(0.0f);
         bodyRenderer = &bs;
 
         // If atlas was already provided before Awake, apply it now
