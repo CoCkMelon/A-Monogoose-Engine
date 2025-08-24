@@ -3,6 +3,7 @@
 #include "PlayerBehaviour.h"
 #include "CameraController.h"
 #include "PhysicsManager.h"
+#include "DebugRenderer.h"
 #include <string>
 #include <memory>
 
@@ -40,8 +41,20 @@ private:
     // TMX data (kept alive for tilemap rendering)
     std::unique_ptr<AmeTilemapTmxLoadResult> tmxData;
     
+    // Debug rendering
+    DebugRenderer debugRenderer;
+    bool showColliderDebug = true;
+    
+    // Delayed initialization
+    bool textureLoaded = false;
+    
 public:
     void Start() override {
+        SDL_Log("GameManager: Start() called - beginning scene setup");
+        
+        // Initialize debug renderer
+        debugRenderer.Initialize();
+        
         // Create physics manager first
         SetupPhysics();
         
@@ -54,11 +67,36 @@ public:
         // Create camera
         SetupCamera();
         
-        // Link components
+        // Link components - this is critical for proper initialization
         LinkComponents();
+        
+        SDL_Log("GameManager: Scene setup complete");
+    }
+    
+    void Update(float deltaTime) override {
+        // Load texture on the first update after everything is initialized
+        if (!textureLoaded && playerBehaviour) {
+            SDL_Log("GameManager: Delayed texture loading in Update()");
+            LoadPlayerSprite();
+            textureLoaded = true;
+        }
+    }
+    
+    void LateUpdate() override {
+        // Render debug collision visualization after everything else
+        if (showColliderDebug && physicsManager && cameraController) {
+            AmePhysicsWorld* world = PhysicsManager::GetWorld();
+            if (world && cameraController->camera) {
+                auto cam = cameraController->camera->get();
+                debugRenderer.RenderColliders(world, &cam, screenWidth, screenHeight);
+            }
+        }
     }
     
     void OnDestroy() override {
+        // Clean up debug renderer
+        debugRenderer.Shutdown();
+        
         // Clean up TMX data
         if (tmxData) {
             ame_tilemap_free_tmx_result(tmxData.get());
@@ -132,6 +170,7 @@ private:
     }
     
     void SetupPlayer() {
+        SDL_Log("GameManager: Setting up player");
         playerObject = gameObject().scene()->Create("Player");
         playerObject.transform().position({playerStartPosition.x, playerStartPosition.y, 0.0f});
         
@@ -140,8 +179,8 @@ private:
         playerBehaviour->moveSpeed = 180.0f;
         playerBehaviour->jumpForce = 450.0f;
         
-        // Load and set player texture
-        LoadPlayerSprite();
+        SDL_Log("GameManager: Player behaviour added: %p", playerBehaviour);
+        // Don't load texture here - do it after linking when components are ready
     }
     
     void SetupCamera() {
@@ -172,6 +211,10 @@ private:
         
         // Check and adjust player spawn position for collision safety
         TestAndAdjustPlayerSpawnPosition();
+        
+        // NOW load player texture after all components are properly initialized
+        SDL_Log("GameManager: Loading player texture after component initialization");
+        LoadPlayerSprite();
     }
     
     void LoadPlayerSprite() {

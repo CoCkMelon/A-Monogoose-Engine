@@ -43,12 +43,20 @@ private:
     bool jumpPressed = false;
     bool isGrounded = false;
     
+    // Texture loading
+    GLuint pendingTextureId = 0;
+    
 public:
     void Awake() override {
+        SDL_Log("PlayerBehaviour: Awake() called");
         // Cache component references (Unity pattern)
         spriteRenderer = gameObject().TryGetComponent<SpriteRenderer>();
         if (!spriteRenderer) {
+            SDL_Log("PlayerBehaviour: Adding SpriteRenderer component");
             spriteRenderer = &gameObject().AddComponent<SpriteRenderer>();
+            SDL_Log("PlayerBehaviour: SpriteRenderer added: %p", spriteRenderer);
+        } else {
+            SDL_Log("PlayerBehaviour: Found existing SpriteRenderer: %p", spriteRenderer);
         }
         cachedTransform = &gameObject().transform();
     }
@@ -70,6 +78,13 @@ public:
     }
     
     void Update(float deltaTime) override {
+        // Check if we have a pending texture to apply and sprite renderer is now available
+        if (pendingTextureId != 0 && spriteRenderer) {
+            SDL_Log("PlayerBehaviour: Applying pending texture ID %u in Update", pendingTextureId);
+            ApplyTextureToSprite();
+            pendingTextureId = 0; // Clear pending
+        }
+        
         // Update animation
         UpdateAnimation(deltaTime);
         
@@ -117,19 +132,13 @@ public:
     
     // Set the player texture (called by GameManager)
     void SetPlayerTexture(GLuint textureId) {
+        SDL_Log("PlayerBehaviour: SetPlayerTexture called with textureId: %u, spriteRenderer: %p", textureId, spriteRenderer);
+        pendingTextureId = textureId;
+        
         if (spriteRenderer && textureId != 0) {
-            spriteRenderer->texture(textureId);
-            // Set sprite size to match character tile dimensions (24x24)
-            spriteRenderer->size({24.0f, 24.0f});
-            spriteRenderer->color({1.0f, 1.0f, 1.0f, 1.0f});
-            spriteRenderer->sortingLayer(2);  // Above tilemap
-            spriteRenderer->orderInLayer(0);
-            
-            // Initialize UV coordinates for first frame (idle - first character)
-            // Character atlas is 9 columns x 3 rows, each tile 24x24
-            float frameWidth = 1.0f / 9.0f;
-            float frameHeight = 1.0f / 3.0f;
-            spriteRenderer->uv(0.0f, 0.0f, frameWidth, frameHeight);
+            ApplyTextureToSprite();
+        } else {
+            SDL_Log("PlayerBehaviour: Storing texture ID %u for later application", textureId);
         }
     }
     
@@ -190,9 +199,28 @@ private:
     }
     
     bool CheckGrounded(float vy) {
-        // Simple ground check based on vertical velocity
-        // In a full implementation, you'd use raycasts or collision detection
-        return std::abs(vy) < 1.0f;
+//         // Use proper raycast-based ground detection like the working example (lines 1205-1219)
+//         if (!physicsWorld || !physicsBody) {
+//             return std::abs(vy) < 1.0f; // Fallback to velocity check
+//         }
+//
+//         float px, py;
+//         ame_physics_get_position(physicsBody, &px, &py);
+//
+//         const float half = 16.0f * 0.5f; // Player size / 2
+//         const float y0 = py - half; // Bottom of player
+//         const float y1 = py - half - 3.0f; // Cast 3 pixels below
+//         const float ox[3] = { -half + 2.0f, 0.0f, half - 2.0f }; // Left, center, right
+//
+//         // Cast 3 rays downward from player's bottom edge
+//         for (int i = 0; i < 3; ++i) {
+//             AmeRaycastHit hit = ame_physics_raycast(physicsWorld, px + ox[i], y0, px + ox[i], y1);
+//             if (hit.hit) {
+//                 return true;
+//             }
+//         }
+//         return false;
+        return true;
     }
     
     void UpdateAnimation(float deltaTime) {
@@ -228,6 +256,31 @@ private:
                 spriteRenderer->uv(uv.z, uv.y, uv.x, uv.w);
             }
         }
+    }
+    
+    void ApplyTextureToSprite() {
+        if (!spriteRenderer || pendingTextureId == 0) return;
+        
+        spriteRenderer->texture(pendingTextureId);
+        // Set sprite size to match character tile dimensions (24x24)
+        spriteRenderer->size({24.0f, 24.0f});
+        spriteRenderer->color({1.0f, 1.0f, 1.0f, 1.0f});
+        spriteRenderer->sortingLayer(2);  // Above tilemap
+        spriteRenderer->orderInLayer(0);
+        spriteRenderer->enabled(true);  // Ensure visibility
+        
+        // Initialize UV coordinates for first frame (idle - first character)
+        // Character atlas is 9 columns x 3 rows, each tile 24x24
+        float frameWidth = 1.0f / 9.0f;
+        float frameHeight = 1.0f / 3.0f;
+        spriteRenderer->uv(0.0f, 0.0f, frameWidth, frameHeight);
+        
+        SDL_Log("PlayerBehaviour: Texture applied successfully - ID: %u, size: (%.1f, %.1f), UV: (0.0, 0.0, %.3f, %.3f)", 
+               pendingTextureId, 24.0f, 24.0f, frameWidth, frameHeight);
+        
+        // Verify texture is set
+        GLuint verifyTex = spriteRenderer->texture();
+        SDL_Log("PlayerBehaviour: Texture verification - set: %u, readback: %u", pendingTextureId, verifyTex);
     }
     
     void ApplySpriteFrame(int frame) {

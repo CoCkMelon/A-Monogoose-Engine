@@ -18,8 +18,10 @@ public:
     glm::vec2 minBounds = {-1000.0f, -1000.0f};
     glm::vec2 maxBounds = {1000.0f, 1000.0f};
     
-private:
+    // Camera component (public for debug access)
     Camera* camera = nullptr;
+    
+private:
     Transform* cachedTransform = nullptr;
     glm::vec2 currentPosition = {0.0f, 0.0f};
     

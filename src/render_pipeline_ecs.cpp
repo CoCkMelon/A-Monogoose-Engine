@@ -388,9 +388,22 @@ void ame_rp_run_ecs(ecs_world_t* w) {
                                        cam.target_y - half_h, cam.target_y + half_h, 
                                        -100.0f, 100.0f);
     
-    // Render tilemaps first (background) via shared compositor in one pass
-    // Use target position for consistent camera positioning
-    render_tilemap_layers_batch(w, cam.target_x, cam.target_y, cam.zoom, cam.viewport_w, cam.viewport_h, &dc_draw_calls);
+    // Only render tilemaps if any exist
+    ecs_query_desc_t tilemap_check_desc = {};
+    tilemap_check_desc.terms[0].id = g_comp.tilemap;
+    ecs_query_t* tilemap_check_query = ecs_query_init(w, &tilemap_check_desc);
+    ecs_iter_t tilemap_check_iter = ecs_query_iter(w, tilemap_check_query);
+    bool has_tilemaps = ecs_query_next(&tilemap_check_iter);
+    if (has_tilemaps) {
+        ecs_iter_fini(&tilemap_check_iter); // Finalize early exit
+    }
+    ecs_query_fini(tilemap_check_query);
+    
+    if (has_tilemaps) {
+        // Render tilemaps first (background) via shared compositor in one pass
+        // Use target position for consistent camera positioning
+        render_tilemap_layers_batch(w, cam.target_x, cam.target_y, cam.zoom, cam.viewport_w, cam.viewport_h, &dc_draw_calls);
+    }
     
     // Collect and batch sprites
     std::vector<SpriteBatch> batches;

@@ -1,5 +1,6 @@
 #include "ame/tilemap_tmx.h"
 #include "ame/tilemap.h"
+#include "ame/coords.h"
 #include <SDL3/SDL.h>
 #include <SDL3_image/SDL_image.h>
 #include <glad/gl.h>
@@ -149,8 +150,8 @@ bool ame_tilemap_load_tmx_for_gpu(const char* tmx_path, AmeTilemapTmxLoadResult*
             int x = idx % lw; int y = idx / lw;
             // TMX uses top-down coordinates, but engine uses bottom-left (Y-up)
             // Flip Y coordinate to convert from TMX to engine coordinate system
-            int y_flipped = (lh - 1) - y;
-            int di = y_flipped*lw + x;
+            int flipped_y = ame_flip_y_index_top_to_bottom(y, lh);
+            int di = ame_linear_index_rowmajor_bottom_left(x, flipped_y, lw);
             data[di] = (int32_t)gid; raw[di] = r;
             idx++; while (q<layer_end && *q!=',' && *q!='<' ) q++; if (*q==',') q++;
         }

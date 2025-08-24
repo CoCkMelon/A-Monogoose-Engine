@@ -101,35 +101,53 @@ public:
     
 private:
     void LoadTilemapCollisions() {
+        // Use the exact same collision loading pattern as the working kenney_pixel-platformer
+        // This implementation directly copies the working pattern from main.c lines ~1044-1052
+        
+        SDL_Log("PhysicsManager: Loading tilemap collisions from: %s", tilemapPath.c_str());
+        
         AmeTilemapTmxLoadResult tmx{};
-        if (ame_tilemap_load_tmx_for_gpu(tilemapPath.c_str(), &tmx)) {
-            SDL_Log("PhysicsManager: Loaded TMX with %d layers", tmx.layer_count);
-            // Find collision layer
-            int collisionLayer = tmx.collision_layer_index;
-            if (collisionLayer < 0 && tmx.layer_count > 0) {
-                collisionLayer = 0;  // Use first layer as fallback
-                SDL_Log("PhysicsManager: No collision layer found, using first layer (index 0)");
-            }
-            
-            if (collisionLayer >= 0) {
-                const auto& layer = tmx.layers[collisionLayer];
-                SDL_Log("PhysicsManager: Creating collision for layer %d: %dx%d tiles, tile size: %.1fx%.1f", 
-                       collisionLayer, layer.map.width, layer.map.height, 
-                       (float)layer.map.tile_width, (float)layer.map.tile_height);
-                ame_physics_create_tilemap_collision(
-                    physicsWorld,
-                    (const int*)layer.map.layer0.data,
-                    layer.map.width,
-                    layer.map.height,
-                    (float)layer.map.tile_width
-                );
-                SDL_Log("PhysicsManager: Tilemap collision created");
-            }
-            
-            ame_tilemap_free_tmx_result(&tmx);
-        } else {
+        if (!ame_tilemap_load_tmx_for_gpu(tilemapPath.c_str(), &tmx)) {
             SDL_Log("PhysicsManager: Failed to load TMX from: %s", tilemapPath.c_str());
+            return;
         }
+        
+        SDL_Log("PhysicsManager: Loaded TMX with %d layers", tmx.layer_count);
+        
+        // Find the collision layer using the TMX result's collision_layer_index
+        const AmeTilemap* coll_map = nullptr;
+        int collision_layer_index = tmx.collision_layer_index;
+        
+        if (collision_layer_index >= 0 && collision_layer_index < tmx.layer_count) {
+            coll_map = &tmx.layers[collision_layer_index].map;
+            SDL_Log("PhysicsManager: Found collision layer at index %d", collision_layer_index);
+        } else if (tmx.layer_count > 0) {
+            coll_map = &tmx.layers[0].map;
+            collision_layer_index = 0;
+            SDL_Log("PhysicsManager: No collision layer found, using first layer (index 0)");
+        }
+        
+        if (coll_map) {
+            SDL_Log("PhysicsManager: Creating collision for layer %d: %dx%d tiles, tile size: %dx%d", 
+                   collision_layer_index, coll_map->width, coll_map->height, 
+                   coll_map->tile_width, coll_map->tile_height);
+            
+            // Use the EXACT same call pattern as the working example (line 1051)
+            ame_physics_create_tilemap_collision(
+                physicsWorld, 
+                coll_map->layer0.data, 
+                coll_map->width, 
+                coll_map->height, 
+                (float)coll_map->tile_width
+            );
+            
+            SDL_Log("PhysicsManager: Tilemap collision created successfully");
+        } else {
+            SDL_Log("PhysicsManager: No suitable collision layer found");
+        }
+        
+        // Clean up TMX data
+        ame_tilemap_free_tmx_result(&tmx);
     }
 };
 

@@ -1,5 +1,6 @@
 #include "ame/physics.h"
 #include "ame/ecs.h"
+#include "ame/coords.h"
 #include <box2d/box2d.h>
 #include <cstdlib>
 #include <cstring>
@@ -131,23 +132,35 @@ void ame_physics_create_tilemap_collision(AmePhysicsWorld* world,
     if (!world || !world->world || !tiles) return;
     
     int collision_count = 0;
+    printf("Creating tilemap collision: %dx%d tiles, tile_size=%.1f\n", width, height, tile_size);
+    printf("NOTE: Tile data is already Y-flipped by TMX loader for engine coordinates\n");
+    
+    // The tiles array is already Y-flipped by the TMX loader (tilemap_tmx.c line 152)
+    // This means tiles[0] corresponds to the BOTTOM row of the map, not the top
+    // We need to create colliders that match this Y-flipped coordinate system
+    // used by the GPU tilemap renderer
+    
     for (int y = 0; y < height; y++) {
         for (int x = 0; x < width; x++) {
             int tile = tiles[y * width + x];
             if (tile != 0) {
-                // Create a static body for this tile
-                // Use normal coordinate system first to test alignment
+                // Since the tile data is Y-flipped:
+                // - tiles[0*width + x] represents the BOTTOM row (visual Y = height-1)
+                // - tiles[(height-1)*width + x] represents the TOP row (visual Y = 0)
+                
+                // Calculate world position to match GPU renderer expectations
+                // GPU renderer uses direct world coordinates, so we don't need to flip here
                 float px = (x + 0.5f) * tile_size;
                 float py = (y + 0.5f) * tile_size;
+                
+                if (collision_count < 10) { // Log first 10 colliders
+                    printf("Collider %d: tile[%d,%d] = %d, pos=(%.1f, %.1f) [data_y=%d->world_y=%.1f]\n", 
+                           collision_count, x, y, tile, px, py, y, py);
+                }
+                
                 ame_physics_create_body(world, px, py, tile_size, tile_size, 
                                        AME_BODY_STATIC, false, NULL);
                 collision_count++;
-                
-                // Debug first few collisions
-                if (collision_count <= 5) {
-                    printf("Collision tile %d: grid(%d,%d) gid=%d -> world_pos(%.1f,%.1f) size=%.1f\n", 
-                           collision_count, x, y, tile, px, py, tile_size);
-                }
             }
         }
     }

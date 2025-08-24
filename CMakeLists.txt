@@ -235,6 +235,17 @@ if(AME_BUILD_EXAMPLES)
   add_subdirectory(examples/unitylike_platformer_ecs)
 
   # ------------------------------
+  # Example: unitylike_textured_ground (Unity-like, build ground from textures)
+  # ------------------------------
+  # Disabled/removed per request
+  # add_subdirectory(examples/unitylike_textured_ground)
+
+  # ------------------------------
+  # Example: unitylike_box2d_car (Unity-like, Box2D car sidescroller)
+  # ------------------------------
+  add_subdirectory(examples/unitylike_box2d_car)
+
+  # ------------------------------
   # Example: Flecs Script loader
   # ------------------------------
   add_executable(scene_script_example examples/scene_file/scene_script_example.c)
