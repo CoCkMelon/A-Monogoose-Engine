@@ -103,14 +103,19 @@ private:
     void LoadTilemapCollisions() {
         AmeTilemapTmxLoadResult tmx{};
         if (ame_tilemap_load_tmx_for_gpu(tilemapPath.c_str(), &tmx)) {
+            SDL_Log("PhysicsManager: Loaded TMX with %d layers", tmx.layer_count);
             // Find collision layer
             int collisionLayer = tmx.collision_layer_index;
             if (collisionLayer < 0 && tmx.layer_count > 0) {
                 collisionLayer = 0;  // Use first layer as fallback
+                SDL_Log("PhysicsManager: No collision layer found, using first layer (index 0)");
             }
             
             if (collisionLayer >= 0) {
                 const auto& layer = tmx.layers[collisionLayer];
+                SDL_Log("PhysicsManager: Creating collision for layer %d: %dx%d tiles, tile size: %.1fx%.1f", 
+                       collisionLayer, layer.map.width, layer.map.height, 
+                       (float)layer.map.tile_width, (float)layer.map.tile_height);
                 ame_physics_create_tilemap_collision(
                     physicsWorld,
                     (const int*)layer.map.layer0.data,
@@ -118,9 +123,12 @@ private:
                     layer.map.height,
                     (float)layer.map.tile_width
                 );
+                SDL_Log("PhysicsManager: Tilemap collision created");
             }
             
             ame_tilemap_free_tmx_result(&tmx);
+        } else {
+            SDL_Log("PhysicsManager: Failed to load TMX from: %s", tilemapPath.c_str());
         }
     }
 };

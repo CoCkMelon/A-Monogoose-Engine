@@ -177,10 +177,11 @@ private:
         // Get jump input (edge detection handled by input_local)
         jumpPressed = input_jump_edge();
         
-        // Debug output (only when input is detected)
-        if (inputDir != 0 || jumpPressed) {
-            SDL_Log("PlayerBehaviour: Input - dir: %d (%.1f), jump: %d, physicsBody: %p", 
-                   inputDir, horizontalInput, jumpPressed, physicsBody);
+        // Debug output (only when input is detected and less frequent)
+        static int debugCounter = 0;
+        if ((inputDir != 0 || jumpPressed) && (debugCounter++ % 60 == 0)) {
+            SDL_Log("PlayerBehaviour: Input - dir: %d (%.1f), jump: %d", 
+                   inputDir, horizontalInput, jumpPressed);
         }
         
         // Update facing direction

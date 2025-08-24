@@ -4,6 +4,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <cmath>
+#include <cstdio>
 
 // Raycast callback for single hit
 class RaycastCallback : public b2RayCastCallback {
@@ -129,18 +130,28 @@ void ame_physics_create_tilemap_collision(AmePhysicsWorld* world,
                                          float tile_size) {
     if (!world || !world->world || !tiles) return;
     
+    int collision_count = 0;
     for (int y = 0; y < height; y++) {
         for (int x = 0; x < width; x++) {
             int tile = tiles[y * width + x];
             if (tile != 0) {
                 // Create a static body for this tile
+                // Use normal coordinate system first to test alignment
                 float px = (x + 0.5f) * tile_size;
                 float py = (y + 0.5f) * tile_size;
                 ame_physics_create_body(world, px, py, tile_size, tile_size, 
                                        AME_BODY_STATIC, false, NULL);
+                collision_count++;
+                
+                // Debug first few collisions
+                if (collision_count <= 5) {
+                    printf("Collision tile %d: grid(%d,%d) gid=%d -> world_pos(%.1f,%.1f) size=%.1f\n", 
+                           collision_count, x, y, tile, px, py, tile_size);
+                }
             }
         }
     }
+    printf("Created %d collision bodies total\n", collision_count);
 }
 
 void ame_physics_destroy_body(AmePhysicsWorld* world, b2Body* body) {
