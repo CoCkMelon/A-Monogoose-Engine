@@ -1,8 +1,10 @@
 #pragma once
 #include "unitylike/Scene.h"
 #include "input_local.h"
+#include <glad/gl.h>
 extern "C" {
 #include "ame/physics.h"
+#include <SDL3/SDL.h>
 }
 #include <cmath>
 
@@ -52,16 +54,19 @@ public:
     }
     
     void Start() override {
-        // Initialize sprite renderer
+        // Initialize sprite renderer with default values (will be overridden by GameManager)
         if (spriteRenderer) {
             spriteRenderer->size({16.0f, 16.0f});
-            spriteRenderer->color({1.0f, 1.0f, 1.0f, 1.0f});
+            spriteRenderer->color({0.8f, 0.8f, 1.0f, 1.0f});  // Light blue fallback
             spriteRenderer->sortingLayer(1);
             spriteRenderer->orderInLayer(10);
         }
         
-        // Create physics body
-        CreatePhysicsBody();
+        // Create physics body if physics world is available
+        if (physicsWorld && !physicsBody) {
+            SDL_Log("PlayerBehaviour: Creating physics body in Start()");
+            CreatePhysicsBody();
+        }
     }
     
     void Update(float deltaTime) override {
@@ -106,13 +111,52 @@ public:
     // Set the physics world reference
     void SetPhysicsWorld(AmePhysicsWorld* world) {
         physicsWorld = world;
+        SDL_Log("PlayerBehaviour: SetPhysicsWorld called with world: %p", world);
+        // Physics body will be created in Start() where GameObject is guaranteed to be valid
+    }
+    
+    // Set the player texture (called by GameManager)
+    void SetPlayerTexture(GLuint textureId) {
+        if (spriteRenderer && textureId != 0) {
+            spriteRenderer->texture(textureId);
+            // Set sprite size to match character tile dimensions (24x24)
+            spriteRenderer->size({24.0f, 24.0f});
+            spriteRenderer->color({1.0f, 1.0f, 1.0f, 1.0f});
+            spriteRenderer->sortingLayer(2);  // Above tilemap
+            spriteRenderer->orderInLayer(0);
+            
+            // Initialize UV coordinates for first frame (idle - first character)
+            // Character atlas is 9 columns x 3 rows, each tile 24x24
+            float frameWidth = 1.0f / 9.0f;
+            float frameHeight = 1.0f / 3.0f;
+            spriteRenderer->uv(0.0f, 0.0f, frameWidth, frameHeight);
+        }
     }
     
 private:
     void CreatePhysicsBody() {
-        if (!physicsWorld) return;
+        if (!physicsWorld) {
+            SDL_Log("PlayerBehaviour: Cannot create physics body - no physics world");
+            return;
+        }
+        
+        if (physicsBody) {
+            SDL_Log("PlayerBehaviour: Physics body already exists, skipping creation");
+            return;
+        }
+        
+        // Ensure we have a valid transform
+        if (!cachedTransform) {
+            SDL_Log("PlayerBehaviour: Cached transform is null, refreshing");
+            cachedTransform = &gameObject().transform();
+            if (!cachedTransform) {
+                SDL_Log("PlayerBehaviour: Still cannot get transform, aborting physics body creation");
+                return;
+            }
+        }
         
         auto pos = cachedTransform->position();
+        SDL_Log("PlayerBehaviour: Creating physics body at position (%.1f, %.1f)", pos.x, pos.y);
         physicsBody = ame_physics_create_body(
             physicsWorld, 
             pos.x, pos.y, 
@@ -121,15 +165,23 @@ private:
             false,  // Not a sensor
             nullptr
         );
+        SDL_Log("PlayerBehaviour: Physics body created: %p", physicsBody);
     }
     
     void ProcessInput() {
         // Get horizontal input
         horizontalInput = 0.0f;
-        horizontalInput = input_move_dir();
+        int inputDir = input_move_dir();
+        horizontalInput = (float)inputDir;
         
         // Get jump input (edge detection handled by input_local)
         jumpPressed = input_jump_edge();
+        
+        // Debug output (only when input is detected)
+        if (inputDir != 0 || jumpPressed) {
+            SDL_Log("PlayerBehaviour: Input - dir: %d (%.1f), jump: %d, physicsBody: %p", 
+                   inputDir, horizontalInput, jumpPressed, physicsBody);
+        }
         
         // Update facing direction
         if (horizontalInput > 0.01f) facingRight = true;
@@ -178,14 +230,27 @@ private:
     }
     
     void ApplySpriteFrame(int frame) {
-        // Assuming a sprite sheet with frames in a grid
-        // This would need to be adjusted based on actual sprite sheet layout
-        const int framesPerRow = 8;
+        // Character atlas is 9 columns x 3 rows, each character is 24x24 pixels
+        const int framesPerRow = 9;
+        const int totalRows = 3;
         const float frameWidth = 1.0f / framesPerRow;
-        const float frameHeight = 1.0f / framesPerRow;
+        const float frameHeight = 1.0f / totalRows;
         
-        int col = frame % framesPerRow;
-        int row = frame / framesPerRow;
+        // Map our animation frames to atlas positions
+        // Frame 0 (idle): First character (column 0, row 0)
+        // Frame 1-2 (walk): Use different characters for walk animation
+        // Frame 3 (jump): Another character for jump
+        int atlasFrame = 0;
+        switch (frame) {
+            case 0: atlasFrame = 0; break;  // Idle - first character
+            case 1: atlasFrame = 1; break;  // Walk frame 1 - second character  
+            case 2: atlasFrame = 2; break;  // Walk frame 2 - third character
+            case 3: atlasFrame = 3; break;  // Jump - fourth character
+            default: atlasFrame = 0; break;
+        }
+        
+        int col = atlasFrame % framesPerRow;
+        int row = atlasFrame / framesPerRow;
         
         float u0 = col * frameWidth;
         float v0 = row * frameHeight;

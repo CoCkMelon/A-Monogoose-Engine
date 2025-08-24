@@ -147,7 +147,10 @@ bool ame_tilemap_load_tmx_for_gpu(const char* tmx_path, AmeTilemapTmxLoadResult*
             uint32_t r = (uint32_t)(sign>0? v : (uint64_t)(-(int64_t)v));
             uint32_t gid = r & 0x1FFFFFFFu;
             int x = idx % lw; int y = idx / lw;
-            int di = y*lw + x; // preserve original TMX row order (no Y flip)
+            // TMX uses top-down coordinates, but engine uses bottom-left (Y-up)
+            // Flip Y coordinate to convert from TMX to engine coordinate system
+            int y_flipped = (lh - 1) - y;
+            int di = y_flipped*lw + x;
             data[di] = (int32_t)gid; raw[di] = r;
             idx++; while (q<layer_end && *q!=',' && *q!='<' ) q++; if (*q==',') q++;
         }

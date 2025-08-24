@@ -24,7 +24,7 @@ private:
     glm::vec2 currentPosition = {0.0f, 0.0f};
     
 public:
-    void Awake() override {
+    void Awake() {
         // Get or add Camera component
         camera = gameObject().TryGetComponent<Camera>();
         if (!camera) {
@@ -33,7 +33,7 @@ public:
         cachedTransform = &gameObject().transform();
     }
     
-    void Start() override {
+    void Start() {
         // Initialize camera settings
         if (camera) {
             camera->zoom(zoom);
@@ -50,7 +50,7 @@ public:
         }
     }
     
-    void LateUpdate() override {
+    void LateUpdate() {
         if (!target || !camera) return;
         
         // Get target position

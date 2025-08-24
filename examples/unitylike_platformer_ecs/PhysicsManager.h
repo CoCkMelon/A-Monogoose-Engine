@@ -3,6 +3,7 @@
 extern "C" {
 #include "ame/physics.h"
 #include "ame/tilemap_tmx.h"
+#include <SDL3/SDL.h>
 }
 #include <string>
 
@@ -20,6 +21,7 @@ public:
 private:
     static PhysicsManager* instance;
     AmePhysicsWorld* physicsWorld = nullptr;
+    bool awakeWasCalled = false;
     
 public:
     // Singleton access
@@ -29,19 +31,31 @@ public:
     }
     
     void Awake() override {
+        if (awakeWasCalled) {
+            SDL_Log("PhysicsManager: Awake already called, skipping");
+            return;
+        }
+        awakeWasCalled = true;
+        
+        SDL_Log("PhysicsManager: Awake called");
         // Set singleton instance
         if (instance != nullptr) {
+            SDL_Log("PhysicsManager: Duplicate instance found, destroying");
             // Destroy duplicate
             gameObject().scene()->Destroy(gameObject());
             return;
         }
         instance = this;
+        SDL_Log("PhysicsManager: Set as singleton instance");
+        
+        // Create physics world immediately
+        if (!physicsWorld) {
+            physicsWorld = ame_physics_world_create(gravityX, gravityY, fixedTimeStep);
+            SDL_Log("PhysicsManager: Physics world created: %p", physicsWorld);
+        }
     }
     
     void Start() override {
-        // Create physics world
-        physicsWorld = ame_physics_world_create(gravityX, gravityY, fixedTimeStep);
-        
         // Load tilemap collisions if path provided
         if (!tilemapPath.empty()) {
             LoadTilemapCollisions();

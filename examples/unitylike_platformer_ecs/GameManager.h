@@ -6,20 +6,26 @@
 #include <string>
 #include <memory>
 
+extern "C" {
+#include <SDL3/SDL.h>
+#include <SDL3_image/SDL_image.h>
+#include <glad/gl.h>
+}
+
 using namespace unitylike;
 
 // Main game manager - Unity-like pattern for scene setup
 class GameManager : public MongooseBehaviour {
 public:
     // Configuration (Inspector fields in Unity)
-    std::string tilemapPath = "examples/unitylike_pixel_platformer/Tiled/tilemap-example-a.tmx";
-    std::string playerSpritePath = "examples/kenney_pixel-platformer/brackeys_platformer_assets/sprites/knight.png";
+    std::string tilemapPath = "examples/kenney_pixel-platformer/Tiled/tilemap-example-a.tmx";
+    std::string playerSpritePath = "examples/kenney_pixel-platformer/Tilemap/tilemap-characters_packed.png";
     
     // Initial settings
     float cameraZoom = 3.0f;
     int screenWidth = 1280;
     int screenHeight = 720;
-    glm::vec2 playerStartPosition = {64.0f, 64.0f};
+    glm::vec2 playerStartPosition = {200.0f, 100.0f};
     
 private:
     GameObject playerObject;
@@ -70,11 +76,20 @@ public:
     
 private:
     void SetupPhysics() {
+        SDL_Log("GameManager: Setting up physics manager");
         physicsManagerObject = gameObject().scene()->Create("PhysicsManager");
         physicsManager = &physicsManagerObject.AddScript<PhysicsManager>();
         physicsManager->tilemapPath = tilemapPath;
         physicsManager->gravityY = -1000.0f;
         physicsManager->fixedTimeStep = 1.0f / 60.0f;
+        
+        // Force Awake call to initialize physics world immediately
+        if (physicsManager && !PhysicsManager::GetWorld()) {
+            SDL_Log("GameManager: Manually triggering physics manager Awake");
+            physicsManager->Awake();
+        }
+        
+        SDL_Log("GameManager: Physics manager created, world: %p", PhysicsManager::GetWorld());
     }
     
     void SetupTilemap() {
@@ -140,28 +155,99 @@ private:
     }
     
     void LinkComponents() {
+        SDL_Log("GameManager: Linking components");
         // Link player to physics
         if (playerBehaviour && physicsManager) {
-            playerBehaviour->SetPhysicsWorld(PhysicsManager::GetWorld());
+            AmePhysicsWorld* world = PhysicsManager::GetWorld();
+            SDL_Log("GameManager: Physics world available: %p", world);
+            playerBehaviour->SetPhysicsWorld(world);
+        } else {
+            SDL_Log("GameManager: Missing components - player: %p, physics: %p", playerBehaviour, physicsManager);
         }
         
         // Link camera to player
         if (cameraController && playerObject.id() != 0) {
             cameraController->SetTarget(&playerObject);
         }
+        
+        // Check and adjust player spawn position for collision safety
+        TestAndAdjustPlayerSpawnPosition();
     }
     
     void LoadPlayerSprite() {
-        if (!playerBehaviour) return;
-        
-        // In a real implementation, this would load the texture and assign it
-        // For now, we'll just set up the sprite renderer component
-        auto* spriteRenderer = playerObject.TryGetComponent<SpriteRenderer>();
-        if (spriteRenderer) {
-            // Texture loading would happen here
-            // spriteRenderer->texture(loadedTextureId);
-            spriteRenderer->size({16.0f, 16.0f});
-            spriteRenderer->color({1.0f, 1.0f, 1.0f, 1.0f});
+        if (!playerBehaviour) {
+            SDL_Log("GameManager: No playerBehaviour to load sprite for");
+            return;
         }
+        
+        SDL_Log("GameManager: Loading player sprite from: %s", playerSpritePath.c_str());
+        // Load the character atlas texture
+        GLuint textureId = LoadTexture(playerSpritePath.c_str());
+        SDL_Log("GameManager: Loaded texture ID: %u", textureId);
+        if (textureId != 0) {
+            // Set the texture on the player behaviour so it can configure the sprite renderer properly
+            playerBehaviour->SetPlayerTexture(textureId);
+            SDL_Log("GameManager: Player texture set successfully");
+        } else {
+            SDL_Log("GameManager: Failed to load player texture");
+        }
+    }
+    
+private:
+    void TestAndAdjustPlayerSpawnPosition() {
+        // Test if the player spawn position is safe (no collision)
+        AmePhysicsWorld* world = PhysicsManager::GetWorld();
+        if (!world) return;
+        
+        glm::vec3 currentPos = playerObject.transform().position();
+        
+        // Test current position with a small raycast downward
+        AmeRaycastHit hit = ame_physics_raycast(world, 
+                                                currentPos.x, currentPos.y + 8.0f,  // Start slightly above
+                                                currentPos.x, currentPos.y - 8.0f); // End slightly below
+        
+        if (hit.hit) {
+            // Player is spawning too close to collision, move higher
+            float safeY = hit.point_y + 32.0f; // Move 32 pixels above the collision
+            playerObject.transform().position({currentPos.x, safeY, currentPos.z});
+            SDL_Log("Player spawn adjusted to avoid collision: (%.1f, %.1f) -> (%.1f, %.1f)", 
+                   currentPos.x, currentPos.y, currentPos.x, safeY);
+        } else {
+            SDL_Log("Player spawn position is safe: (%.1f, %.1f)", currentPos.x, currentPos.y);
+        }
+    }
+    
+    GLuint LoadTexture(const char* path) {
+        SDL_Log("GameManager: Attempting to load texture: %s", path);
+        SDL_Surface* surface = IMG_Load(path);
+        if (!surface) {
+            SDL_Log("Failed to load texture %s: %s", path, SDL_GetError());
+            return 0;
+        }
+        SDL_Log("GameManager: Surface loaded successfully: %dx%d", surface->w, surface->h);
+        
+        SDL_Surface* converted = SDL_ConvertSurface(surface, SDL_PIXELFORMAT_RGBA32);
+        SDL_DestroySurface(surface);
+        
+        if (!converted) {
+            SDL_Log("Failed to convert texture %s: %s", path, SDL_GetError());
+            return 0;
+        }
+        
+        GLuint textureId = 0;
+        glGenTextures(1, &textureId);
+        glBindTexture(GL_TEXTURE_2D, textureId);
+        
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, converted->w, converted->h, 0, 
+                     GL_RGBA, GL_UNSIGNED_BYTE, converted->pixels);
+        
+        SDL_DestroySurface(converted);
+        
+        return textureId;
     }
 };

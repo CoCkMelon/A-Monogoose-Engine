@@ -240,14 +240,28 @@ namespace {
         while (ecs_query_next(&it)) {
             for (int i=0;i<it.count;i++){
                 const TilemapRefData* t = (const TilemapRefData*)ecs_get_id(w, it.entities[i], g_comp.tilemap);
-                if (!t) continue;
+                if (!t) {
+                    SDL_Log("[TILEMAP] Entity %llu has NULL TilemapRefData", (unsigned long long)it.entities[i]);
+                    continue;
+                }
+                // Debug log tilemap data
+                SDL_Log("[TILEMAP] Entity %llu: layer=%d atlas_tex=%u gid_tex=%u atlas=%dx%d tile=%dx%d firstgid=%d cols=%d map=%dx%d",
+                       (unsigned long long)it.entities[i], t->layer, t->atlas_tex, t->gid_tex,
+                       t->atlas_w, t->atlas_h, t->tile_w, t->tile_h, t->firstgid, t->columns, t->map_w, t->map_h);
                 // Only accept valid atlas/gid textures
-                if (t->gid_tex == 0 || (t->atlas_tex == 0 && t->map == nullptr)) continue;
+                if (t->gid_tex == 0 || (t->atlas_tex == 0 && t->map == nullptr)) {
+                    SDL_Log("[TILEMAP] Entity %llu skipped: invalid textures (atlas=%u gid=%u map=%p)",
+                           (unsigned long long)it.entities[i], t->atlas_tex, t->gid_tex, (void*)t->map);
+                    continue;
+                }
                 layers.push_back(TRef{ *t });
             }
         }
         ecs_query_fini(q);
-        if (layers.empty()) return;
+        if (layers.empty()) {
+            SDL_Log("[TILEMAP] No valid tilemap layers found for rendering");
+            return;
+        }
         std::sort(layers.begin(), layers.end(), [](const TRef& a, const TRef& b){ return a.data.layer < b.data.layer; });
         // Build RP layers (cap at 16)
         AmeRP_TileLayer rp[16]; int cnt = (int)layers.size(); if (cnt>16) cnt=16;
@@ -375,7 +389,8 @@ void ame_rp_run_ecs(ecs_world_t* w) {
                                        -100.0f, 100.0f);
     
     // Render tilemaps first (background) via shared compositor in one pass
-    render_tilemap_layers_batch(w, cam.x, cam.y, cam.zoom, cam.viewport_w, cam.viewport_h, &dc_draw_calls);
+    // Use target position for consistent camera positioning
+    render_tilemap_layers_batch(w, cam.target_x, cam.target_y, cam.zoom, cam.viewport_w, cam.viewport_h, &dc_draw_calls);
     
     // Collect and batch sprites
     std::vector<SpriteBatch> batches;
