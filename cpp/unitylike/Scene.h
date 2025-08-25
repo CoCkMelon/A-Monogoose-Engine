@@ -61,7 +61,7 @@ extern CompIds g_comp;
 // Internal component PODs (façade data stored in ECS)
 struct Scale2D { float sx; float sy; };
 struct SpriteData { std::uint32_t tex; float u0,v0,u1,v1; float w,h; float r,g,b,a; int visible; int sorting_layer; int order_in_layer; float z; int dirty; };
-struct MaterialData { float r,g,b,a; int dirty; };
+struct MaterialData { std::uint32_t tex; float r,g,b,a; int dirty; };
 struct TilemapRefData {
     AmeTilemap* map; // pointer to CPU-side map (layer0 data)
     int layer;       // layer index in source TMX
@@ -352,8 +352,11 @@ static_assert(
         sr = SpriteRenderer{ *this };
         return sr;
     } else if constexpr (std::is_same_v<T, Material>) {
-        struct MaterialData { float r,g,b,a; } m{1,1,1,1};
-        ecs_set_id(w, (ecs_entity_t)e_, g_comp.material, sizeof(m), &m);
+        MaterialData m{};
+        m.tex = 0;
+        m.r = 1.0f; m.g = 1.0f; m.b = 1.0f; m.a = 1.0f;
+        m.dirty = 1;
+        ecs_set_id(w, (ecs_entity_t)e_, g_comp.material, sizeof(MaterialData), &m);
         static thread_local Material mat{ GameObject() };
         mat = Material{ *this };
         return mat;

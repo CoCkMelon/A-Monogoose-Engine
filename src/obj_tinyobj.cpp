@@ -17,10 +17,13 @@
 #include <sstream>
 #include <ctime>
 #include <unistd.h>
+#include <limits.h>
 
 // Mirror PODs used in engine registration (avoid C++ includes of facade headers)
 typedef struct MeshData { const float* pos; const float* uv; const float* col; size_t count; } MeshData;
 typedef struct Col2D { int type; float w,h; float radius; int isTrigger; int dirty; } Col2D;
+typedef struct MaterialData { uint32_t tex; float r,g,b,a; int dirty; } MaterialData;
+typedef struct MaterialTexPath { const char* path; } MaterialTexPath;
 // Extended collider PODs for additional collider types
 // EdgeCollider2D: a single segment
 typedef struct EdgeCol2D { float x1,y1,x2,y2; int isTrigger; int dirty; } EdgeCol2D;
@@ -52,6 +55,8 @@ AmeObjImportResult ame_obj_import_obj(ecs_world_t* w, const char* filepath, cons
     ecs_entity_t comp_mesh = ensure_comp(w, "Mesh", (int)sizeof(MeshData), (int)alignof(MeshData));
     ecs_entity_t comp_col  = ensure_comp(w, "Collider2D", (int)sizeof(Col2D), (int)alignof(Col2D));
     ecs_entity_t comp_tr   = ensure_comp(w, "AmeTransform2D", (int)sizeof(AmeTransform2D), (int)alignof(AmeTransform2D));
+    ecs_entity_t comp_mat  = ensure_comp(w, "Material", (int)sizeof(MaterialData), (int)alignof(MaterialData));
+    ecs_entity_t comp_mtl_path = ensure_comp(w, "MaterialTexPath", (int)sizeof(MaterialTexPath), (int)alignof(MaterialTexPath));
     // Extended colliders
     ecs_entity_t comp_edge = ensure_comp(w, "EdgeCollider2D", (int)sizeof(EdgeCol2D), (int)alignof(EdgeCol2D));
     ecs_entity_t comp_chain = ensure_comp(w, "ChainCollider2D", (int)sizeof(ChainCol2D), (int)alignof(ChainCol2D));
@@ -67,7 +72,27 @@ AmeObjImportResult ame_obj_import_obj(ecs_world_t* w, const char* filepath, cons
     reader_config.triangulate = true;
     reader_config.vertex_color = false;
 
-    // Read file and escape spaces in mtllib filename tokens to allow tinyobj to find materials.
+    // Determine absolute base directory for resolving mtllib and texture paths
+    std::string abs_base_dir;
+    {
+        char realbuf[PATH_MAX];
+        if (realpath(filepath, realbuf)) {
+            std::string fp(realbuf);
+            size_t p = fp.find_last_of('/');
+            if (p != std::string::npos) abs_base_dir = fp.substr(0, p);
+        } else {
+            // Fallback: use CWD + relative dirname of filepath
+            char cwd[PATH_MAX];
+            if (getcwd(cwd, sizeof(cwd))) {
+                std::string fp(filepath);
+                size_t p = fp.find_last_of("/\\");
+                if (p != std::string::npos) abs_base_dir = std::string(cwd) + "/" + fp.substr(0, p);
+                else abs_base_dir = std::string(cwd);
+            }
+        }
+    }
+
+    // Read file, and rewrite mtllib with absolute/relative directory prefix; escape spaces in filenames
     std::ifstream ifs(filepath);
     if (!ifs) {
         std::fprintf(stderr, "[OBJ] Failed to open %s\n", filepath);
@@ -75,17 +100,21 @@ AmeObjImportResult ame_obj_import_obj(ecs_world_t* w, const char* filepath, cons
     }
     std::ostringstream obj_ss;
     std::string line_in;
+    std::string mtl_full_path; // capture first mtllib full path
     while (std::getline(ifs, line_in)) {
         size_t start = 0; while (start < line_in.size() && (line_in[start] == ' ' || line_in[start] == '\t')) start++;
         if (line_in.compare(start, 6, "mtllib") == 0 && (start + 6 == line_in.size() || line_in[start+6] == ' ' || line_in[start+6] == '\t')) {
-            // Escape spaces after 'mtllib ' so tinyobj treats as one filename
+            // Rebuild mtllib with directory prefix so tinyobj can find the .mtl even from /tmp
             size_t pos = start + 6;
-            // Skip whitespace
             while (pos < line_in.size() && (line_in[pos] == ' ' || line_in[pos] == '\t')) pos++;
             std::string rest = (pos < line_in.size()) ? line_in.substr(pos) : std::string();
-            for (size_t i = 0; i < rest.size(); ++i) {
-                if (rest[i] == ' ') obj_ss << "\\ ";
-                else obj_ss << rest[i];
+            // Trim trailing whitespace/newline
+            while (!rest.empty() && (rest.back()=='\r' || rest.back()=='\n' || rest.back()==' ' || rest.back()=='\t')) rest.pop_back();
+            std::string full = abs_base_dir.empty() ? rest : (abs_base_dir + "/" + rest);
+            if (mtl_full_path.empty()) mtl_full_path = full;
+            obj_ss << "mtllib ";
+            for (size_t i = 0; i < full.size(); ++i) {
+                if (full[i] == ' ') obj_ss << "\\ "; else obj_ss << full[i];
             }
             obj_ss << '\n';
             continue;
@@ -93,42 +122,44 @@ AmeObjImportResult ame_obj_import_obj(ecs_world_t* w, const char* filepath, cons
         obj_ss << line_in << '\n';
     }
 
-    // Write to a temporary file so tinyobj can load external .mtl using search path
-    std::string tmp_path = "/tmp/ame_obj_tmp_" + std::to_string((unsigned long long)time(NULL)) + "_" + std::to_string((unsigned long long)getpid()) + ".obj";
-    {
-        std::ofstream ofs(tmp_path.c_str(), std::ios::binary);
-        if (!ofs) {
-            std::fprintf(stderr, "[OBJ] Failed to write temp obj %s\n", tmp_path.c_str());
+    tinyobj::ObjReader reader;
+    bool parsed = false;
+    if (!mtl_full_path.empty()) {
+        // Try in-memory parse with embedded .mtl content to avoid search path issues
+        std::ifstream mifs(mtl_full_path.c_str());
+        if (mifs) {
+            std::ostringstream mtl_ss;
+            mtl_ss << mifs.rdbuf();
+            parsed = reader.ParseFromString(obj_ss.str(), mtl_ss.str(), reader_config);
+        }
+    }
+    if (!parsed) {
+        // Fallback: write temp OBJ and let tinyobj search relative to that file
+        std::string tmp_path = "/tmp/ame_obj_tmp_" + std::to_string((unsigned long long)time(NULL)) + "_" + std::to_string((unsigned long long)getpid()) + ".obj";
+        {
+            std::ofstream ofs(tmp_path.c_str(), std::ios::binary);
+            if (!ofs) {
+                std::fprintf(stderr, "[OBJ] Failed to write temp obj %s\n", tmp_path.c_str());
+                return res;
+            }
+            ofs << obj_ss.str();
+        }
+        if (!reader.ParseFromFile(tmp_path, reader_config)) {
+            if (!reader.Error().empty()) {
+                std::fprintf(stderr, "[OBJ] tinyobj error: %s\n", reader.Error().c_str());
+            }
+            std::remove(tmp_path.c_str());
             return res;
         }
-        ofs << obj_ss.str();
-    }
-
-    // Set search path to original directory for .mtl lookup
-    std::string mtl_search;
-    {
-        std::string fp(filepath);
-        size_t p = fp.find_last_of("/\\");
-        if (p != std::string::npos) mtl_search = fp.substr(0, p);
-    }
-    // tinyobj::ObjReaderConfig has mtl_search_path in newer versions, but our header shows only triangulate & vertex_color
-    // so we rely on ParseFromFile and the path embedded in mtllib.
-
-    tinyobj::ObjReader reader;
-    if (!reader.ParseFromFile(tmp_path, reader_config)) {
-        if (!reader.Error().empty()) {
-            std::fprintf(stderr, "[OBJ] tinyobj error: %s\n", reader.Error().c_str());
-        }
         std::remove(tmp_path.c_str());
-        return res;
     }
-    std::remove(tmp_path.c_str());
     if (!reader.Warning().empty()) {
         std::fprintf(stderr, "[OBJ] tinyobj warning: %s\n", reader.Warning().c_str());
     }
 
     const auto& attrib = reader.GetAttrib();
     const auto& shapes = reader.GetShapes();
+    const auto& materials = reader.GetMaterials();
 
     for (size_t s = 0; s < shapes.size(); s++) {
         const auto& shape = shapes[s];
@@ -176,6 +207,29 @@ AmeObjImportResult ame_obj_import_obj(ecs_world_t* w, const char* filepath, cons
         ecs_entity_t e = ecs_entity_init(w, &ed);
         ecs_add_pair(w, e, EcsChildOf, res.root);
         AmeTransform2D tr = {0}; ecs_set_id(w, e, comp_tr, sizeof tr, &tr);
+        
+        // If this shape references a material, set up Material component and record texture path if any
+        int shape_mat_id = -1;
+        if (!shape.mesh.material_ids.empty()) {
+            // Use the first face's material id (assuming one per shape for simplicity)
+            shape_mat_id = shape.mesh.material_ids[0];
+        }
+        if (shape_mat_id >= 0 && (size_t)shape_mat_id < materials.size()) {
+            const tinyobj::material_t& mt = materials[(size_t)shape_mat_id];
+            MaterialData md = {0};
+            md.tex = 0; // not loaded here
+            md.r = mt.diffuse[0]; md.g = mt.diffuse[1]; md.b = mt.diffuse[2]; md.a = 1.0f; md.dirty = 1;
+            ecs_set_id(w, e, comp_mat, sizeof md, &md);
+            if (!mt.diffuse_texname.empty()) {
+                // Build absolute path relative to OBJ directory
+                std::string full_tex = (!abs_base_dir.empty() ? (abs_base_dir + "/" + mt.diffuse_texname) : mt.diffuse_texname);
+                // Store a heap-allocated copy in ECS (ownership by ECS/user)
+                char* cpy = (char*)malloc(full_tex.size()+1);
+                std::memcpy(cpy, full_tex.c_str(), full_tex.size()+1);
+                MaterialTexPath mp{ cpy };
+                ecs_set_id(w, e, comp_mtl_path, sizeof mp, &mp);
+            }
+        }
 
         // Collider inference
         bool added_collider = false;

@@ -211,11 +211,12 @@ namespace {
             #version 450 core
             out vec2 v_uv;
             void main(){
-                // Fullscreen triangle
-                vec2 pos = vec2((gl_VertexID == 0) ? -1.0 : 3.0,
-                                 (gl_VertexID == 2) ? 3.0 : -1.0);
+                // Fullscreen triangle (standard pattern)
+                vec2 pos;
+                if (gl_VertexID == 0) { pos = vec2(-1.0, -1.0); v_uv = vec2(0.0, 0.0); }
+                else if (gl_VertexID == 1) { pos = vec2( 3.0, -1.0); v_uv = vec2(2.0, 0.0); }
+                else { pos = vec2(-1.0,  3.0); v_uv = vec2(0.0, 2.0); }
                 gl_Position = vec4(pos, 0.0, 1.0);
-                v_uv = pos * 0.5 + 0.5;
             }
         )";
         const char* comp_fs = R"(
@@ -326,10 +327,15 @@ namespace {
         glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, tw, th, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
         glBindTexture(GL_TEXTURE_2D, 0);
         glGenFramebuffers(1, &g_mesh_fbo);
         glBindFramebuffer(GL_FRAMEBUFFER, g_mesh_fbo);
         glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, g_mesh_color_tex, 0);
+        // Explicitly set draw buffer for user FBOs to avoid rendering to NONE on some drivers
+        GLenum bufs[1] = { GL_COLOR_ATTACHMENT0 };
+        glDrawBuffers(1, bufs);
         GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
         glBindFramebuffer(GL_FRAMEBUFFER, 0);
         if (status != GL_FRAMEBUFFER_COMPLETE) {
@@ -666,8 +672,10 @@ void ame_rp_run_ecs(ecs_world_t* w) {
 
                 GLuint texture_id = g_white_texture;
                 SpriteData* sdata = (SpriteData*)ecs_get_id(w, mit.entities[i], g_comp.sprite);
+                MaterialData* mtl = (MaterialData*)ecs_get_id(w, mit.entities[i], g_comp.material);
                 float cr=1, cg=1, cb=1, ca=1;
-                if (sdata) { if (sdata->tex) texture_id = sdata->tex; cr=sdata->r; cg=sdata->g; cb=sdata->b; ca=sdata->a; }
+                if (mtl) { if (mtl->tex) texture_id = mtl->tex; cr *= mtl->r; cg *= mtl->g; cb *= mtl->b; ca *= mtl->a; }
+                if (sdata) { if (sdata->tex) texture_id = sdata->tex; cr*=sdata->r; cg*=sdata->g; cb*=sdata->b; ca*=sdata->a; }
                 // Determine parallax factor (1=no parallax). Prefer name prefix Parallax_x.xx, otherwise derive from sprite.z if present.
                 float parallax = 1.0f;
                 const char* name = ecs_get_name(w, mit.entities[i]);
@@ -706,6 +714,7 @@ void ame_rp_run_ecs(ecs_world_t* w) {
                 glActiveTexture(GL_TEXTURE0); glBindTexture(GL_TEXTURE_2D, texture_id);
                 glUniform1i(g_mesh_tex_loc, 0);
                 glDrawArrays(GL_TRIANGLES, 0, (GLsizei)vc);
+                dc_draw_calls++;
                 glBindBuffer(GL_ARRAY_BUFFER, 0); glBindVertexArray(0);
                 glDeleteBuffers(1,&vbo); glDeleteVertexArrays(1,&vao);
             }
@@ -721,6 +730,7 @@ void ame_rp_run_ecs(ecs_world_t* w) {
         if (!g_composite_vao) { glGenVertexArrays(1, &g_composite_vao); }
         glBindVertexArray(g_composite_vao);
         glDrawArrays(GL_TRIANGLES, 0, 3);
+        dc_draw_calls++;
         glBindVertexArray(0);
     }
 

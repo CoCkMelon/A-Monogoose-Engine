@@ -51,7 +51,6 @@ void ensure_components_registered(ecs_world_t* w) {
     }
     // Material
     if (g_comp.material == 0) {
-        struct MaterialData { float r,g,b,a; int dirty; };
         ecs_component_desc_t cdp = (ecs_component_desc_t){0};
         ecs_entity_desc_t edp = {0}; edp.name = "Material";
         cdp.entity = ecs_entity_init(w, &edp);
