@@ -33,6 +33,7 @@ namespace {
     // Composite shader to draw the mesh target to the default framebuffer
     static GLuint g_composite_prog = 0;
     static GLint g_comp_tex_loc = -1;
+    static GLuint g_composite_vao = 0; // dummy VAO for gl_VertexID-based draw
     
     // Shader program for tilemap rendering
     static GLuint g_tilemap_prog = 0;
@@ -230,6 +231,7 @@ namespace {
             GLuint fs = compile(GL_FRAGMENT_SHADER, comp_fs);
             g_composite_prog = glCreateProgram(); glAttachShader(g_composite_prog, vs); glAttachShader(g_composite_prog, fs); glLinkProgram(g_composite_prog); glDeleteShader(vs); glDeleteShader(fs);
             g_comp_tex_loc = glGetUniformLocation(g_composite_prog, "u_tex");
+            if (!g_composite_vao) { glGenVertexArrays(1, &g_composite_vao); }
         }
         
         // Tilemap shader - fullscreen approach
@@ -716,7 +718,10 @@ void ame_rp_run_ecs(ecs_world_t* w) {
         glUseProgram(g_composite_prog);
         glActiveTexture(GL_TEXTURE0); glBindTexture(GL_TEXTURE_2D, g_mesh_color_tex);
         glUniform1i(g_comp_tex_loc, 0);
+        if (!g_composite_vao) { glGenVertexArrays(1, &g_composite_vao); }
+        glBindVertexArray(g_composite_vao);
         glDrawArrays(GL_TRIANGLES, 0, 3);
+        glBindVertexArray(0);
     }
 
     // Render all sprite batches
