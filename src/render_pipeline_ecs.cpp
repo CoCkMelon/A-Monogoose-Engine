@@ -22,6 +22,15 @@ namespace {
     static GLuint g_sprite_prog = 0;
     static GLint g_sprite_mvp_loc = -1;
     static GLint g_sprite_tex_loc = -1;
+
+    // Mesh pass shader (positions + uv + color), rendered into offscreen target
+    static GLuint g_mesh_prog = 0;
+    static GLint g_mesh_mvp_loc = -1;
+    static GLint g_mesh_tex_loc = -1;
+
+    // Composite shader to draw the mesh target to the default framebuffer
+    static GLuint g_composite_prog = 0;
+    static GLint g_comp_tex_loc = -1;
     
     // Shader program for tilemap rendering
     static GLuint g_tilemap_prog = 0;
@@ -45,8 +54,15 @@ namespace {
         float z;
     };
     
-    // White fallback texture for sprites without textures
+    // White fallback texture for sprites
     static GLuint g_white_texture = 0;
+
+    // Offscreen target for mesh pass (supersampled to be downscaled)
+    static GLuint g_mesh_fbo = 0;
+    static GLuint g_mesh_color_tex = 0;
+    static int g_mesh_target_w = 0;
+    static int g_mesh_target_h = 0;
+    static int g_mesh_supersample = 2; // render meshes at 2x resolution, then downscale
     
     // Create a white fallback texture
     static void init_white_texture() {
@@ -100,7 +116,7 @@ namespace {
     
     // Initialize shaders once
     static void init_shaders() {
-        if (g_sprite_prog != 0) return;
+        if (g_sprite_prog != 0 && g_mesh_prog != 0 && g_composite_prog != 0) return;
         
         // Sprite shader
         const char* sprite_vs = R"(
@@ -152,6 +168,64 @@ namespace {
         
         g_sprite_mvp_loc = glGetUniformLocation(g_sprite_prog, "u_mvp");
         g_sprite_tex_loc = glGetUniformLocation(g_sprite_prog, "u_tex");
+
+        // Mesh shader (very similar to sprite shader but without parallax)
+        const char* mesh_vs = R"(
+            #version 450 core
+            layout(location=0) in vec2 a_pos;
+            layout(location=1) in vec2 a_uv;
+            layout(location=2) in vec4 a_color;
+            uniform mat4 u_mvp;
+            out vec2 v_uv;
+            out vec4 v_color;
+            void main() {
+                gl_Position = u_mvp * vec4(a_pos, 0.0, 1.0);
+                v_uv = a_uv;
+                v_color = a_color;
+            }
+        )";
+        const char* mesh_fs = R"(
+            #version 450 core
+            in vec2 v_uv;
+            in vec4 v_color;
+            uniform sampler2D u_tex;
+            out vec4 frag_color;
+            void main(){ frag_color = texture(u_tex, v_uv) * v_color; }
+        )";
+        {
+            auto compile = [](GLenum t, const char* s){ GLuint sh=glCreateShader(t); glShaderSource(sh,1,&s,nullptr); glCompileShader(sh); return sh; };
+            GLuint vs = compile(GL_VERTEX_SHADER, mesh_vs);
+            GLuint fs = compile(GL_FRAGMENT_SHADER, mesh_fs);
+            g_mesh_prog = glCreateProgram(); glAttachShader(g_mesh_prog, vs); glAttachShader(g_mesh_prog, fs); glLinkProgram(g_mesh_prog); glDeleteShader(vs); glDeleteShader(fs);
+            g_mesh_mvp_loc = glGetUniformLocation(g_mesh_prog, "u_mvp");
+            g_mesh_tex_loc = glGetUniformLocation(g_mesh_prog, "u_tex");
+        }
+
+        // Composite shader (draw a full-screen quad)
+        const char* comp_vs = R"(
+            #version 450 core
+            const vec2 verts[4] = vec2[4]( vec2(-1,-1), vec2(1,-1), vec2(1,1), vec2(-1,1) );
+            const vec2 uvs[4] = vec2[4]( vec2(0,0), vec2(1,0), vec2(1,1), vec2(0,1) );
+            out vec2 v_uv;
+            void main(){
+                v_uv = uvs[gl_VertexID];
+                gl_Position = vec4(verts[gl_VertexID], 0.0, 1.0);
+            }
+        )";
+        const char* comp_fs = R"(
+            #version 450 core
+            in vec2 v_uv;
+            uniform sampler2D u_tex;
+            out vec4 frag_color;
+            void main(){ frag_color = texture(u_tex, v_uv); }
+        )";
+        {
+            auto compile = [](GLenum t, const char* s){ GLuint sh=glCreateShader(t); glShaderSource(sh,1,&s,nullptr); glCompileShader(sh); return sh; };
+            GLuint vs = compile(GL_VERTEX_SHADER, comp_vs);
+            GLuint fs = compile(GL_FRAGMENT_SHADER, comp_fs);
+            g_composite_prog = glCreateProgram(); glAttachShader(g_composite_prog, vs); glAttachShader(g_composite_prog, fs); glLinkProgram(g_composite_prog); glDeleteShader(vs); glDeleteShader(fs);
+            g_comp_tex_loc = glGetUniformLocation(g_composite_prog, "u_tex");
+        }
         
         // Tilemap shader - fullscreen approach
         const char* tilemap_vs = R"(
@@ -233,6 +307,32 @@ namespace {
     static GLint g_tilemap_camera_loc = -1;
     static GLint g_tilemap_viewport_loc = -1;
     
+    // Ensure offscreen mesh target allocated
+    static void ensure_mesh_target(int viewport_w, int viewport_h) {
+        int tw = viewport_w * g_mesh_supersample;
+        int th = viewport_h * g_mesh_supersample;
+        if (tw == g_mesh_target_w && th == g_mesh_target_h && g_mesh_fbo && g_mesh_color_tex) return;
+        if (g_mesh_color_tex) { glDeleteTextures(1, &g_mesh_color_tex); g_mesh_color_tex = 0; }
+        if (g_mesh_fbo) { glDeleteFramebuffers(1, &g_mesh_fbo); g_mesh_fbo = 0; }
+        glGenTextures(1, &g_mesh_color_tex);
+        glBindTexture(GL_TEXTURE_2D, g_mesh_color_tex);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, tw, th, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        glBindTexture(GL_TEXTURE_2D, 0);
+        glGenFramebuffers(1, &g_mesh_fbo);
+        glBindFramebuffer(GL_FRAMEBUFFER, g_mesh_fbo);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, g_mesh_color_tex, 0);
+        GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        if (status != GL_FRAMEBUFFER_COMPLETE) {
+            SDL_Log("[RP] Mesh FBO incomplete: 0x%x", status);
+            g_mesh_target_w = g_mesh_target_h = 0;
+        } else {
+            g_mesh_target_w = tw; g_mesh_target_h = th;
+        }
+    }
+
     // Render tilemap via shared compositor: gather layers and submit in one call
     static void render_tilemap_layers_batch(ecs_world_t* w, float cam_x, float cam_y, float cam_zoom,
                                             int viewport_w, int viewport_h, int* draw_calls) {
@@ -532,9 +632,19 @@ void ame_rp_run_ecs(ecs_world_t* w) {
                                    info.sprite.r, info.sprite.g, info.sprite.b, info.sprite.a});
     }
     
-    // TODO: Mesh rendering: append MeshData triangles into batches (texture 0) similar to sprites
-    // Query mesh data and send to batches (positions assumed 2D; z defaults to 1)
-    {
+    // Mesh rendering pass: render MeshData to offscreen target at higher resolution
+    // Then composite to screen before drawing sprites/tilemaps on top
+    ensure_mesh_target(cam.viewport_w, cam.viewport_h);
+    if (g_mesh_fbo && g_mesh_color_tex && g_mesh_target_w > 0 && g_mesh_target_h > 0) {
+        glBindFramebuffer(GL_FRAMEBUFFER, g_mesh_fbo);
+        glViewport(0, 0, g_mesh_target_w, g_mesh_target_h);
+        glDisable(GL_BLEND);
+        glClearColor(0,0,0,0);
+        glClear(GL_COLOR_BUFFER_BIT);
+
+        glUseProgram(g_mesh_prog);
+        glUniformMatrix4fv(g_mesh_mvp_loc, 1, GL_FALSE, glm::value_ptr(projection));
+
         ecs_query_desc_t mesh_qd = {};
         mesh_qd.terms[0].id = g_comp.mesh;
         mesh_qd.terms[1].id = g_comp.transform;
@@ -545,35 +655,46 @@ void ame_rp_run_ecs(ecs_world_t* w) {
                 MeshData* mr = (MeshData*)ecs_get_id(w, mit.entities[i], g_comp.mesh);
                 AmeTransform2D* tr = (AmeTransform2D*)ecs_get_id(w, mit.entities[i], g_comp.transform);
                 if (!mr || !tr || mr->count == 0 || !mr->pos) continue;
-                // Choose texture: prefer SpriteData on same entity, else white
+
                 GLuint texture_id = g_white_texture;
                 SpriteData* sdata = (SpriteData*)ecs_get_id(w, mit.entities[i], g_comp.sprite);
-                if (sdata && sdata->visible && sdata->tex != 0) {
-                    texture_id = sdata->tex;
-                }
-                SpriteBatch* batch = nullptr;
-                auto itb = batch_map.find(texture_id);
-                if (itb == batch_map.end()) {
-                    batches.emplace_back(); batch = &batches.back(); dc_batches++;
-                    batch->texture = texture_id; batch->layer = 0; batch->z = 1.0f;
-                    batch_map[texture_id] = batch;
-                } else batch = itb->second;
-                // Append triangles (assume triangles, positions as XY, uv optional)
-                size_t vc = mr->count;
-                const float* pos = mr->pos;
-                const float* uv = mr->uv;
                 float cr=1, cg=1, cb=1, ca=1;
-                if (sdata) { cr = sdata->r; cg = sdata->g; cb = sdata->b; ca = sdata->a; }
+                if (sdata) { if (sdata->tex) texture_id = sdata->tex; cr=sdata->r; cg=sdata->g; cb=sdata->b; ca=sdata->a; }
+
+                // Build interleaved buffer: pos(2), uv(2), col(4)
+                size_t vc = mr->count;
+                std::vector<float> buf; buf.reserve(vc * 8);
+                const float* pos = mr->pos; const float* uv = mr->uv;
                 for (size_t v = 0; v < vc; ++v) {
-                    float px = pos[v*2+0];
-                    float py = pos[v*2+1];
-                    float u = uv ? uv[v*2+0] : 0.0f;
-                    float vuv = uv ? uv[v*2+1] : 0.0f;
-                    batch->vertices.push_back({px, py, 0.0f, u, vuv, cr,cg,cb,ca});
+                    float px = pos[v*2+0]; float py = pos[v*2+1];
+                    float u = uv ? uv[v*2+0] : 0.0f; float vv = uv ? uv[v*2+1] : 0.0f;
+                    buf.push_back(px); buf.push_back(py);
+                    buf.push_back(u); buf.push_back(vv);
+                    buf.push_back(cr); buf.push_back(cg); buf.push_back(cb); buf.push_back(ca);
                 }
+                GLuint vao=0, vbo=0; glGenVertexArrays(1,&vao); glBindVertexArray(vao);
+                glGenBuffers(1,&vbo); glBindBuffer(GL_ARRAY_BUFFER, vbo);
+                glBufferData(GL_ARRAY_BUFFER, buf.size()*sizeof(float), buf.data(), GL_DYNAMIC_DRAW);
+                glEnableVertexAttribArray(0); glVertexAttribPointer(0,2,GL_FLOAT,GL_FALSE, sizeof(float)*8, (void*)0);
+                glEnableVertexAttribArray(1); glVertexAttribPointer(1,2,GL_FLOAT,GL_FALSE, sizeof(float)*8, (void*)(sizeof(float)*2));
+                glEnableVertexAttribArray(2); glVertexAttribPointer(2,4,GL_FLOAT,GL_FALSE, sizeof(float)*8, (void*)(sizeof(float)*4));
+
+                glActiveTexture(GL_TEXTURE0); glBindTexture(GL_TEXTURE_2D, texture_id);
+                glUniform1i(g_mesh_tex_loc, 0);
+                glDrawArrays(GL_TRIANGLES, 0, (GLsizei)vc);
+                glBindBuffer(GL_ARRAY_BUFFER, 0); glBindVertexArray(0);
+                glDeleteBuffers(1,&vbo); glDeleteVertexArrays(1,&vao);
             }
         }
         ecs_query_fini(mesh_q);
+
+        // Composite to default framebuffer
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        glViewport(0, 0, cam.viewport_w, cam.viewport_h);
+        glUseProgram(g_composite_prog);
+        glActiveTexture(GL_TEXTURE0); glBindTexture(GL_TEXTURE_2D, g_mesh_color_tex);
+        glUniform1i(g_comp_tex_loc, 0);
+        glDrawArrays(GL_TRIANGLE_FAN, 0, 4);
     }
 
     // Render all sprite batches
