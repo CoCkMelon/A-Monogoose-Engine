@@ -208,12 +208,13 @@ namespace {
         // Composite shader (draw a full-screen quad)
         const char* comp_vs = R"(
             #version 450 core
-            const vec2 verts[4] = vec2[4]( vec2(-1,-1), vec2(1,-1), vec2(1,1), vec2(-1,1) );
-            const vec2 uvs[4] = vec2[4]( vec2(0,0), vec2(1,0), vec2(1,1), vec2(0,1) );
             out vec2 v_uv;
             void main(){
-                v_uv = uvs[gl_VertexID];
-                gl_Position = vec4(verts[gl_VertexID], 0.0, 1.0);
+                // Fullscreen triangle
+                vec2 pos = vec2((gl_VertexID == 0) ? -1.0 : 3.0,
+                                 (gl_VertexID == 2) ? 3.0 : -1.0);
+                gl_Position = vec4(pos, 0.0, 1.0);
+                v_uv = pos * 0.5 + 0.5;
             }
         )";
         const char* comp_fs = R"(
@@ -715,7 +716,7 @@ void ame_rp_run_ecs(ecs_world_t* w) {
         glUseProgram(g_composite_prog);
         glActiveTexture(GL_TEXTURE0); glBindTexture(GL_TEXTURE_2D, g_mesh_color_tex);
         glUniform1i(g_comp_tex_loc, 0);
-        glDrawArrays(GL_TRIANGLE_FAN, 0, 4);
+        glDrawArrays(GL_TRIANGLES, 0, 3);
     }
 
     // Render all sprite batches
