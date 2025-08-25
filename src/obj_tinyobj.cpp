@@ -15,6 +15,8 @@
 #include <cstdlib>
 #include <fstream>
 #include <sstream>
+#include <ctime>
+#include <unistd.h>
 
 // Mirror PODs used in engine registration (avoid C++ includes of facade headers)
 typedef struct MeshData { const float* pos; const float* uv; const float* col; size_t count; } MeshData;
@@ -65,7 +67,7 @@ AmeObjImportResult ame_obj_import_obj(ecs_world_t* w, const char* filepath, cons
     reader_config.triangulate = true;
     reader_config.vertex_color = false;
 
-    // Read file and strip mtllib lines to avoid issues with spaces in material filenames.
+    // Read file and escape spaces in mtllib filename tokens to allow tinyobj to find materials.
     std::ifstream ifs(filepath);
     if (!ifs) {
         std::fprintf(stderr, "[OBJ] Failed to open %s\n", filepath);
@@ -74,22 +76,53 @@ AmeObjImportResult ame_obj_import_obj(ecs_world_t* w, const char* filepath, cons
     std::ostringstream obj_ss;
     std::string line_in;
     while (std::getline(ifs, line_in)) {
-        // Trim leading spaces
         size_t start = 0; while (start < line_in.size() && (line_in[start] == ' ' || line_in[start] == '\t')) start++;
         if (line_in.compare(start, 6, "mtllib") == 0 && (start + 6 == line_in.size() || line_in[start+6] == ' ' || line_in[start+6] == '\t')) {
-            // Skip mtllib line entirely (we don't use materials in 2D importer)
+            // Escape spaces after 'mtllib ' so tinyobj treats as one filename
+            size_t pos = start + 6;
+            // Skip whitespace
+            while (pos < line_in.size() && (line_in[pos] == ' ' || line_in[pos] == '\t')) pos++;
+            std::string rest = (pos < line_in.size()) ? line_in.substr(pos) : std::string();
+            for (size_t i = 0; i < rest.size(); ++i) {
+                if (rest[i] == ' ') obj_ss << "\\ ";
+                else obj_ss << rest[i];
+            }
+            obj_ss << '\n';
             continue;
         }
         obj_ss << line_in << '\n';
     }
 
+    // Write to a temporary file so tinyobj can load external .mtl using search path
+    std::string tmp_path = "/tmp/ame_obj_tmp_" + std::to_string((unsigned long long)time(NULL)) + "_" + std::to_string((unsigned long long)getpid()) + ".obj";
+    {
+        std::ofstream ofs(tmp_path.c_str(), std::ios::binary);
+        if (!ofs) {
+            std::fprintf(stderr, "[OBJ] Failed to write temp obj %s\n", tmp_path.c_str());
+            return res;
+        }
+        ofs << obj_ss.str();
+    }
+
+    // Set search path to original directory for .mtl lookup
+    std::string mtl_search;
+    {
+        std::string fp(filepath);
+        size_t p = fp.find_last_of("/\\");
+        if (p != std::string::npos) mtl_search = fp.substr(0, p);
+    }
+    // tinyobj::ObjReaderConfig has mtl_search_path in newer versions, but our header shows only triangulate & vertex_color
+    // so we rely on ParseFromFile and the path embedded in mtllib.
+
     tinyobj::ObjReader reader;
-    if (!reader.ParseFromString(obj_ss.str(), std::string(), reader_config)) {
+    if (!reader.ParseFromFile(tmp_path, reader_config)) {
         if (!reader.Error().empty()) {
             std::fprintf(stderr, "[OBJ] tinyobj error: %s\n", reader.Error().c_str());
         }
+        std::remove(tmp_path.c_str());
         return res;
     }
+    std::remove(tmp_path.c_str());
     if (!reader.Warning().empty()) {
         std::fprintf(stderr, "[OBJ] tinyobj warning: %s\n", reader.Warning().c_str());
     }
