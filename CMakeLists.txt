@@ -214,6 +214,9 @@ if(AME_BUILD_EXAMPLES)
   # Example: flecs_script_scene (script-defined scene rendered with GL)
   add_executable(flecs_script_scene examples/flecs_script_scene/main.c)
 
+  # Example: obj_loading (OBJ importer, 2D rendering via ECS pipeline)
+  add_subdirectory(examples/obj_loading)
+
   # Example: tilemap_render (Tiled JSON tilemap rendering)
   add_executable(tilemap_render examples/tilemap_render/main.c)
 
