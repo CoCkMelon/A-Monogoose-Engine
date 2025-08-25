@@ -72,7 +72,7 @@ static SDL_AppResult init_app(void) {
     // Import an OBJ file (positions in 2D, uv optional)
     AmeObjImportConfig cfg = {0};
     cfg.create_colliders = 1; // allow name-prefixed colliders if present in the file
-    const char* obj_path = "examples/obj_loading/quad.obj";
+    const char* obj_path = "examples/obj_loading/test dimensions.obj";
     AmeObjImportResult r = ame_obj_import_obj(world, obj_path, &cfg);
     SDL_Log("OBJ import: root=%llu objects=%d meshes=%d colliders=%d", (unsigned long long)r.root, r.objects_created, r.meshes_created, r.colliders_created);
 

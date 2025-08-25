@@ -13,6 +13,8 @@
 #include <cstdio>
 #include <cstring>
 #include <cstdlib>
+#include <fstream>
+#include <sstream>
 
 // Mirror PODs used in engine registration (avoid C++ includes of facade headers)
 typedef struct MeshData { const float* pos; const float* uv; const float* col; size_t count; } MeshData;
@@ -63,8 +65,26 @@ AmeObjImportResult ame_obj_import_obj(ecs_world_t* w, const char* filepath, cons
     reader_config.triangulate = true;
     reader_config.vertex_color = false;
 
+    // Read file and strip mtllib lines to avoid issues with spaces in material filenames.
+    std::ifstream ifs(filepath);
+    if (!ifs) {
+        std::fprintf(stderr, "[OBJ] Failed to open %s\n", filepath);
+        return res;
+    }
+    std::ostringstream obj_ss;
+    std::string line_in;
+    while (std::getline(ifs, line_in)) {
+        // Trim leading spaces
+        size_t start = 0; while (start < line_in.size() && (line_in[start] == ' ' || line_in[start] == '\t')) start++;
+        if (line_in.compare(start, 6, "mtllib") == 0 && (start + 6 == line_in.size() || line_in[start+6] == ' ' || line_in[start+6] == '\t')) {
+            // Skip mtllib line entirely (we don't use materials in 2D importer)
+            continue;
+        }
+        obj_ss << line_in << '\n';
+    }
+
     tinyobj::ObjReader reader;
-    if (!reader.ParseFromFile(filepath, reader_config)) {
+    if (!reader.ParseFromString(obj_ss.str(), std::string(), reader_config)) {
         if (!reader.Error().empty()) {
             std::fprintf(stderr, "[OBJ] tinyobj error: %s\n", reader.Error().c_str());
         }
