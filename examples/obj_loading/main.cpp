@@ -10,6 +10,7 @@
 #include <glad/gl.h>
 #include <flecs.h>
 #include <cstdio>
+#include "unitylike/Scene.h"
 
 static SDL_Window* window = nullptr;
 static SDL_GLContext glContext = nullptr;
@@ -50,6 +51,23 @@ static SDL_AppResult init_app(void) {
     // Register collider systems so imported colliders can affect physics (optional for just drawing)
     ame_collider2d_system_register(world);
     ame_collider2d_extras_register(world);
+
+    // Ensure façade component ids are registered so we can set Camera immediately
+    unitylike::ensure_components_registered(world);
+
+    // Create a camera entity
+    ecs_entity_desc_t ed = {0}; ed.name = "MainCamera";
+    ecs_entity_t cam_e = ecs_entity_init(world, &ed);
+    ecs_entity_t cam_id = ecs_lookup(world, "Camera");
+    if (cam_id) {
+        AmeCamera cam = {0};
+        cam.zoom = 1.0f;
+        cam.viewport_w = windowWidth;
+        cam.viewport_h = windowHeight;
+        cam.target_x = 100.0f;
+        cam.target_y = 100.0f;
+        ecs_set_id(world, cam_e, cam_id, sizeof cam, &cam);
+    }
 
     // Import an OBJ file (positions in 2D, uv optional)
     AmeObjImportConfig cfg = {0};
