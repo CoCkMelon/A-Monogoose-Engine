@@ -27,6 +27,8 @@ namespace {
     static GLuint g_mesh_prog = 0;
     static GLint g_mesh_mvp_loc = -1;
     static GLint g_mesh_tex_loc = -1;
+    static GLint g_mesh_cam_loc = -1;   // vec2 cam target
+    static GLint g_mesh_parallax_loc = -1; // float parallax factor (1=no offset)
 
     // Composite shader to draw the mesh target to the default framebuffer
     static GLuint g_composite_prog = 0;
@@ -122,18 +124,14 @@ namespace {
         const char* sprite_vs = R"(
             #version 450 core
             layout(location=0) in vec2 a_pos;
-            layout(location=1) in float a_z; // parallax depth
+            layout(location=1) in float a_z; // unused (legacy); no parallax for sprites
             layout(location=2) in vec2 a_uv;
             layout(location=3) in vec4 a_color;
             uniform mat4 u_mvp;
             out vec2 v_uv;
             out vec4 v_color;
             void main() {
-                vec4 p = vec4(a_pos, 0.0, 1.0);
-                // Parallax for ortho: divide XY by -Z (negative Z pushes back)
-                float dz = max(0.1, -a_z);
-                p.xy /= dz;
-                gl_Position = u_mvp * p;
+                gl_Position = u_mvp * vec4(a_pos, 0.0, 1.0);
                 v_uv = a_uv;
                 v_color = a_color;
             }
@@ -176,10 +174,14 @@ namespace {
             layout(location=1) in vec2 a_uv;
             layout(location=2) in vec4 a_color;
             uniform mat4 u_mvp;
+            uniform vec2 u_cam_target;
+            uniform float u_parallax;
             out vec2 v_uv;
             out vec4 v_color;
             void main() {
-                gl_Position = u_mvp * vec4(a_pos, 0.0, 1.0);
+                // Apply parallax as a pure translation in world space
+                vec2 offset = -u_cam_target * (1.0 - u_parallax);
+                gl_Position = u_mvp * vec4(a_pos + offset, 0.0, 1.0);
                 v_uv = a_uv;
                 v_color = a_color;
             }
@@ -199,6 +201,8 @@ namespace {
             g_mesh_prog = glCreateProgram(); glAttachShader(g_mesh_prog, vs); glAttachShader(g_mesh_prog, fs); glLinkProgram(g_mesh_prog); glDeleteShader(vs); glDeleteShader(fs);
             g_mesh_mvp_loc = glGetUniformLocation(g_mesh_prog, "u_mvp");
             g_mesh_tex_loc = glGetUniformLocation(g_mesh_prog, "u_tex");
+            g_mesh_cam_loc = glGetUniformLocation(g_mesh_prog, "u_cam_target");
+            g_mesh_parallax_loc = glGetUniformLocation(g_mesh_prog, "u_parallax");
         }
 
         // Composite shader (draw a full-screen quad)
@@ -644,6 +648,7 @@ void ame_rp_run_ecs(ecs_world_t* w) {
 
         glUseProgram(g_mesh_prog);
         glUniformMatrix4fv(g_mesh_mvp_loc, 1, GL_FALSE, glm::value_ptr(projection));
+        glUniform2f(g_mesh_cam_loc, cam.target_x, cam.target_y);
 
         ecs_query_desc_t mesh_qd = {};
         mesh_qd.terms[0].id = g_comp.mesh;
@@ -660,6 +665,22 @@ void ame_rp_run_ecs(ecs_world_t* w) {
                 SpriteData* sdata = (SpriteData*)ecs_get_id(w, mit.entities[i], g_comp.sprite);
                 float cr=1, cg=1, cb=1, ca=1;
                 if (sdata) { if (sdata->tex) texture_id = sdata->tex; cr=sdata->r; cg=sdata->g; cb=sdata->b; ca=sdata->a; }
+                // Determine parallax factor (1=no parallax). Prefer name prefix Parallax_x.xx, otherwise derive from sprite.z if present.
+                float parallax = 1.0f;
+                const char* name = ecs_get_name(w, mit.entities[i]);
+                if (name && strncmp(name, "Parallax_", 9) == 0) {
+                    parallax = (float)atof(name + 9);
+                    if (parallax < 0.0f) parallax = 0.0f; if (parallax > 1.0f) parallax = 1.0f;
+                } else if (sdata) {
+                    // Map z in [-10..10] to [0..1] where negative pushes to background
+                    float z = sdata->z;
+                    if (z < 0.0f) {
+                        parallax = 1.0f / (1.0f + (-z)); // z=-1 => 0.5, z=-3 => 0.25
+                    } else {
+                        parallax = 1.0f; // foreground same speed
+                    }
+                }
+                glUniform1f(g_mesh_parallax_loc, parallax);
 
                 // Build interleaved buffer: pos(2), uv(2), col(4)
                 size_t vc = mr->count;
