@@ -72,9 +72,26 @@ static SDL_AppResult init_app(void) {
     // Import an OBJ file (positions in 2D, uv optional)
     AmeObjImportConfig cfg = {0};
     cfg.create_colliders = 1; // allow name-prefixed colliders if present in the file
-    const char* obj_path = "examples/obj_loading/test dimensions.obj";
+    const char* obj_path = "examples/obj_loading/quad.obj";
     AmeObjImportResult r = ame_obj_import_obj(world, obj_path, &cfg);
     SDL_Log("OBJ import: root=%llu objects=%d meshes=%d colliders=%d", (unsigned long long)r.root, r.objects_created, r.meshes_created, r.colliders_created);
+
+    // Optional: attach a Sprite on each mesh entity to set a texture/color
+    ecs_entity_t sprite_id = ecs_lookup(world, "Sprite");
+    if (sprite_id) {
+        // For demo, set white texture color to distinguish
+        ecs_iter_t it = ecs_children(world, r.root);
+        while (ecs_children_next(&it)) {
+            for (int i=0;i<it.count;i++) {
+                // Only assign if entity actually has Mesh
+                if (ecs_has_id(world, it.entities[i], ecs_lookup(world, "Mesh"))) {
+                    struct SpriteData { uint32_t tex; float u0,v0,u1,v1; float w,h; float r,g,b,a; int visible; int sorting_layer; int order_in_layer; float z; int dirty; } s = {};
+                    s.visible = 1; s.r = s.g = s.b = s.a = 1.0f; s.u0=0; s.v0=0; s.u1=1; s.v1=1; s.w=1; s.h=1;
+                    ecs_set_id(world, it.entities[i], sprite_id, sizeof s, &s);
+                }
+            }
+        }
+    }
 
     return SDL_APP_CONTINUE;
 }

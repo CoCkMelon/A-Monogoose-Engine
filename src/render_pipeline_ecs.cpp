@@ -545,8 +545,12 @@ void ame_rp_run_ecs(ecs_world_t* w) {
                 MeshData* mr = (MeshData*)ecs_get_id(w, mit.entities[i], g_comp.mesh);
                 AmeTransform2D* tr = (AmeTransform2D*)ecs_get_id(w, mit.entities[i], g_comp.transform);
                 if (!mr || !tr || mr->count == 0 || !mr->pos) continue;
-                // Use white texture and layer/z = 1 for now
+                // Choose texture: prefer SpriteData on same entity, else white
                 GLuint texture_id = g_white_texture;
+                SpriteData* sdata = (SpriteData*)ecs_get_id(w, mit.entities[i], g_comp.sprite);
+                if (sdata && sdata->visible && sdata->tex != 0) {
+                    texture_id = sdata->tex;
+                }
                 SpriteBatch* batch = nullptr;
                 auto itb = batch_map.find(texture_id);
                 if (itb == batch_map.end()) {
@@ -558,12 +562,14 @@ void ame_rp_run_ecs(ecs_world_t* w) {
                 size_t vc = mr->count;
                 const float* pos = mr->pos;
                 const float* uv = mr->uv;
+                float cr=1, cg=1, cb=1, ca=1;
+                if (sdata) { cr = sdata->r; cg = sdata->g; cb = sdata->b; ca = sdata->a; }
                 for (size_t v = 0; v < vc; ++v) {
                     float px = pos[v*2+0];
                     float py = pos[v*2+1];
                     float u = uv ? uv[v*2+0] : 0.0f;
                     float vuv = uv ? uv[v*2+1] : 0.0f;
-                    batch->vertices.push_back({px, py, 0.0f, u, vuv, 1.0f,1.0f,1.0f,1.0f});
+                    batch->vertices.push_back({px, py, 0.0f, u, vuv, cr,cg,cb,ca});
                 }
             }
         }
