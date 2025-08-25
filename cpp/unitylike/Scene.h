@@ -85,6 +85,7 @@ class Scene {
 public:
     // Create a façade Scene over an existing Flecs world (owned by C core)
     explicit Scene(ecs_world_t* world);
+    ~Scene();
 
     // Factory
     GameObject Create(const std::string& name = "");
@@ -335,8 +336,18 @@ static_assert(
         rb = Rigidbody2D{ *this };
         return rb;
     } else if constexpr (std::is_same_v<T, SpriteRenderer>) {
-        struct SpriteData { std::uint32_t tex; float u0,v0,u1,v1; float w,h; float r,g,b,a; int visible; int sorting_layer; int order_in_layer; float z; } s{0,0,0,1,1,16,16,1,1,1,1,1, 0, 0, 0.0f};
-        ecs_set_id(w, (ecs_entity_t)e_, g_comp.sprite, sizeof(s), &s);
+        // Use the shared SpriteData definition declared at the top of this header
+        SpriteData s{};
+        s.tex = 0;
+        s.u0 = 0.0f; s.v0 = 0.0f; s.u1 = 1.0f; s.v1 = 1.0f;
+        s.w = 16.0f; s.h = 16.0f;
+        s.r = 1.0f; s.g = 1.0f; s.b = 1.0f; s.a = 1.0f;
+        s.visible = 1;
+        s.sorting_layer = 0;
+        s.order_in_layer = 0;
+        s.z = 1.0f;
+        s.dirty = 1;
+        ecs_set_id(w, (ecs_entity_t)e_, g_comp.sprite, sizeof(SpriteData), &s);
         static thread_local SpriteRenderer sr{ GameObject() };
         sr = SpriteRenderer{ *this };
         return sr;

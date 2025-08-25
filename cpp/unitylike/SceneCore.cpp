@@ -39,6 +39,19 @@ Scene::Scene(ecs_world_t* world) : world_(world) {
     ensure_components_registered(world_);
 }
 
+Scene::~Scene() {
+    // Cleanup: delete all scripts from all hosts to avoid leaks
+    for (auto& kv : g_script_hosts) {
+        ScriptHost& sh = kv.second;
+        for (auto* s : sh.scripts) {
+            if (s) { s->OnDestroy(); delete s; }
+        }
+        sh.scripts.clear();
+    }
+    g_script_hosts.clear();
+    g_script_entities.clear();
+}
+
 GameObject Scene::Create(const std::string& name) {
     ensure_components_registered(world_);
     ecs_entity_desc_t ed = {0};

@@ -33,6 +33,7 @@ namespace {
     // Vertex data for sprite batching
     struct SpriteVertex {
         float x, y;
+        float z;      // parallax depth (negative values push farther)
         float u, v;
         float r, g, b, a;
     };
@@ -105,13 +106,18 @@ namespace {
         const char* sprite_vs = R"(
             #version 450 core
             layout(location=0) in vec2 a_pos;
-            layout(location=1) in vec2 a_uv;
-            layout(location=2) in vec4 a_color;
+            layout(location=1) in float a_z; // parallax depth
+            layout(location=2) in vec2 a_uv;
+            layout(location=3) in vec4 a_color;
             uniform mat4 u_mvp;
             out vec2 v_uv;
             out vec4 v_color;
             void main() {
-                gl_Position = u_mvp * vec4(a_pos, 0.0, 1.0);
+                vec4 p = vec4(a_pos, 0.0, 1.0);
+                // Parallax for ortho: divide XY by -Z (negative Z pushes back)
+                float dz = max(0.1, -a_z);
+                p.xy /= dz;
+                gl_Position = u_mvp * p;
                 v_uv = a_uv;
                 v_color = a_color;
             }
@@ -302,11 +308,11 @@ namespace {
         glEnableVertexAttribArray(0);
         glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, sizeof(SpriteVertex), (void*)0);
         glEnableVertexAttribArray(1);
-        glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, sizeof(SpriteVertex), 
-                              (void*)(2 * sizeof(float)));
+        glVertexAttribPointer(1, 1, GL_FLOAT, GL_FALSE, sizeof(SpriteVertex), (void*)(2 * sizeof(float)));
         glEnableVertexAttribArray(2);
-        glVertexAttribPointer(2, 4, GL_FLOAT, GL_FALSE, sizeof(SpriteVertex), 
-                              (void*)(4 * sizeof(float)));
+        glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, sizeof(SpriteVertex), (void*)(3 * sizeof(float)));
+        glEnableVertexAttribArray(3);
+        glVertexAttribPointer(3, 4, GL_FLOAT, GL_FALSE, sizeof(SpriteVertex), (void*)(5 * sizeof(float)));
         
         glUseProgram(g_sprite_prog);
         glUniformMatrix4fv(g_sprite_mvp_loc, 1, GL_FALSE, glm::value_ptr(mvp));
@@ -509,22 +515,61 @@ void ame_rp_run_ecs(ecs_world_t* w) {
         auto [x3, y3] = rotate(x - hw, y + hh);
         
         // First triangle
-        batch->vertices.push_back({x0, y0, info.sprite.u0, info.sprite.v1, 
+        float z = info.sprite.z;
+        batch->vertices.push_back({x0, y0, z, info.sprite.u0, info.sprite.v1, 
                                    info.sprite.r, info.sprite.g, info.sprite.b, info.sprite.a});
-        batch->vertices.push_back({x1, y1, info.sprite.u1, info.sprite.v1, 
+        batch->vertices.push_back({x1, y1, z, info.sprite.u1, info.sprite.v1, 
                                    info.sprite.r, info.sprite.g, info.sprite.b, info.sprite.a});
-        batch->vertices.push_back({x2, y2, info.sprite.u1, info.sprite.v0, 
+        batch->vertices.push_back({x2, y2, z, info.sprite.u1, info.sprite.v0, 
                                    info.sprite.r, info.sprite.g, info.sprite.b, info.sprite.a});
         
         // Second triangle
-        batch->vertices.push_back({x0, y0, info.sprite.u0, info.sprite.v1, 
+        batch->vertices.push_back({x0, y0, z, info.sprite.u0, info.sprite.v1, 
                                    info.sprite.r, info.sprite.g, info.sprite.b, info.sprite.a});
-        batch->vertices.push_back({x2, y2, info.sprite.u1, info.sprite.v0, 
+        batch->vertices.push_back({x2, y2, z, info.sprite.u1, info.sprite.v0, 
                                    info.sprite.r, info.sprite.g, info.sprite.b, info.sprite.a});
-        batch->vertices.push_back({x3, y3, info.sprite.u0, info.sprite.v0, 
+        batch->vertices.push_back({x3, y3, z, info.sprite.u0, info.sprite.v0, 
                                    info.sprite.r, info.sprite.g, info.sprite.b, info.sprite.a});
     }
     
+    // TODO: Mesh rendering: append MeshData triangles into batches (texture 0) similar to sprites
+    // Query mesh data and send to batches (positions assumed 2D; z defaults to 1)
+    {
+        ecs_query_desc_t mesh_qd = {};
+        mesh_qd.terms[0].id = g_comp.mesh;
+        mesh_qd.terms[1].id = g_comp.transform;
+        ecs_query_t* mesh_q = ecs_query_init(w, &mesh_qd);
+        ecs_iter_t mit = ecs_query_iter(w, mesh_q);
+        while (ecs_query_next(&mit)) {
+            for (int i = 0; i < mit.count; ++i) {
+                MeshData* mr = (MeshData*)ecs_get_id(w, mit.entities[i], g_comp.mesh);
+                AmeTransform2D* tr = (AmeTransform2D*)ecs_get_id(w, mit.entities[i], g_comp.transform);
+                if (!mr || !tr || mr->count == 0 || !mr->pos) continue;
+                // Use white texture and layer/z = 1 for now
+                GLuint texture_id = g_white_texture;
+                SpriteBatch* batch = nullptr;
+                auto itb = batch_map.find(texture_id);
+                if (itb == batch_map.end()) {
+                    batches.emplace_back(); batch = &batches.back(); dc_batches++;
+                    batch->texture = texture_id; batch->layer = 0; batch->z = 1.0f;
+                    batch_map[texture_id] = batch;
+                } else batch = itb->second;
+                // Append triangles (assume triangles, positions as XY, uv optional)
+                size_t vc = mr->count;
+                const float* pos = mr->pos;
+                const float* uv = mr->uv;
+                for (size_t v = 0; v < vc; ++v) {
+                    float px = pos[v*2+0];
+                    float py = pos[v*2+1];
+                    float u = uv ? uv[v*2+0] : 0.0f;
+                    float vuv = uv ? uv[v*2+1] : 0.0f;
+                    batch->vertices.push_back({px, py, 0.0f, u, vuv, 1.0f,1.0f,1.0f,1.0f});
+                }
+            }
+        }
+        ecs_query_fini(mesh_q);
+    }
+
     // Render all sprite batches
     for (const auto& batch : batches) {
         render_sprite_batch(batch, projection, &dc_draw_calls);

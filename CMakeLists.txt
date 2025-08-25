@@ -73,6 +73,7 @@ include_directories(
     ${CMAKE_CURRENT_LIST_DIR}/include
     ${CMAKE_CURRENT_LIST_DIR}/src
     ${asyncinput_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_LIST_DIR}/third_party
 )
 
 # Engine objects (initial modules)
@@ -92,9 +93,11 @@ add_library(ame STATIC
     src/audio_ray.c
     src/text_system.c
     src/collider2d_system.c
+    src/collider2d_extras.cpp
+    src/obj_tinyobj.cpp
 )
 # Ensure required POSIX and math macros on glibc (M_PI, clock_gettime, etc.)
-target_compile_definitions(ame PRIVATE _GNU_SOURCE)
+target_compile_definitions(ame PRIVATE _GNU_SOURCE AME_USE_TINYOBJLOADER=1)
 
 # If generated dialogues are present, compile them and enable the macro
 if(EXISTS ${CMAKE_CURRENT_LIST_DIR}/src/embedded_dialogues_gen.c)
@@ -127,6 +130,10 @@ if(UNIX AND NOT APPLE)
 endif()
 
 target_include_directories(ame PUBLIC ${CMAKE_CURRENT_LIST_DIR}/include ${CMAKE_CURRENT_LIST_DIR}/cpp)
+# tinyobjloader is header-only; expose its include directory to the engine
+if(tinyobjloader_SOURCE_DIR)
+  target_include_directories(ame PRIVATE ${tinyobjloader_SOURCE_DIR})
+endif()
 
 # --------------------------
 # Unity-like C++ façade lib
