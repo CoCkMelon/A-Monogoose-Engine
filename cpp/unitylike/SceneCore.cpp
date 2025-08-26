@@ -1,8 +1,10 @@
 #include "Scene.h"
+#include "TransformHierarchy.h"
 #include <flecs.h>
 #include <cassert>
 #include <unordered_map>
 #include <vector>
+#include <SDL3/SDL.h>
 
 namespace unitylike {
 
@@ -175,10 +177,13 @@ void GameObject::SetParent(const GameObject& parent, bool keepWorld) {
     ecs_world_t* w = scene_->world();
     if (parent.scene() && parent.scene() != scene_) {
         // Cross-scene parenting not supported
+        SDL_Log("[Scene] SetParent disallowed: cross-scene parenting child=%llu parent=%llu",
+                (unsigned long long)e_, (unsigned long long)parent.e_);
         return;
     }
     if ((ecs_entity_t)e_ == (ecs_entity_t)parent.e_) {
         // disallow self-parenting
+        SDL_Log("[Scene] SetParent disallowed: self-parenting entity=%llu", (unsigned long long)e_);
         return;
     }
     // Prevent cycles: ensure parent is not a descendant of this
@@ -188,33 +193,17 @@ void GameObject::SetParent(const GameObject& parent, bool keepWorld) {
         while (cur && depth++ < 1024) {
             if (cur == (ecs_entity_t)e_) {
                 // would create a cycle; abort
+                SDL_Log("[Scene] SetParent would create cycle: child=%llu parent=%llu", (unsigned long long)e_, (unsigned long long)parent.e_);
                 return;
             }
             ecs_entity_t p = ecs_get_target(w, cur, EcsChildOf, 0);
             if (!p) break; cur = p;
         }
     }
-    // Compute world before change (simple composition)
+    // Compute world before change using helper
     auto compute_world = [&](ecs_entity_t ent){
-        float wx=0, wy=0, wa=0;
-        ecs_entity_t cur = ent;
-        int depth = 0;
-        while (cur && depth++ < 128) {
-            AmeTransform2D* tr = (AmeTransform2D*)ecs_get_id(w, cur, g_comp.transform);
-            float lx = tr ? tr->x : 0.0f;
-            float ly = tr ? tr->y : 0.0f;
-            float la = tr ? tr->angle : 0.0f;
-            // apply parent space: rotate then translate
-            float cs = cosf(wa);
-            float sn = sinf(wa);
-            float rx = lx * cs - ly * sn;
-            float ry = lx * sn + ly * cs;
-            wx += rx; wy += ry; wa += la;
-            ecs_entity_t p = ecs_get_target(w, cur, EcsChildOf, 0);
-            if (!p) break;
-            cur = p;
-        }
-        return std::tuple<float,float,float>(wx,wy,wa);
+        AmeWorldTransform2D wt = ameComputeWorldTransform(w, ent);
+        return std::tuple<float,float,float>(wt.x, wt.y, wt.angle);
     };
     float cw_x=0, cw_y=0, cw_a=0;
     if (keepWorld) {

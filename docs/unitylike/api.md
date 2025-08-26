@@ -37,12 +37,17 @@ GameObject
 - template<typename T, typename... Args> T& AddScript(Args&&...);
 - Transform& transform();
 - Parenting: void SetParent(const GameObject& parent, bool keepWorld=true); GameObject GetParent() const; std::vector<GameObject> GetChildren() const;
+  - keepWorld=true preserves the child's visual/world pose when reparenting by adjusting its local AmeTransform2D relative to the new parent.
+  - Pass a default-constructed GameObject as parent to clear parenting (i.e., parent = world).
+  - Cross-scene/world parenting is disallowed; self-parenting and descendant cycles are guarded against.
 
 Transform (2D)
 - glm::vec3 position() const;         void position(const glm::vec3&);
 - glm::quat rotation() const;         void rotation(const glm::quat&);
 - glm::vec3 localScale() const;       void localScale(const glm::vec3&);
 - glm::vec3 worldPosition() const;    glm::quat worldRotation() const;  // read-only, composed via EcsChildOf
+  - Note: getters/setters operate in local space; world getters traverse EcsChildOf and compute composition at call time.
+  - World composition: position rotates by accumulated parent angles, angle sums along the chain; scale multiplies component-wise (not applied to translation for non-uniform correctness).
 
 MongooseBehaviour
 - virtual void Awake(); Start(); Update(float); FixedUpdate(float); LateUpdate(); OnDestroy();

@@ -7,6 +7,8 @@
 typedef struct SpriteData { uint32_t tex; float u0,v0,u1,v1; float w,h; float r,g,b,a; int visible; int sorting_layer; int order_in_layer; float z; int dirty; } SpriteData;
 typedef struct MeshData { const float* pos; const float* uv; const float* col; size_t count; } MeshData;
 typedef struct Col2D { int type; float w,h; float radius; int isTrigger; int dirty; } Col2D;
+// Mirror MeshCollider2D POD expected by extras system
+typedef struct MeshCol2D { const float* vertices; size_t count; int isTrigger; int dirty; } MeshCol2D;
 typedef struct AmeTransform2D AmeTransform2D; // forward already from physics.h
 
 // Utility: ensure component ids by name (C side, mirror of facade names)
@@ -38,6 +40,7 @@ AmeObjImportResult ame_obj_import_obj(ecs_world_t* w, const char* filepath, cons
     ecs_entity_t comp_mesh = ensure_comp(w, "Mesh", sizeof(MeshData), _Alignof(MeshData));
     ecs_entity_t comp_col = ensure_comp(w, "Collider2D", sizeof(Col2D), _Alignof(Col2D));
     ecs_entity_t comp_tr  = ensure_comp(w, "AmeTransform2D", sizeof(AmeTransform2D), _Alignof(AmeTransform2D));
+    ecs_entity_t comp_meshcol = ensure_comp(w, "MeshCollider2D", sizeof(MeshCol2D), _Alignof(MeshCol2D));
 
     // Root entity grouping import if no parent provided
     if (cfg && cfg->parent) res.root = cfg->parent; else {
@@ -72,14 +75,34 @@ AmeObjImportResult ame_obj_import_obj(ecs_world_t* w, const char* filepath, cons
                         for(size_t i=0;i<positions.count/2;i++){ float x=positions.data[i*2+0], y=positions.data[i*2+1]; if(x<minx)minx=x; if(x>maxx)maxx=x; if(y<miny)miny=y; if(y>maxy)maxy=y; }
                         float rx=(maxx-minx)*0.5f, ry=(maxy-miny)*0.5f; c.radius = (rx+ry)*0.5f; c.dirty=1;
                         ecs_set_id(w, e, comp_col, sizeof c, &c); res.colliders_created++;
-                        // Skip adding mesh
+                        // Place collider entity at bbox center
+                        AmeTransform2D trc = {0}; trc.x = (minx+maxx)*0.5f; trc.y = (miny+maxy)*0.5f; trc.angle = 0.0f;
+                        ecs_set_id(w, e, comp_tr, sizeof trc, &trc);
+                        // Skip adding mesh; free accumulated arrays since not transferred to ECS
+                        farr_free(&positions); farr_free(&uvs);
                     } else if (starts_with(obj_name, "BoxCollider")) {
                         Col2D c = {0, 1,1, 0.0f, 0, 1};
                         float minx=1e9f,maxx=-1e9f,miny=1e9f,maxy=-1e9f;
                         for(size_t i=0;i<positions.count/2;i++){ float x=positions.data[i*2+0], y=positions.data[i*2+1]; if(x<minx)minx=x; if(x>maxx)maxx=x; if(y<miny)miny=y; if(y>maxy)maxy=y; }
                         c.w = (maxx-minx); c.h = (maxy-miny); c.dirty=1;
                         ecs_set_id(w, e, comp_col, sizeof c, &c); res.colliders_created++;
-                        // Skip adding mesh
+                        // Place collider entity at bbox center
+                        AmeTransform2D trc = {0}; trc.x = (minx+maxx)*0.5f; trc.y = (miny+maxy)*0.5f; trc.angle = 0.0f;
+                        ecs_set_id(w, e, comp_tr, sizeof trc, &trc);
+                        // Skip adding mesh; free accumulated arrays since not transferred to ECS
+                        farr_free(&positions); farr_free(&uvs);
+                    } else if (starts_with(obj_name, "MeshCollider")) {
+                        // Create MeshCollider2D component using triangle list in positions
+                        MeshCol2D mc = { positions.data, positions.count, 0, 1 };
+                        ecs_set_id(w, e, comp_meshcol, sizeof mc, &mc); res.colliders_created++;
+                        // Place at bbox center for convenience
+                        float minx=1e9f,maxx=-1e9f,miny=1e9f,maxy=-1e9f;
+                        for(size_t i=0;i<positions.count/2;i++){ float x=positions.data[i*2+0], y=positions.data[i*2+1]; if(x<minx)minx=x; if(x>maxx)maxx=x; if(y<miny)miny=y; if(y>maxy)maxy=y; }
+                        AmeTransform2D trc = {0}; trc.x = (minx+maxx)*0.5f; trc.y = (miny+maxy)*0.5f; trc.angle = 0.0f;
+                        ecs_set_id(w, e, comp_tr, sizeof trc, &trc);
+                        fprintf(stdout, "[OBJ] MeshCollider %llu: bbox min=(%.2f,%.2f) max=(%.2f,%.2f) center=(%.2f,%.2f)\n", 
+                               (unsigned long long)e, minx, miny, maxx, maxy, trc.x, trc.y); fflush(stdout);
+                        // Do not free positions/uvs; pointers are referenced by component
                     } else {
                         // Regular mesh
                         MeshData md = { positions.data, (uvs.count==positions.count? uvs.data: NULL), NULL, positions.count/2 };
@@ -145,12 +168,35 @@ AmeObjImportResult ame_obj_import_obj(ecs_world_t* w, const char* filepath, cons
                 for(size_t i=0;i<positions.count/2;i++){ float x=positions.data[i*2+0], y=positions.data[i*2+1]; if(x<minx)minx=x; if(x>maxx)maxx=x; if(y<miny)miny=y; if(y>maxy)maxy=y; }
                 float rx=(maxx-minx)*0.5f, ry=(maxy-miny)*0.5f; c.radius = (rx+ry)*0.5f; c.dirty=1;
                 ecs_set_id(w, e, comp_col, sizeof c, &c); res.colliders_created++;
+                // Place collider entity at bbox center
+                AmeTransform2D trc = {0}; trc.x = (minx+maxx)*0.5f; trc.y = (miny+maxy)*0.5f; trc.angle = 0.0f;
+                ecs_set_id(w, e, comp_tr, sizeof trc, &trc);
+                fprintf(stdout, "[OBJ] MeshCollider %llu: bbox min=(%.2f,%.2f) max=(%.2f,%.2f) center=(%.2f,%.2f)\n", 
+                       (unsigned long long)e, minx, miny, maxx, maxy, trc.x, trc.y); fflush(stdout);
+                // free accumulators since no mesh is attached
+                farr_free(&positions); farr_free(&uvs);
             } else if (starts_with(obj_name, "BoxCollider")) {
                 Col2D c = {0, 1,1, 0.0f, 0, 1};
                 float minx=1e9f,maxx=-1e9f,miny=1e9f,maxy=-1e9f;
                 for(size_t i=0;i<positions.count/2;i++){ float x=positions.data[i*2+0], y=positions.data[i*2+1]; if(x<minx)minx=x; if(x>maxx)maxx=x; if(y<miny)miny=y; if(y>maxy)maxy=y; }
                 c.w = (maxx-minx); c.h = (maxy-miny); c.dirty=1;
                 ecs_set_id(w, e, comp_col, sizeof c, &c); res.colliders_created++;
+                // Place collider entity at bbox center
+                AmeTransform2D trc = {0}; trc.x = (minx+maxx)*0.5f; trc.y = (miny+maxy)*0.5f; trc.angle = 0.0f;
+                ecs_set_id(w, e, comp_tr, sizeof trc, &trc);
+                // free accumulators since no mesh is attached
+                farr_free(&positions); farr_free(&uvs);
+            } else if (starts_with(obj_name, "MeshCollider")) {
+                MeshCol2D mc = { positions.data, positions.count, 0, 1 };
+                ecs_set_id(w, e, comp_meshcol, sizeof mc, &mc); res.colliders_created++;
+                // Place at bbox center
+                float minx=1e9f,maxx=-1e9f,miny=1e9f,maxy=-1e9f;
+                for(size_t i=0;i<positions.count/2;i++){ float x=positions.data[i*2+0], y=positions.data[i*2+1]; if(x<minx)minx=x; if(x>maxx)maxx=x; if(y<miny)miny=y; if(y>maxy)maxy=y; }
+                AmeTransform2D trc = {0}; trc.x = (minx+maxx)*0.5f; trc.y = (miny+maxy)*0.5f; trc.angle = 0.0f;
+                ecs_set_id(w, e, comp_tr, sizeof trc, &trc);
+                fprintf(stdout, "[OBJ] MeshCollider %llu: bbox min=(%.2f,%.2f) max=(%.2f,%.2f) center=(%.2f,%.2f)\n", 
+                       (unsigned long long)e, minx, miny, maxx, maxy, trc.x, trc.y); fflush(stdout);
+                // keep arrays alive
             } else {
                 MeshData md = { positions.data, (uvs.count==positions.count? uvs.data: NULL), NULL, positions.count/2 };
                 ecs_set_id(w, e, comp_mesh, sizeof md, &md); res.meshes_created++;

@@ -152,6 +152,7 @@ add_library(unitylike STATIC
     cpp/unitylike/Components.cpp
     cpp/unitylike/SceneCore.cpp
     cpp/unitylike/Transform.cpp
+    cpp/unitylike/TransformHierarchy.cpp
     cpp/unitylike/Rigidbody2D.cpp
     cpp/unitylike/Material.cpp
     cpp/unitylike/SpriteRenderer.cpp
@@ -254,6 +255,11 @@ if(AME_BUILD_EXAMPLES)
   # Example: unitylike_box2d_car (Unity-like, Box2D car sidescroller)
   # ------------------------------
   add_subdirectory(examples/unitylike_box2d_car)
+
+  # ------------------------------
+  # Example: parent/child transforms demo
+  # ------------------------------
+  add_subdirectory(examples/example_parent_child)
 
   # ------------------------------
   # Example: Flecs Script loader

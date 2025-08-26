@@ -3,6 +3,7 @@
 #include "ame/ecs.h"
 #include "ame/collider2d_extras.h"
 #include "ame/collider2d_system.h"
+#include "ame/physics.h"
 
 #define SDL_MAIN_USE_CALLBACKS 1
 #include <SDL3/SDL.h>
@@ -18,6 +19,7 @@
 static SDL_Window* window = nullptr;
 static SDL_GLContext glContext = nullptr;
 static AmeEcsWorld* ameWorld = nullptr;
+static AmePhysicsWorld* physicsWorld = nullptr;
 static bool running = true;
 static int windowWidth = 800;
 static int windowHeight = 600;
@@ -51,6 +53,9 @@ static SDL_AppResult init_app(void) {
     if (!ameWorld) return SDL_APP_FAILURE;
     ecs_world_t* world = (ecs_world_t*)ame_ecs_world_ptr(ameWorld);
 
+    // Create physics world (gravity downwards)
+    physicsWorld = ame_physics_world_create(0.0f, -9.8f, 1.0f/60.0f);
+
     // Register collider systems so imported colliders can affect physics (optional for just drawing)
     ame_collider2d_system_register(world);
     ame_collider2d_extras_register(world);
@@ -78,6 +83,104 @@ static SDL_AppResult init_app(void) {
     const char* obj_path = "examples/obj_loading/test dimensions.obj";
     AmeObjImportResult r = ame_obj_import_obj(world, obj_path, &cfg);
     SDL_Log("OBJ import: root=%llu objects=%d meshes=%d colliders=%d", (unsigned long long)r.root, r.objects_created, r.meshes_created, r.colliders_created);
+
+    // Create AmePhysicsBody for entities with colliders so Box2D fixtures can be built
+    if (physicsWorld) {
+        // Ensure Body component exists and get ids for relevant components
+        ecs_entity_t body_id = ecs_lookup(world, "AmePhysicsBody");
+        if (!body_id) {
+            // Register via physics helper to guarantee correct layout
+            (void)ame_physics_register_body_component(ameWorld);
+            body_id = ecs_lookup(world, "AmePhysicsBody");
+        }
+        ecs_entity_t tr_id2 = ecs_lookup(world, "AmeTransform2D");
+        ecs_entity_t col_id = ecs_lookup(world, "Collider2D");
+        ecs_entity_t edge_id = ecs_lookup(world, "EdgeCollider2D");
+        ecs_entity_t chain_id = ecs_lookup(world, "ChainCollider2D");
+        ecs_entity_t meshcol_id = ecs_lookup(world, "MeshCollider2D");
+
+        // Local PODs matching importer layouts
+        struct Col2D { int type; float w,h; float radius; int isTrigger; int dirty; };
+        // Helper to ensure a body exists for an entity
+        auto ensure_body_for_entity = [&](ecs_entity_t e){
+            if (!body_id) return;
+            AmePhysicsBody* existing = (AmePhysicsBody*)ecs_get_id(world, e, body_id);
+            if (existing && existing->body) return; // already has body
+            // Position
+            AmeTransform2D tr = {0};
+            if (tr_id2) {
+                AmeTransform2D* trp = (AmeTransform2D*)ecs_get_id(world, e, tr_id2);
+                if (trp) tr = *trp; else { tr.x = 0; tr.y = 0; tr.angle = 0; ecs_set_id(world, e, tr_id2, sizeof tr, &tr); }
+            }
+            // Default body box size; overridden by Collider2D if present
+            float bw = 0.1f, bh = 0.1f;
+            bool is_sensor = false;
+            if (col_id) {
+                const Col2D* c = (const Col2D*)ecs_get_id(world, e, col_id);
+                if (c) {
+                    is_sensor = c->isTrigger != 0;
+                    if (c->type == 0) { // Box
+                        bw = (c->w > 0 ? c->w : bw);
+                        bh = (c->h > 0 ? c->h : bh);
+                    } else if (c->type == 1) { // Circle -> approximate as box
+                        float d = c->radius * 2.0f;
+                        if (d > 0) { bw = d; bh = d; }
+                    }
+                }
+            }
+            b2Body* body = ame_physics_create_body(physicsWorld, tr.x, tr.y, bw, bh, AME_BODY_STATIC, is_sensor, nullptr);
+            if (body) {
+                AmePhysicsBody pb = {0};
+                pb.body = body; pb.width = bw; pb.height = bh; pb.is_sensor = is_sensor;
+                ecs_set_id(world, e, body_id, sizeof pb, &pb);
+            }
+        };
+
+        // Query for Collider2D
+        if (col_id) {
+            ecs_query_desc_t qd = {};
+            qd.terms[0].id = col_id;
+            ecs_query_t* q = ecs_query_init(world, &qd);
+            ecs_iter_t it = ecs_query_iter(world, q);
+            while (ecs_query_next(&it)) {
+                for (int i=0;i<it.count;i++) ensure_body_for_entity(it.entities[i]);
+            }
+            ecs_query_fini(q);
+        }
+        // Edge collider entities
+        if (edge_id) {
+            ecs_query_desc_t qd = {};
+            qd.terms[0].id = edge_id;
+            ecs_query_t* q = ecs_query_init(world, &qd);
+            ecs_iter_t it = ecs_query_iter(world, q);
+            while (ecs_query_next(&it)) {
+                for (int i=0;i<it.count;i++) ensure_body_for_entity(it.entities[i]);
+            }
+            ecs_query_fini(q);
+        }
+        // Chain collider entities
+        if (chain_id) {
+            ecs_query_desc_t qd = {};
+            qd.terms[0].id = chain_id;
+            ecs_query_t* q = ecs_query_init(world, &qd);
+            ecs_iter_t it = ecs_query_iter(world, q);
+            while (ecs_query_next(&it)) {
+                for (int i=0;i<it.count;i++) ensure_body_for_entity(it.entities[i]);
+            }
+            ecs_query_fini(q);
+        }
+        // Mesh collider entities
+        if (meshcol_id) {
+            ecs_query_desc_t qd = {};
+            qd.terms[0].id = meshcol_id;
+            ecs_query_t* q = ecs_query_init(world, &qd);
+            ecs_iter_t it = ecs_query_iter(world, q);
+            while (ecs_query_next(&it)) {
+                for (int i=0;i<it.count;i++) ensure_body_for_entity(it.entities[i]);
+            }
+            ecs_query_fini(q);
+        }
+    }
 
     // Load textures referenced by .mtl into Material.tex (no Sprite needed)
     struct MaterialData { uint32_t tex; float r,g,b,a; int dirty; };
@@ -226,6 +329,12 @@ SDL_AppResult SDL_AppIterate(void* appstate) {
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
     ecs_world_t* world = (ecs_world_t*)ame_ecs_world_ptr(ameWorld);
+
+    // Step physics world
+    if (physicsWorld) {
+        ame_physics_world_step(physicsWorld);
+    }
+
     ame_rp_run_ecs(world);
 
     glFlush();
@@ -236,6 +345,7 @@ SDL_AppResult SDL_AppIterate(void* appstate) {
 void SDL_AppQuit(void* appstate, SDL_AppResult result) {
     (void)appstate; (void)result;
     if (ameWorld) { ame_ecs_world_destroy(ameWorld); ameWorld = nullptr; }
+    if (physicsWorld) { ame_physics_world_destroy(physicsWorld); physicsWorld = nullptr; }
     if (glContext) { SDL_GL_DestroyContext(glContext); glContext = nullptr; }
     if (window) { SDL_DestroyWindow(window); window = nullptr; }
     SDL_Quit();

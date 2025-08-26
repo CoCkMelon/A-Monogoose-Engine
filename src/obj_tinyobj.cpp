@@ -49,6 +49,7 @@ static bool starts_with(const std::string& s, const char* p) {
 }
 
 AmeObjImportResult ame_obj_import_obj(ecs_world_t* w, const char* filepath, const AmeObjImportConfig* cfg) {
+    std::fprintf(stdout, "[OBJ] Starting import of %s\n", filepath ? filepath : "<null>"); fflush(stdout);
     AmeObjImportResult res = {0};
     if (!w || !filepath) return res;
 
@@ -57,6 +58,7 @@ AmeObjImportResult ame_obj_import_obj(ecs_world_t* w, const char* filepath, cons
     ecs_entity_t comp_tr   = ensure_comp(w, "AmeTransform2D", (int)sizeof(AmeTransform2D), (int)alignof(AmeTransform2D));
     ecs_entity_t comp_mat  = ensure_comp(w, "Material", (int)sizeof(MaterialData), (int)alignof(MaterialData));
     ecs_entity_t comp_mtl_path = ensure_comp(w, "MaterialTexPath", (int)sizeof(MaterialTexPath), (int)alignof(MaterialTexPath));
+    std::fprintf(stdout, "[OBJ] Transform component ID: %llu\n", (unsigned long long)comp_tr); fflush(stdout);
     // Extended colliders
     ecs_entity_t comp_edge = ensure_comp(w, "EdgeCollider2D", (int)sizeof(EdgeCol2D), (int)alignof(EdgeCol2D));
     ecs_entity_t comp_chain = ensure_comp(w, "ChainCollider2D", (int)sizeof(ChainCol2D), (int)alignof(ChainCol2D));
@@ -161,9 +163,11 @@ AmeObjImportResult ame_obj_import_obj(ecs_world_t* w, const char* filepath, cons
     const auto& shapes = reader.GetShapes();
     const auto& materials = reader.GetMaterials();
 
+    std::fprintf(stdout, "[OBJ] Found %zu shapes\n", shapes.size()); fflush(stdout);
     for (size_t s = 0; s < shapes.size(); s++) {
         const auto& shape = shapes[s];
         std::string name = shape.name;
+        std::fprintf(stdout, "[OBJ] Processing shape %zu: name='%s'\n", s, name.c_str()); fflush(stdout);
 
         // Build flat arrays for this shape
         std::vector<float> pos;
@@ -234,14 +238,27 @@ AmeObjImportResult ame_obj_import_obj(ecs_world_t* w, const char* filepath, cons
         // Collider inference
         bool added_collider = false;
         if (cfg && cfg->create_colliders && !name.empty()) {
+            // Skip ground/plane colliders since game has manual ground collider
+            if (name.find("Plane") != std::string::npos) {
+                std::fprintf(stdout, "[OBJ] Skipping ground plane collider: %s\n", name.c_str()); fflush(stdout);
+                // Still create as visual mesh below
+            } else {
             if (starts_with(name, "CircleCollider")) {
                 Col2D c = {1, 1,1, 0.5f, 0, 1};
                 float rx=(maxx-minx)*0.5f, ry=(maxy-miny)*0.5f; c.radius = (rx+ry)*0.5f; c.dirty=1;
                 ecs_set_id(w, e, comp_col, sizeof c, &c); res.colliders_created++; added_collider = true;
+                // Place collider entity at bbox center
+                AmeTransform2D trc = {0};
+                trc.x = (minx+maxx)*0.5f; trc.y = (miny+maxy)*0.5f; trc.angle = 0.0f;
+                ecs_set_id(w, e, comp_tr, sizeof trc, &trc);
             } else if (starts_with(name, "BoxCollider")) {
                 Col2D c = {0, 1,1, 0.0f, 0, 1};
                 c.w = (maxx-minx); c.h = (maxy-miny); c.dirty=1;
                 ecs_set_id(w, e, comp_col, sizeof c, &c); res.colliders_created++; added_collider = true;
+                // Place collider entity at bbox center
+                AmeTransform2D trc = {0};
+                trc.x = (minx+maxx)*0.5f; trc.y = (miny+maxy)*0.5f; trc.angle = 0.0f;
+                ecs_set_id(w, e, comp_tr, sizeof trc, &trc);
             } else if (starts_with(name, "EdgeCollider")) {
                 // Use first two distinct vertices to define an edge
                 if (pos.size() >= 4) {
@@ -284,8 +301,15 @@ AmeObjImportResult ame_obj_import_obj(ecs_world_t* w, const char* filepath, cons
                     mc.isTrigger = 0; mc.dirty = 1;
                     ecs_set_id(w, e, comp_mcol, sizeof mc, &mc);
                     res.colliders_created++; added_collider = true;
+                    // Place collider entity at bbox center
+                    AmeTransform2D trc = {0};
+                    trc.x = (minx+maxx)*0.5f; trc.y = (miny+maxy)*0.5f; trc.angle = 0.0f;
+                    ecs_set_id(w, e, comp_tr, sizeof trc, &trc);
+                    std::fprintf(stdout, "[OBJ] MeshCollider %llu: bbox min=(%.2f,%.2f) max=(%.2f,%.2f) center=(%.2f,%.2f)\n", 
+                                (unsigned long long)e, minx, miny, maxx, maxy, trc.x, trc.y); fflush(stdout);
                 }
             }
+            } // end of else block for non-Plane colliders
         }
 
         if (!added_collider) {
@@ -300,6 +324,12 @@ AmeObjImportResult ame_obj_import_obj(ecs_world_t* w, const char* filepath, cons
             MeshData md = { pbuf, ubuf, nullptr, pos.size()/2 };
             ecs_set_id(w, e, comp_mesh, sizeof md, &md);
             res.meshes_created++;
+            // Also position visual meshes at their bbox center to align with colliders
+            AmeTransform2D trc = {0};
+            trc.x = (minx+maxx)*0.5f; trc.y = (miny+maxy)*0.5f; trc.angle = 0.0f;
+            ecs_set_id(w, e, comp_tr, sizeof trc, &trc);
+            std::fprintf(stdout, "[OBJ] VisualMesh %llu: bbox min=(%.2f,%.2f) max=(%.2f,%.2f) center=(%.2f,%.2f)\n", 
+                        (unsigned long long)e, minx, miny, maxx, maxy, trc.x, trc.y); fflush(stdout);
         }
         res.objects_created++;
     }
