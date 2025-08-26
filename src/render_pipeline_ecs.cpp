@@ -548,7 +548,28 @@ void ame_rp_run_ecs(ecs_world_t* w) {
             AmeTransform2D* transform = (AmeTransform2D*)ecs_get_id(w, sprite_iter.entities[i], g_comp.transform);
             
             if (sprite && transform && sprite->visible) {
-                sprites.push_back({*transform, *sprite, sprite_iter.entities[i]});
+                // Compose world transform by following EcsChildOf chain
+                AmeTransform2D wt = {0,0,0};
+                {
+                    float wx=0, wy=0, wa=0;
+                    ecs_entity_t cur = sprite_iter.entities[i];
+                    int depth = 0;
+                    while (cur && depth++ < 128) {
+                        AmeTransform2D* tr = (AmeTransform2D*)ecs_get_id(w, cur, g_comp.transform);
+                        float lx = tr ? tr->x : 0.0f;
+                        float ly = tr ? tr->y : 0.0f;
+                        float la = tr ? tr->angle : 0.0f;
+                        float cs = cosf(wa), sn = sinf(wa);
+                        float rx = lx * cs - ly * sn;
+                        float ry = lx * sn + ly * cs;
+                        wx += rx; wy += ry; wa += la;
+                        ecs_entity_t p = ecs_get_target(w, cur, EcsChildOf, 0);
+                        if (!p) break;
+                        cur = p;
+                    }
+                    wt.x = wx; wt.y = wy; wt.angle = wa;
+                }
+                sprites.push_back({wt, *sprite, sprite_iter.entities[i]});
                 dc_sprites_seen++;
             } else {
                 if (!sprite) {
@@ -669,6 +690,25 @@ void ame_rp_run_ecs(ecs_world_t* w) {
                 MeshData* mr = (MeshData*)ecs_get_id(w, mit.entities[i], g_comp.mesh);
                 AmeTransform2D* tr = (AmeTransform2D*)ecs_get_id(w, mit.entities[i], g_comp.transform);
                 if (!mr || !tr || mr->count == 0 || !mr->pos) continue;
+                // Compose world transform
+                float wx=0, wy=0, wa=0;
+                {
+                    ecs_entity_t cur = mit.entities[i];
+                    int depth = 0;
+                    while (cur && depth++ < 128) {
+                        AmeTransform2D* t2 = (AmeTransform2D*)ecs_get_id(w, cur, g_comp.transform);
+                        float lx = t2 ? t2->x : 0.0f;
+                        float ly = t2 ? t2->y : 0.0f;
+                        float la = t2 ? t2->angle : 0.0f;
+                        float cs = cosf(wa), sn = sinf(wa);
+                        float rx = lx * cs - ly * sn;
+                        float ry = lx * sn + ly * cs;
+                        wx += rx; wy += ry; wa += la;
+                        ecs_entity_t p = ecs_get_target(w, cur, EcsChildOf, 0);
+                        if (!p) break;
+                        cur = p;
+                    }
+                }
 
                 GLuint texture_id = g_white_texture;
                 SpriteData* sdata = (SpriteData*)ecs_get_id(w, mit.entities[i], g_comp.sprite);

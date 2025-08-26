@@ -187,6 +187,20 @@ Typical usage:
 - Drive logic with scene.Step(dt) and scene.StepFixed(fixed_dt)
 - Render using the ECS pipeline: ame_rp_run_ecs(world)
 
+Parenting and world transform example:
+```cpp path=null start=null
+Scene scene((ecs_world_t*)ame_ecs_world_ptr(ameWorld));
+GameObject parent = scene.Create("Parent");
+parent.AddComponent<Transform>().position({100, 50, 0});
+GameObject child = scene.Create("Child");
+child.AddComponent<Transform>().position({10, 0, 0});
+// Keep world position when reparenting
+child.SetParent(parent, /*keepWorld=*/true);
+// Read composed world position/rotation
+glm::vec3 wp = child.transform().worldPosition();
+glm::quat wr = child.transform().worldRotation();
+```
+
 See examples/unitylike_minimal (manual batching) and examples/unitylike_platformer_ecs (façade + ECS renderer) for concrete setups.
 
 

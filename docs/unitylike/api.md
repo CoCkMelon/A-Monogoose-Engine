@@ -11,7 +11,7 @@ Design rule
 Core types (façade)
 - Scene: factory/context that owns lifecycle entry points.
 - GameObject: thin handle over an ECS entity.
-- Transform: 2D position/rotation/scale (world-space only in MVP).
+- Transform: 2D position/rotation/scale with local accessors and world read-only getters (composed via EcsChildOf).
 - MongooseBehaviour: script base (Awake/Start/Update/FixedUpdate/LateUpdate/OnDestroy).
 - Time: static-style access to dt/fixedDt/time.
 - Rigidbody2D: velocity get/set over AmePhysicsBody.
@@ -36,11 +36,13 @@ GameObject
 - template<typename T> T* TryGetComponent(); template<typename T> T& GetComponent();
 - template<typename T, typename... Args> T& AddScript(Args&&...);
 - Transform& transform();
+- Parenting: void SetParent(const GameObject& parent, bool keepWorld=true); GameObject GetParent() const; std::vector<GameObject> GetChildren() const;
 
 Transform (2D)
 - glm::vec3 position() const;         void position(const glm::vec3&);
 - glm::quat rotation() const;         void rotation(const glm::quat&);
 - glm::vec3 localScale() const;       void localScale(const glm::vec3&);
+- glm::vec3 worldPosition() const;    glm::quat worldRotation() const;  // read-only, composed via EcsChildOf
 
 MongooseBehaviour
 - virtual void Awake(); Start(); Update(float); FixedUpdate(float); LateUpdate(); OnDestroy();

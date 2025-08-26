@@ -49,4 +49,41 @@ void Transform::localScale(const glm::vec3& s) {
     ecs_set_id(w, (ecs_entity_t)owner_.id(), g_comp.scale2d, sizeof(Scale2D), &val);
 }
 
+// Compose world position by traversing EcsChildOf chain and accumulating transforms
+glm::vec3 Transform::worldPosition() const {
+    ecs_world_t* w = owner_.scene()->world(); ensure_components_registered(w);
+    float wx=0.0f, wy=0.0f, wa=0.0f;
+    ecs_entity_t cur = (ecs_entity_t)owner_.id();
+    int depth = 0;
+    while (cur && depth++ < 128) {
+        AmeTransform2D* tr = (AmeTransform2D*)ecs_get_id(w, cur, g_comp.transform);
+        float lx = tr ? tr->x : 0.0f;
+        float ly = tr ? tr->y : 0.0f;
+        float la = tr ? tr->angle : 0.0f;
+        float cs = cosf(wa), sn = sinf(wa);
+        float rx = lx * cs - ly * sn;
+        float ry = lx * sn + ly * cs;
+        wx += rx; wy += ry; wa += la;
+        ecs_entity_t p = ecs_get_target(w, cur, EcsChildOf, 0);
+        if (!p) break;
+        cur = p;
+    }
+    return glm::vec3(wx, wy, 0.0f);
+}
+
+glm::quat Transform::worldRotation() const {
+    ecs_world_t* w = owner_.scene()->world(); ensure_components_registered(w);
+    float wa=0.0f;
+    ecs_entity_t cur = (ecs_entity_t)owner_.id();
+    int depth = 0;
+    while (cur && depth++ < 128) {
+        AmeTransform2D* tr = (AmeTransform2D*)ecs_get_id(w, cur, g_comp.transform);
+        float la = tr ? tr->angle : 0.0f;
+        wa += la;
+        ecs_entity_t p = ecs_get_target(w, cur, EcsChildOf, 0);
+        if (!p) break; cur = p;
+    }
+    return glm::quat(glm::vec3(0.0f, 0.0f, wa));
+}
+
 } // namespace unitylike

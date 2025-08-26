@@ -31,6 +31,12 @@ AmeEcsId ame_ecs_entity_new(AmeEcsWorld* w);
 void ame_ecs_set(AmeEcsWorld* w, AmeEcsId e, AmeEcsId comp, const void* data, size_t size);
 bool ame_ecs_get(AmeEcsWorld* w, AmeEcsId e, AmeEcsId comp, void* out, size_t size);
 
+// Hierarchy utilities (uses Flecs EcsChildOf relationship)
+// Set parent for child. Pass parent=0 to clear parent. Returns true on success.
+bool ame_ecs_set_parent(AmeEcsWorld* w, AmeEcsId child, AmeEcsId parent);
+// Get current parent for child. Returns 0 if none.
+AmeEcsId ame_ecs_get_parent(AmeEcsWorld* w, AmeEcsId child);
+
 // Destroy and cleanup world.
 void ame_ecs_world_destroy(AmeEcsWorld* w);
 

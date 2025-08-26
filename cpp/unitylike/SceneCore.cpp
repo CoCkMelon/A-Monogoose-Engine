@@ -170,5 +170,98 @@ bool GameObject::IsValid() const {
     return ecs_is_alive(w, (ecs_entity_t)e_);
 }
 
+void GameObject::SetParent(const GameObject& parent, bool keepWorld) {
+    if (!scene_ || !e_) return;
+    ecs_world_t* w = scene_->world();
+    if (parent.scene() && parent.scene() != scene_) {
+        // Cross-scene parenting not supported
+        return;
+    }
+    if ((ecs_entity_t)e_ == (ecs_entity_t)parent.e_) {
+        // disallow self-parenting
+        return;
+    }
+    // Prevent cycles: ensure parent is not a descendant of this
+    if (parent.e_) {
+        ecs_entity_t cur = (ecs_entity_t)parent.e_;
+        int depth = 0;
+        while (cur && depth++ < 1024) {
+            if (cur == (ecs_entity_t)e_) {
+                // would create a cycle; abort
+                return;
+            }
+            ecs_entity_t p = ecs_get_target(w, cur, EcsChildOf, 0);
+            if (!p) break; cur = p;
+        }
+    }
+    // Compute world before change (simple composition)
+    auto compute_world = [&](ecs_entity_t ent){
+        float wx=0, wy=0, wa=0;
+        ecs_entity_t cur = ent;
+        int depth = 0;
+        while (cur && depth++ < 128) {
+            AmeTransform2D* tr = (AmeTransform2D*)ecs_get_id(w, cur, g_comp.transform);
+            float lx = tr ? tr->x : 0.0f;
+            float ly = tr ? tr->y : 0.0f;
+            float la = tr ? tr->angle : 0.0f;
+            // apply parent space: rotate then translate
+            float cs = cosf(wa);
+            float sn = sinf(wa);
+            float rx = lx * cs - ly * sn;
+            float ry = lx * sn + ly * cs;
+            wx += rx; wy += ry; wa += la;
+            ecs_entity_t p = ecs_get_target(w, cur, EcsChildOf, 0);
+            if (!p) break;
+            cur = p;
+        }
+        return std::tuple<float,float,float>(wx,wy,wa);
+    };
+    float cw_x=0, cw_y=0, cw_a=0;
+    if (keepWorld) {
+        std::tie(cw_x, cw_y, cw_a) = compute_world((ecs_entity_t)e_);
+    }
+    // Remove current parent and set new
+    ecs_entity_t curp = ecs_get_target(w, (ecs_entity_t)e_, EcsChildOf, 0);
+    if (curp) ecs_remove_pair(w, (ecs_entity_t)e_, EcsChildOf, curp);
+    if (parent.e_) ecs_add_pair(w, (ecs_entity_t)e_, EcsChildOf, (ecs_entity_t)parent.e_);
+
+    if (keepWorld) {
+        // derive local = world relative to new parent
+        float pw_x=0, pw_y=0, pw_a=0;
+        if (parent.e_) {
+            std::tie(pw_x, pw_y, pw_a) = compute_world((ecs_entity_t)parent.e_);
+        }
+        float la = cw_a - pw_a;
+        float dx = cw_x - pw_x;
+        float dy = cw_y - pw_y;
+        float cs = cosf(-pw_a), sn = sinf(-pw_a);
+        float lx = dx * cs - dy * sn;
+        float ly = dx * sn + dy * cs;
+        AmeTransform2D tr = { lx, ly, la };
+        ecs_set_id(w, (ecs_entity_t)e_, g_comp.transform, sizeof(AmeTransform2D), &tr);
+    }
+}
+
+GameObject GameObject::GetParent() const {
+    if (!scene_ || !e_) return GameObject();
+    ecs_world_t* w = scene_->world();
+    ecs_entity_t p = ecs_get_target(w, (ecs_entity_t)e_, EcsChildOf, 0);
+    if (!p) return GameObject();
+    return GameObject(scene_, (Entity)p);
+}
+
+std::vector<GameObject> GameObject::GetChildren() const {
+    std::vector<GameObject> out;
+    if (!scene_ || !e_) return out;
+    ecs_world_t* w = scene_->world();
+    ecs_iter_t it = ecs_children(w, (ecs_entity_t)e_);
+    while (ecs_children_next(&it)) {
+        for (int i=0;i<it.count;i++) {
+            out.emplace_back(scene_, (Entity)it.entities[i]);
+        }
+    }
+    return out;
+}
+
 
 } // namespace unitylike

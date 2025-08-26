@@ -75,6 +75,7 @@ Audio path
 - Spatialization helper computes per-frame pan/gain from listener/source positions and basic occlusion.
 
 ECS layout (examples)
+- Hierarchy: Parent-child relations are modeled with Flecs EcsChildOf. World transforms are composed at use-sites (e.g., renderer) by walking up the EcsChildOf chain and accumulating local AmeTransform2D. The C++ façade provides GameObject::SetParent/GetParent/GetChildren and read-only Transform::worldPosition/worldRotation. SetParent prevents cycles and supports keeping world pose when reparenting.
 - Components: CInput, CPhysicsBody, CGrounded, CSize, CAnimation, CAmbientAudio, CCamera, CTilemapRef, CTextures, CAudioRefs.
 - Systems: Input gather, ground check, movement/jump, camera follow, animation, post-state mirror, audio update.
 

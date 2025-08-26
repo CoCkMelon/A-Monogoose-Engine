@@ -61,6 +61,30 @@ bool ame_ecs_get(AmeEcsWorld* w, AmeEcsId e, AmeEcsId comp, void* out, size_t si
     return true;
 }
 
+bool ame_ecs_set_parent(AmeEcsWorld* w, AmeEcsId child, AmeEcsId parent) {
+    if (!w || !w->world || !child) return false;
+    ecs_world_t* world = w->world;
+    // Remove existing parent if any
+    ecs_entity_t cur = ecs_get_target(world, (ecs_entity_t)child, EcsChildOf, 0);
+    if (cur) {
+        ecs_remove_pair(world, (ecs_entity_t)child, EcsChildOf, cur);
+    }
+    if (parent) {
+        if ((ecs_entity_t)child == (ecs_entity_t)parent) {
+            // disallow self-parenting
+            return false;
+        }
+        ecs_add_pair(world, (ecs_entity_t)child, EcsChildOf, (ecs_entity_t)parent);
+    }
+    return true;
+}
+
+AmeEcsId ame_ecs_get_parent(AmeEcsWorld* w, AmeEcsId child) {
+    if (!w || !w->world || !child) return 0;
+    ecs_entity_t p = ecs_get_target(w->world, (ecs_entity_t)child, EcsChildOf, 0);
+    return (AmeEcsId)p;
+}
+
 void ame_ecs_world_destroy(AmeEcsWorld* w) {
     if (!w) return;
     if (w->world) {

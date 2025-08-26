@@ -11,10 +11,11 @@ Notes on C++ dot usage
 Core API (MVP, 2D)
 - GameObject
   - Created via a World/Scene factory: GameObject go = scene.Create("Player");
-  - Methods: AddComponent<T>(), GetComponent<T>(), TryGetComponent<T>(), SetActive(bool), activeSelf(), name(), setName(...)
+- Methods: AddComponent<T>(), GetComponent<T>(), TryGetComponent<T>(), SetActive(bool), activeSelf(), name(), setName(...), SetParent(const GameObject&, bool keepWorld=true), GetParent(), GetChildren()
 - Transform2D
   - position(), setPosition(vec2), rotation(), setRotation(float radians), scale(), setScale(vec2)
-  - Local vs world: MVP can start with world‑space only; parenting optional later
+  - World accessors: worldPosition(), worldRotation() compute composed transform by traversing EcsChildOf
+  - Parenting: GameObject.SetParent/GetParent/GetChildren using Flecs EcsChildOf; SetParent supports keepWorld to preserve world pose when reparenting
 - MongooseBehaviour (script base)
   - virtual void Awake(), Start(), Update(float dt), FixedUpdate(float fdt), LateUpdate(), OnDestroy()
   - References: GameObject& gameObject(), Transform2D& transform()

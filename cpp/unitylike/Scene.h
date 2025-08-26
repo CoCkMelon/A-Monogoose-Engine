@@ -130,6 +130,11 @@ public:
     Entity id() const { return e_; }
     Scene* scene() const { return scene_; }
     bool IsValid() const;
+
+    // Parenting API
+    void SetParent(const GameObject& parent, bool keepWorld = true);
+    GameObject GetParent() const;
+    std::vector<GameObject> GetChildren() const;
 private:
     Scene* scene_ = nullptr;
     Entity e_ = 0;
@@ -141,12 +146,17 @@ public:
     // Internal: constructs a Transform view bound to a specific owner GameObject
     explicit Transform(GameObject owner) : owner_(owner) {}
 
+    // Local space accessors
     glm::vec3 position() const;
     void position(const glm::vec3& p);
     glm::quat rotation() const;
     void rotation(const glm::quat& q);
     glm::vec3 localScale() const;
     void localScale(const glm::vec3& s);
+
+    // World/composed accessors (read-only): computed by traversing EcsChildOf chain
+    glm::vec3 worldPosition() const;
+    glm::quat worldRotation() const;
 private:
     GameObject owner_;
 };
@@ -353,7 +363,6 @@ static_assert(
         return sr;
     } else if constexpr (std::is_same_v<T, Material>) {
         MaterialData m{};
-        m.tex = 0;
         m.r = 1.0f; m.g = 1.0f; m.b = 1.0f; m.a = 1.0f;
         m.dirty = 1;
         ecs_set_id(w, (ecs_entity_t)e_, g_comp.material, sizeof(MaterialData), &m);
