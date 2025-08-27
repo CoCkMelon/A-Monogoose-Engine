@@ -11,9 +11,13 @@
 // - Other meshes get a "Mesh" component with interleaved arrays owned by the engine.
 // Note: EdgeCollider/ChainCollider/MeshCollider are parsed but currently only logged (TODO).
 
+// Forward declare physics world to avoid requiring physics.h here
+struct AmePhysicsWorld;
+
 typedef struct AmeObjImportConfig {
     ecs_entity_t parent;    // optional parent entity (0 for none)
     int create_colliders;   // when 1, infer colliders from prefixed object names
+    struct AmePhysicsWorld* physics_world; // optional: if provided, create static Box2D bodies for imported colliders
 } AmeObjImportConfig;
 
 // Return value for import. root will be a new entity grouping imported children when no parent provided.

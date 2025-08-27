@@ -118,6 +118,27 @@ void ame_physics_sync_transforms(AmePhysicsWorld* physics,
                                  AmeTransform2D* transforms, 
                                  size_t count);
 
+// ---- C helpers to manipulate fixtures from C code (no C++ in callers) ----
+// Destroy all fixtures attached to a body
+void ame_physics_destroy_all_fixtures(b2Body* body);
+
+// Add an edge fixture defined by WORLD coordinates; internally converted to body-local
+void ame_physics_add_edge_fixture_world(b2Body* body,
+                                        float x1, float y1, float x2, float y2,
+                                        bool is_sensor, float density, float friction);
+
+// Add a chain fixture from WORLD coordinates points array [x0,y0,x1,y1,...], count = number of points
+void ame_physics_add_chain_fixture_world(b2Body* body,
+                                         const float* points, size_t count,
+                                         bool is_loop,
+                                         bool is_sensor, float density, float friction);
+
+// Add triangle mesh fixtures from WORLD coordinates tri vertices array [ax,ay,bx,by,cx,cy,...]
+// tri_count = number of triangles (vertices length should be tri_count*6)
+void ame_physics_add_mesh_triangles_world(b2Body* body,
+                                          const float* vertices, size_t tri_count,
+                                          bool is_sensor, float density, float friction);
+
 #ifdef __cplusplus
 }
 #endif

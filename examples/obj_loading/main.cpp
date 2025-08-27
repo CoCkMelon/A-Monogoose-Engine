@@ -1,7 +1,6 @@
 #include "ame/obj.h"
 #include "ame/render_pipeline_ecs.h"
 #include "ame/ecs.h"
-#include "ame/collider2d_extras.h"
 #include "ame/collider2d_system.h"
 #include "ame/physics.h"
 
@@ -58,7 +57,6 @@ static SDL_AppResult init_app(void) {
 
     // Register collider systems so imported colliders can affect physics (optional for just drawing)
     ame_collider2d_system_register(world);
-    ame_collider2d_extras_register(world);
 
     // Ensure façade component ids are registered so we can set Camera immediately
     unitylike::ensure_components_registered(world);
@@ -80,9 +78,32 @@ static SDL_AppResult init_app(void) {
     // Import an OBJ file (positions in 2D, uv optional)
     AmeObjImportConfig cfg = {0};
     cfg.create_colliders = 1; // allow name-prefixed colliders if present in the file
+    cfg.physics_world = physicsWorld; // create static Box2D bodies for imported colliders
     const char* obj_path = "examples/obj_loading/test dimensions.obj";
     AmeObjImportResult r = ame_obj_import_obj(world, obj_path, &cfg);
     SDL_Log("OBJ import: root=%llu objects=%d meshes=%d colliders=%d", (unsigned long long)r.root, r.objects_created, r.meshes_created, r.colliders_created);
+    
+    // MeshCollider2D system is included in ame_collider2d_system_register
+    
+    // Debug: Check if MeshCollider entity has both components
+    {
+        ecs_entity_t mcol_id = ecs_lookup(world, "MeshCollider2D");
+        ecs_entity_t body_id = ecs_lookup(world, "AmePhysicsBody");
+        if (mcol_id && body_id) {
+            ecs_query_desc_t qd = {};
+            qd.terms[0].id = mcol_id;
+            ecs_query_t* q = ecs_query_init(world, &qd);
+            ecs_iter_t it = ecs_query_iter(world, q);
+            while (ecs_query_next(&it)) {
+                for (int i = 0; i < it.count; ++i) {
+                    bool has_body = ecs_has_id(world, it.entities[i], body_id);
+                    SDL_Log("[DEBUG] MeshCollider entity %llu has AmePhysicsBody: %s", 
+                            (unsigned long long)it.entities[i], has_body ? "YES" : "NO");
+                }
+            }
+            ecs_query_fini(q);
+        }
+    }
 
     // Create AmePhysicsBody for entities with colliders so Box2D fixtures can be built
     if (physicsWorld) {
@@ -101,8 +122,8 @@ static SDL_AppResult init_app(void) {
 
         // Local PODs matching importer layouts
         struct Col2D { int type; float w,h; float radius; int isTrigger; int dirty; };
-        // Helper to ensure a body exists for an entity
-        auto ensure_body_for_entity = [&](ecs_entity_t e){
+        // Helper to ensure a body exists for an entity, choosing body type
+        auto ensure_body_for_entity = [&](ecs_entity_t e, AmeBodyType btype){
             if (!body_id) return;
             AmePhysicsBody* existing = (AmePhysicsBody*)ecs_get_id(world, e, body_id);
             if (existing && existing->body) return; // already has body
@@ -128,57 +149,114 @@ static SDL_AppResult init_app(void) {
                     }
                 }
             }
-            b2Body* body = ame_physics_create_body(physicsWorld, tr.x, tr.y, bw, bh, AME_BODY_STATIC, is_sensor, nullptr);
+            b2Body* body = ame_physics_create_body(physicsWorld, tr.x, tr.y, bw, bh, btype, is_sensor, nullptr);
             if (body) {
                 AmePhysicsBody pb = {0};
                 pb.body = body; pb.width = bw; pb.height = bh; pb.is_sensor = is_sensor;
                 ecs_set_id(world, e, body_id, sizeof pb, &pb);
+                if (btype == AME_BODY_DYNAMIC) {
+                    // Nudge initial velocity slightly so movement is obvious
+                    ame_physics_set_velocity(body, 0.0f, -0.1f);
+                }
             }
         };
 
-        // Query for Collider2D
-        if (col_id) {
-            ecs_query_desc_t qd = {};
-            qd.terms[0].id = col_id;
-            ecs_query_t* q = ecs_query_init(world, &qd);
-            ecs_iter_t it = ecs_query_iter(world, q);
-            while (ecs_query_next(&it)) {
-                for (int i=0;i<it.count;i++) ensure_body_for_entity(it.entities[i]);
+        // Create a 50x50 grid with sprites and box colliders (moved inside physics block so helpers are in scope)
+        unitylike::ensure_components_registered(world);
+        // Create a reusable circle texture for sprites
+        auto make_circle_texture = [](int size, unsigned int rgba) -> GLuint {
+            std::vector<unsigned char> pixels(size * size * 4, 0u);
+            float cx = (size - 1) * 0.5f, cy = (size - 1) * 0.5f;
+            float r = (size - 2) * 0.5f; // margin of 1px
+            float r2 = r * r;
+            unsigned char cr = (rgba >> 24) & 0xFF;
+            unsigned char cg = (rgba >> 16) & 0xFF;
+            unsigned char cb = (rgba >> 8) & 0xFF;
+            unsigned char ca = rgba & 0xFF;
+            for (int y = 0; y < size; ++y) {
+                for (int x = 0; x < size; ++x) {
+                    float dx = x - cx, dy = y - cy;
+                    float d2 = dx*dx + dy*dy;
+                    unsigned char a = (d2 <= r2) ? ca : 0;
+                    size_t idx = (y * size + x) * 4;
+                    pixels[idx + 0] = cr; // R
+                    pixels[idx + 1] = cg; // G
+                    pixels[idx + 2] = cb; // B
+                    pixels[idx + 3] = a;  // A
+                }
             }
-            ecs_query_fini(q);
+            GLuint tex = 0;
+            glGenTextures(1, &tex);
+            glBindTexture(GL_TEXTURE_2D, tex);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, size, size, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
+            glBindTexture(GL_TEXTURE_2D, 0);
+            return tex;
+        };
+        GLuint circle_tex = make_circle_texture(32, 0xFFFFFFFFu); // white circle, alpha inside
+
+        int gridSize = 50;
+        float gridSpacing = 1.0f;
+        float radius = 0.05f;
+        for (int x = 0; x < gridSize; x++) {
+            for (int y = 0; y < gridSize; y++) {
+                ecs_entity_desc_t ed = {0};
+                // Create unique names to avoid reusing the same entity
+                char namebuf[64]; snprintf(namebuf, sizeof(namebuf), "Grid_%d_%d", x, y);
+                ed.name = namebuf;
+                ecs_entity_t e = ecs_entity_init(world, &ed);
+
+                // Add/Set transform component
+                AmeTransform2D tr = {0};
+                tr.x = x * gridSpacing - gridSize * gridSpacing / 2.0f;
+                tr.y = y * gridSpacing - gridSize * gridSpacing / 2.0f;
+                ecs_set_id(world, e, unitylike::g_comp.transform, sizeof tr, &tr);
+
+                // Add circle sprite (uses circle texture)
+                unitylike::SpriteData sd{};
+                sd.tex = circle_tex;
+                sd.u0 = 0.0f; sd.v0 = 0.0f; sd.u1 = 1.0f; sd.v1 = 1.0f;
+                sd.w = radius * 2.0f; sd.h = radius * 2.0f;
+                sd.r = 1.0f; sd.g = 1.0f; sd.b = 1.0f; sd.a = 1.0f;
+                sd.visible = 1; sd.sorting_layer = 0; sd.order_in_layer = 0; sd.z = 0.0f; sd.dirty = 1;
+                ecs_set_id(world, e, unitylike::g_comp.sprite, sizeof(sd), &sd);
+
+                // Add circle collider
+                Col2D col = {0};
+                col.type = 1; // Circle
+                col.radius = radius;
+                if (col_id) {
+                    ecs_set_id(world, e, col_id, sizeof col, &col);
+                }
+
+                // Ensure DYNAMIC body exists for circle
+                ensure_body_for_entity(e, AME_BODY_DYNAMIC);
+            }
         }
-        // Edge collider entities
-        if (edge_id) {
+        // Debug: count sprites with transform
+        {
             ecs_query_desc_t qd = {};
-            qd.terms[0].id = edge_id;
+            qd.terms[0].id = unitylike::g_comp.sprite;
+            qd.terms[1].id = unitylike::g_comp.transform;
             ecs_query_t* q = ecs_query_init(world, &qd);
             ecs_iter_t it = ecs_query_iter(world, q);
-            while (ecs_query_next(&it)) {
-                for (int i=0;i<it.count;i++) ensure_body_for_entity(it.entities[i]);
-            }
+            int count = 0;
+            while (ecs_query_next(&it)) { count += it.count; }
             ecs_query_fini(q);
+            SDL_Log("[OBJ_EXAMPLE] Grid sprites with transform: %d", count);
         }
-        // Chain collider entities
-        if (chain_id) {
+        // Debug: count sprites with transform
+        {
             ecs_query_desc_t qd = {};
-            qd.terms[0].id = chain_id;
+            qd.terms[0].id = unitylike::g_comp.sprite;
+            qd.terms[1].id = unitylike::g_comp.transform;
             ecs_query_t* q = ecs_query_init(world, &qd);
             ecs_iter_t it = ecs_query_iter(world, q);
-            while (ecs_query_next(&it)) {
-                for (int i=0;i<it.count;i++) ensure_body_for_entity(it.entities[i]);
-            }
+            int count = 0;
+            while (ecs_query_next(&it)) { count += it.count; }
             ecs_query_fini(q);
-        }
-        // Mesh collider entities
-        if (meshcol_id) {
-            ecs_query_desc_t qd = {};
-            qd.terms[0].id = meshcol_id;
-            ecs_query_t* q = ecs_query_init(world, &qd);
-            ecs_iter_t it = ecs_query_iter(world, q);
-            while (ecs_query_next(&it)) {
-                for (int i=0;i<it.count;i++) ensure_body_for_entity(it.entities[i]);
-            }
-            ecs_query_fini(q);
+            SDL_Log("[OBJ_EXAMPLE] Grid sprites with transform: %d", count);
         }
     }
 
@@ -289,8 +367,10 @@ static SDL_AppResult init_app(void) {
         }
     }
 
-    // Note: If you want textures on meshes, attach a Sprite component to each mesh entity
-    // and set Sprite.tex to an OpenGL texture id. This example leaves meshes untextured.
+    // ...
+
+
+    // ...
 
     return SDL_APP_CONTINUE;
 }
@@ -333,7 +413,31 @@ SDL_AppResult SDL_AppIterate(void* appstate) {
     // Step physics world
     if (physicsWorld) {
         ame_physics_world_step(physicsWorld);
+        // Sync ECS transforms from physics (AmePhysicsBody -> AmeTransform2D)
+        ecs_entity_t body_id = ecs_lookup(world, "AmePhysicsBody");
+        ecs_entity_t tr_id = ecs_lookup(world, "AmeTransform2D");
+        if (body_id && tr_id) {
+            ecs_query_desc_t qd = {};
+            qd.terms[0].id = body_id;
+            qd.terms[1].id = tr_id;
+            ecs_query_t* q = ecs_query_init(world, &qd);
+            ecs_iter_t it = ecs_query_iter(world, q);
+            while (ecs_query_next(&it)) {
+                for (int i = 0; i < it.count; ++i) {
+                    AmePhysicsBody* pb = (AmePhysicsBody*)ecs_get_id(world, it.entities[i], body_id);
+                    AmeTransform2D* tr = (AmeTransform2D*)ecs_get_id(world, it.entities[i], tr_id);
+                    if (!pb || !pb->body || !tr) continue;
+                    float x=tr->x, y=tr->y; ame_physics_get_position(pb->body, &x, &y);
+                    tr->x = x; tr->y = y; // keep angle as-is for now
+                    ecs_set_id(world, it.entities[i], tr_id, sizeof(AmeTransform2D), tr);
+                }
+            }
+            ecs_query_fini(q);
+        }
     }
+
+    // Progress ECS world to run systems
+    ecs_progress(world, 0);
 
     ame_rp_run_ecs(world);
 

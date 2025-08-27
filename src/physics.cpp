@@ -6,6 +6,7 @@
 #include <cstring>
 #include <cmath>
 #include <cstdio>
+#include <vector>
 
 // Raycast callback for single hit
 class RaycastCallback : public b2RayCastCallback {
@@ -281,6 +282,72 @@ void ame_physics_sync_transforms(AmePhysicsWorld* physics,
             transforms[i].y = pos.y;
             transforms[i].angle = angle;
         }
+    }
+}
+
+// ---- C helpers to manipulate fixtures from C code ----
+void ame_physics_destroy_all_fixtures(b2Body* body){
+    if (!body) return;
+    b2Fixture* list[256]; int n=0;
+    for (b2Fixture* f = body->GetFixtureList(); f && n < 256; f = f->GetNext()) list[n++] = f;
+    for (int i=0;i<n;i++) body->DestroyFixture(list[i]);
+}
+
+void ame_physics_add_edge_fixture_world(b2Body* body,
+                                        float x1, float y1, float x2, float y2,
+                                        bool is_sensor, float density, float friction){
+    if (!body) return;
+    b2Vec2 bodyPos = body->GetPosition();
+    b2EdgeShape edge;
+    edge.SetTwoSided(b2Vec2(x1 - bodyPos.x, y1 - bodyPos.y),
+                     b2Vec2(x2 - bodyPos.x, y2 - bodyPos.y));
+    b2FixtureDef fd; fd.shape = &edge; fd.isSensor = is_sensor; fd.density = density; fd.friction = friction;
+    body->CreateFixture(&fd);
+}
+
+void ame_physics_add_chain_fixture_world(b2Body* body,
+                                         const float* points, size_t count,
+                                         bool is_loop,
+                                         bool is_sensor, float density, float friction){
+    if (!body || !points || count < 2) return;
+    std::vector<b2Vec2> pts; pts.reserve(count);
+    b2Vec2 bodyPos = body->GetPosition();
+    size_t cnt = count;
+    // If loop and last equals first, drop last
+    if (is_loop && cnt >= 2) {
+        if (points[0] == points[(cnt-1)*2+0] && points[1] == points[(cnt-1)*2+1]) {
+            cnt -= 1;
+        }
+    }
+    for (size_t k=0;k<cnt;k++){
+        pts.emplace_back(points[k*2+0] - bodyPos.x, points[k*2+1] - bodyPos.y);
+    }
+    b2ChainShape chain;
+    if (is_loop && pts.size() >= 3) {
+        chain.CreateLoop(pts.data(), (int)pts.size());
+    } else {
+        b2Vec2 prev = pts.front();
+        b2Vec2 next = pts.back();
+        chain.CreateChain(pts.data(), (int)pts.size(), prev, next);
+    }
+    b2FixtureDef fd; fd.shape = &chain; fd.isSensor = is_sensor; fd.density = density; fd.friction = friction;
+    body->CreateFixture(&fd);
+}
+
+void ame_physics_add_mesh_triangles_world(b2Body* body,
+                                          const float* vertices, size_t tri_count,
+                                          bool is_sensor, float density, float friction){
+    if (!body || !vertices || tri_count == 0) return;
+    b2Vec2 bodyPos = body->GetPosition();
+    for (size_t t=0; t<tri_count; ++t){
+        b2Vec2 a(vertices[t*6+0] - bodyPos.x, vertices[t*6+1] - bodyPos.y);
+        b2Vec2 b(vertices[t*6+2] - bodyPos.x, vertices[t*6+3] - bodyPos.y);
+        b2Vec2 c(vertices[t*6+4] - bodyPos.x, vertices[t*6+5] - bodyPos.y);
+        b2PolygonShape poly;
+        b2Vec2 arr[3] = {a,b,c};
+        poly.Set(arr, 3);
+        b2FixtureDef fd; fd.shape = &poly; fd.isSensor = is_sensor; fd.density = density; fd.friction = friction;
+        body->CreateFixture(&fd);
     }
 }
 

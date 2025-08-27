@@ -93,7 +93,6 @@ add_library(ame STATIC
     src/audio_ray.c
     src/text_system.c
     src/collider2d_system.c
-    src/collider2d_extras.cpp
     src/obj_tinyobj.cpp
 )
 # Ensure required POSIX and math macros on glibc (M_PI, clock_gettime, etc.)

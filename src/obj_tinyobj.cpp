@@ -63,6 +63,8 @@ AmeObjImportResult ame_obj_import_obj(ecs_world_t* w, const char* filepath, cons
     ecs_entity_t comp_edge = ensure_comp(w, "EdgeCollider2D", (int)sizeof(EdgeCol2D), (int)alignof(EdgeCol2D));
     ecs_entity_t comp_chain = ensure_comp(w, "ChainCollider2D", (int)sizeof(ChainCol2D), (int)alignof(ChainCol2D));
     ecs_entity_t comp_mcol = ensure_comp(w, "MeshCollider2D", (int)sizeof(MeshCol2D), (int)alignof(MeshCol2D));
+    // Physics body component (optional if physics world provided)
+    ecs_entity_t comp_body = ensure_comp(w, "AmePhysicsBody", (int)sizeof(AmePhysicsBody), (int)alignof(AmePhysicsBody));
 
     // Determine root
     if (cfg && cfg->parent) res.root = cfg->parent; else {
@@ -251,6 +253,16 @@ AmeObjImportResult ame_obj_import_obj(ecs_world_t* w, const char* filepath, cons
                 AmeTransform2D trc = {0};
                 trc.x = (minx+maxx)*0.5f; trc.y = (miny+maxy)*0.5f; trc.angle = 0.0f;
                 ecs_set_id(w, e, comp_tr, sizeof trc, &trc);
+                // Optionally create a static physics body
+                if (cfg && cfg->physics_world) {
+                    float bw = std::max(0.1f, c.radius * 2.0f);
+                    float bh = bw;
+                    b2Body* body = ame_physics_create_body(cfg->physics_world, trc.x, trc.y, bw, bh, AME_BODY_STATIC, c.isTrigger != 0, nullptr);
+                    if (body) {
+                        AmePhysicsBody pb = {0}; pb.body = body; pb.width = bw; pb.height = bh; pb.is_sensor = c.isTrigger != 0;
+                        ecs_set_id(w, e, comp_body, sizeof(pb), &pb);
+                    }
+                }
             } else if (starts_with(name, "BoxCollider")) {
                 Col2D c = {0, 1,1, 0.0f, 0, 1};
                 c.w = (maxx-minx); c.h = (maxy-miny); c.dirty=1;
@@ -259,6 +271,15 @@ AmeObjImportResult ame_obj_import_obj(ecs_world_t* w, const char* filepath, cons
                 AmeTransform2D trc = {0};
                 trc.x = (minx+maxx)*0.5f; trc.y = (miny+maxy)*0.5f; trc.angle = 0.0f;
                 ecs_set_id(w, e, comp_tr, sizeof trc, &trc);
+                if (cfg && cfg->physics_world) {
+                    float bw = std::max(0.1f, c.w);
+                    float bh = std::max(0.1f, c.h);
+                    b2Body* body = ame_physics_create_body(cfg->physics_world, trc.x, trc.y, bw, bh, AME_BODY_STATIC, c.isTrigger != 0, nullptr);
+                    if (body) {
+                        AmePhysicsBody pb = {0}; pb.body = body; pb.width = bw; pb.height = bh; pb.is_sensor = c.isTrigger != 0;
+                        ecs_set_id(w, e, comp_body, sizeof(pb), &pb);
+                    }
+                }
             } else if (starts_with(name, "EdgeCollider")) {
                 // Use first two distinct vertices to define an edge
                 if (pos.size() >= 4) {
@@ -289,10 +310,26 @@ AmeObjImportResult ame_obj_import_obj(ecs_world_t* w, const char* filepath, cons
                     if (pos.size() >= 4 && pos[0]==pos[pos.size()-2] && pos[1]==pos[pos.size()-1]) ch.isLoop = 1; else ch.isLoop = 0;
                     ecs_set_id(w, e, comp_chain, sizeof ch, &ch);
                     res.colliders_created++; added_collider = true;
+                    // Create an approximate static body using bbox; fixtures will be rebuilt by extras system
+                    if (cfg && cfg->physics_world) {
+                        float bw = std::max(0.1f, maxx - minx);
+                        float bh = std::max(0.1f, maxy - miny);
+                        float cx = (minx+maxx)*0.5f, cy = (miny+maxy)*0.5f;
+                        b2Body* body = ame_physics_create_body(cfg->physics_world, cx, cy, bw, bh, AME_BODY_STATIC, ch.isTrigger != 0, nullptr);
+                        if (body) {
+                            AmePhysicsBody pb = {0}; pb.body = body; pb.width = bw; pb.height = bh; pb.is_sensor = ch.isTrigger != 0;
+                            ecs_set_id(w, e, comp_body, sizeof(pb), &pb);
+                        }
+                    }
                 }
             } else if (starts_with(name, "MeshCollider")) {
                 // Store triangle vertices as 2D soup
                 if (!pos.empty()) {
+                    std::fprintf(stdout, "[OBJ] MeshCollider processing: %zu vertices (2D projected)\n", pos.size()/2); fflush(stdout);
+                    // Debug: print first few vertices to see the 2D projection
+                    for (size_t i = 0; i < std::min(pos.size()/2, (size_t)6); i++) {
+                        std::fprintf(stdout, "[OBJ]   Vertex %zu: (%.3f, %.3f)\n", i, pos[i*2], pos[i*2+1]); fflush(stdout);
+                    }
                     float* pbuf = (float*)malloc(pos.size()*sizeof(float));
                     memcpy(pbuf, pos.data(), pos.size()*sizeof(float));
                     MeshCol2D mc = {0};
@@ -307,6 +344,15 @@ AmeObjImportResult ame_obj_import_obj(ecs_world_t* w, const char* filepath, cons
                     ecs_set_id(w, e, comp_tr, sizeof trc, &trc);
                     std::fprintf(stdout, "[OBJ] MeshCollider %llu: bbox min=(%.2f,%.2f) max=(%.2f,%.2f) center=(%.2f,%.2f)\n", 
                                 (unsigned long long)e, minx, miny, maxx, maxy, trc.x, trc.y); fflush(stdout);
+                    if (cfg && cfg->physics_world) {
+                        float bw = std::max(0.1f, maxx - minx);
+                        float bh = std::max(0.1f, maxy - miny);
+                        b2Body* body = ame_physics_create_body(cfg->physics_world, trc.x, trc.y, bw, bh, AME_BODY_STATIC, mc.isTrigger != 0, nullptr);
+                        if (body) {
+                            AmePhysicsBody pb = {0}; pb.body = body; pb.width = bw; pb.height = bh; pb.is_sensor = mc.isTrigger != 0;
+                            ecs_set_id(w, e, comp_body, sizeof(pb), &pb);
+                        }
+                    }
                 }
             }
             } // end of else block for non-Plane colliders

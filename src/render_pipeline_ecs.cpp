@@ -68,6 +68,55 @@ namespace {
     static int g_mesh_target_h = 0;
     static int g_mesh_supersample = 2; // render meshes at 2x resolution, then downscale
     
+    // Scene & pixelation targets
+    static GLuint g_scene_fbo = 0;
+    static GLuint g_scene_color_tex = 0;
+    static GLuint g_pixel_fbo = 0;
+    static GLuint g_pixel_color_tex = 0;
+    static int g_pixel_target_w = 0;
+    static int g_pixel_target_h = 0;
+    static int g_pixel_scale = 4; // downscale factor
+
+    static void ensure_scene_target(int w, int h) {
+        if (w <= 0 || h <= 0) return;
+        // Recreate if size changed
+        static int cur_w = 0, cur_h = 0;
+        if (g_scene_fbo != 0 && (cur_w == w && cur_h == h)) return;
+        if (g_scene_color_tex) { glDeleteTextures(1, &g_scene_color_tex); g_scene_color_tex = 0; }
+        if (g_scene_fbo) { glDeleteFramebuffers(1, &g_scene_fbo); g_scene_fbo = 0; }
+        glGenTextures(1, &g_scene_color_tex);
+        glBindTexture(GL_TEXTURE_2D, g_scene_color_tex);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+        glBindTexture(GL_TEXTURE_2D, 0);
+        glGenFramebuffers(1, &g_scene_fbo);
+        glBindFramebuffer(GL_FRAMEBUFFER, g_scene_fbo);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, g_scene_color_tex, 0);
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        cur_w = w; cur_h = h;
+    }
+
+    static void ensure_pixel_target(int w, int h) {
+        if (w <= 0 || h <= 0) return;
+        int lw = std::max(1, w / g_pixel_scale);
+        int lh = std::max(1, h / g_pixel_scale);
+        if (g_pixel_fbo != 0 && (g_pixel_target_w == lw && g_pixel_target_h == lh)) return;
+        if (g_pixel_color_tex) { glDeleteTextures(1, &g_pixel_color_tex); g_pixel_color_tex = 0; }
+        if (g_pixel_fbo) { glDeleteFramebuffers(1, &g_pixel_fbo); g_pixel_fbo = 0; }
+        glGenTextures(1, &g_pixel_color_tex);
+        glBindTexture(GL_TEXTURE_2D, g_pixel_color_tex);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, lw, lh, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+        glBindTexture(GL_TEXTURE_2D, 0);
+        glGenFramebuffers(1, &g_pixel_fbo);
+        glBindFramebuffer(GL_FRAMEBUFFER, g_pixel_fbo);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, g_pixel_color_tex, 0);
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        g_pixel_target_w = lw; g_pixel_target_h = lh;
+    }
+
     // Create a white fallback texture
     static void init_white_texture() {
         if (g_white_texture != 0) return;
@@ -525,7 +574,10 @@ void ame_rp_run_ecs(ecs_world_t* w) {
         render_tilemap_layers_batch(w, cam.target_x, cam.target_y, cam.zoom, cam.viewport_w, cam.viewport_h, &dc_draw_calls);
     }
     
-    // Collect and batch sprites
+    // Ensure pixelation target exists (we will only pixelate mesh pass)
+    ensure_pixel_target(cam.viewport_w, cam.viewport_h);
+
+    // Collect and batch sprites (to render at full resolution later)
     std::vector<SpriteBatch> batches;
     std::map<GLuint, SpriteBatch*> batch_map;
     
@@ -650,7 +702,7 @@ void ame_rp_run_ecs(ecs_world_t* w) {
     }
     
     // Mesh rendering pass: render MeshData to offscreen target at higher resolution
-    // Then composite to screen before drawing sprites/tilemaps on top
+    // We will pixelate this pass only and then draw it as background to the default framebuffer
     ensure_mesh_target(cam.viewport_w, cam.viewport_h);
     if (g_mesh_fbo && g_mesh_color_tex && g_mesh_target_w > 0 && g_mesh_target_h > 0) {
         glBindFramebuffer(GL_FRAMEBUFFER, g_mesh_fbo);
@@ -728,11 +780,34 @@ void ame_rp_run_ecs(ecs_world_t* w) {
         }
         ecs_query_fini(mesh_q);
 
-        // Composite to default framebuffer
+        // Pixelate the mesh pass by downsampling to low-res target
+        // Use mipmapped linear filtering to approximate a box-filter resolve (SSAA-like)
+        glBindTexture(GL_TEXTURE_2D, g_mesh_color_tex);
+        glGenerateMipmap(GL_TEXTURE_2D);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+
+        glBindFramebuffer(GL_FRAMEBUFFER, g_pixel_fbo);
+        glViewport(0, 0, g_pixel_target_w, g_pixel_target_h);
+        glUseProgram(g_composite_prog);
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, g_mesh_color_tex);
+        glUniform1i(g_comp_tex_loc, 0);
+        if (!g_composite_vao) { glGenVertexArrays(1, &g_composite_vao); }
+        glBindVertexArray(g_composite_vao);
+        glDrawArrays(GL_TRIANGLES, 0, 3);
+        dc_draw_calls++;
+        glBindVertexArray(0);
+
+        // Present the pixelated mesh to the default framebuffer as background using nearest upscale
+        // Keep pixels crisp (blocky) while benefiting from AA baked into the low-res image
         glBindFramebuffer(GL_FRAMEBUFFER, 0);
         glViewport(0, 0, cam.viewport_w, cam.viewport_h);
         glUseProgram(g_composite_prog);
-        glActiveTexture(GL_TEXTURE0); glBindTexture(GL_TEXTURE_2D, g_mesh_color_tex);
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, g_pixel_color_tex);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
         glUniform1i(g_comp_tex_loc, 0);
         if (!g_composite_vao) { glGenVertexArrays(1, &g_composite_vao); }
         glBindVertexArray(g_composite_vao);
@@ -741,11 +816,15 @@ void ame_rp_run_ecs(ecs_world_t* w) {
         glBindVertexArray(0);
     }
 
-    // Render all sprite batches
+    // Now render sprite batches at full resolution on top (non-pixelated)
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    glViewport(0, 0, cam.viewport_w, cam.viewport_h);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     for (const auto& batch : batches) {
         render_sprite_batch(batch, projection, &dc_draw_calls);
     }
-    
+
     glDisable(GL_BLEND);
 
     SDL_Log("[RP] frame=%d cam(x=%.2f y=%.2f zoom=%.2f vp=%dx%d) tilemaps=%d sprites_seen=%d batches=%d draw_calls=%d missing{sprite=%d,transform=%d}",
