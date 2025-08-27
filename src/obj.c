@@ -1,4 +1,5 @@
 #include "ame/obj.h"
+#include "ame/collider2d_system.h"  // Use official MeshCol2D definition
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -6,9 +7,7 @@
 // Mirror façade component PODs used in C++ facade registration
 typedef struct SpriteData { uint32_t tex; float u0,v0,u1,v1; float w,h; float r,g,b,a; int visible; int sorting_layer; int order_in_layer; float z; int dirty; } SpriteData;
 typedef struct MeshData { const float* pos; const float* uv; const float* col; size_t count; } MeshData;
-typedef struct Col2D { int type; float w,h; float radius; int isTrigger; int dirty; } Col2D;
-// Mirror MeshCollider2D POD expected by extras system
-typedef struct MeshCol2D { const float* vertices; size_t count; int isTrigger; int dirty; } MeshCol2D;
+// Note: Col2D and MeshCol2D are now from ame/collider2d_system.h
 typedef struct AmeTransform2D AmeTransform2D; // forward already from physics.h
 
 // Utility: ensure component ids by name (C side, mirror of facade names)

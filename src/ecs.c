@@ -3,6 +3,8 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <flecs.h>
+#include <flecs/addons/system.h>
+#include <flecs/addons/pipeline.h>
 
 struct AmeEcsWorld {
     ecs_world_t *world;
@@ -13,6 +15,9 @@ AmeEcsWorld* ame_ecs_world_create(void) {
     if (!w) return NULL;
     w->world = ecs_init();
     if (!w->world) { free(w); return NULL; }
+    // Explicitly import required addons to ensure pipelines & systems work
+    FlecsSystemImport(w->world);
+    FlecsPipelineImport(w->world);
     return w;
 }
 

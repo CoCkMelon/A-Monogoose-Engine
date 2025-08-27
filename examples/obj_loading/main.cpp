@@ -52,6 +52,20 @@ static SDL_AppResult init_app(void) {
     if (!ameWorld) return SDL_APP_FAILURE;
     ecs_world_t* world = (ecs_world_t*)ame_ecs_world_ptr(ameWorld);
 
+    // Ensure pipeline is set so EcsOnUpdate systems run
+    {
+        ecs_pipeline_desc_t pd = {};
+        // Builtin default pipeline phases
+        pd.query.expr = "OnStart || PreFrame || OnLoad || PostLoad || PreUpdate || OnUpdate || OnValidate || PostUpdate || PreStore || OnStore || PostFrame";
+        ecs_entity_t pipe = ecs_pipeline_init(world, &pd);
+        if (pipe) {
+            ecs_set_pipeline(world, pipe);
+            SDL_Log("[DEBUG] Set custom pipeline=%llu", (unsigned long long)pipe);
+        } else {
+            SDL_Log("[DEBUG] Failed to create pipeline; will rely on default");
+        }
+    }
+
     // Create physics world (gravity downwards)
     physicsWorld = ame_physics_world_create(0.0f, -9.8f, 1.0f/60.0f);
 
@@ -85,7 +99,7 @@ static SDL_AppResult init_app(void) {
     
     // MeshCollider2D system is included in ame_collider2d_system_register
     
-    // Debug: Check if MeshCollider entity has both components
+    // Debug: Check if MeshCollider entity has both components and inspect component state
     {
         ecs_entity_t mcol_id = ecs_lookup(world, "MeshCollider2D");
         ecs_entity_t body_id = ecs_lookup(world, "AmePhysicsBody");
@@ -99,13 +113,61 @@ static SDL_AppResult init_app(void) {
                     bool has_body = ecs_has_id(world, it.entities[i], body_id);
                     SDL_Log("[DEBUG] MeshCollider entity %llu has AmePhysicsBody: %s", 
                             (unsigned long long)it.entities[i], has_body ? "YES" : "NO");
+                    
+                    // Check MeshCollider2D component state
+                    const MeshCol2D* mc = (const MeshCol2D*)ecs_get_id(world, it.entities[i], mcol_id);
+                    if (mc) {
+                        SDL_Log("[DEBUG]   MeshCol2D: vertices=%p count=%zu isTrigger=%d dirty=%d", 
+                                (void*)mc->vertices, mc->count, mc->isTrigger, mc->dirty);
+                    } else {
+                        SDL_Log("[DEBUG]   MeshCol2D component is NULL!");
+                    }
                 }
             }
             ecs_query_fini(q);
         }
     }
+    
+    // Manual test: Query for ALL MeshCollider2D entities and inspect them
+    {
+        ecs_entity_t mcol_id = ecs_lookup(world, "MeshCollider2D");
+        if (mcol_id) {
+            ecs_query_desc_t manual_qd = {};
+            manual_qd.terms[0].id = mcol_id;
+            ecs_query_t* manual_q = ecs_query_init(world, &manual_qd);
+            ecs_iter_t manual_it = ecs_query_iter(world, manual_q);
+            int manual_count = 0;
+            while (ecs_query_next(&manual_it)) {
+                for (int i = 0; i < manual_it.count; ++i) {
+                    manual_count++;
+                    SDL_Log("[MANUAL] Found MeshCollider2D entity %llu", (unsigned long long)manual_it.entities[i]);
+                }
+            }
+            SDL_Log("[MANUAL] Total MeshCollider2D entities found: %d", manual_count);
+            ecs_query_fini(manual_q);
+            
+            // Now test the two-component query that the system uses
+            ecs_entity_t body_id = ecs_lookup(world, "AmePhysicsBody");
+            if (body_id) {
+                ecs_query_desc_t dual_qd = {};
+                dual_qd.terms[0].id = mcol_id;
+                dual_qd.terms[1].id = body_id;
+                ecs_query_t* dual_q = ecs_query_init(world, &dual_qd);
+                ecs_iter_t dual_it = ecs_query_iter(world, dual_q);
+                int dual_count = 0;
+                while (ecs_query_next(&dual_it)) {
+                    for (int i = 0; i < dual_it.count; ++i) {
+                        dual_count++;
+                        SDL_Log("[MANUAL] Found MeshCollider2D+Body entity %llu", (unsigned long long)dual_it.entities[i]);
+                    }
+                }
+                SDL_Log("[MANUAL] Total MeshCollider2D+Body entities found: %d", dual_count);
+                ecs_query_fini(dual_q);
+            }
+        }
+    }
 
-    // Create AmePhysicsBody for entities with colliders so Box2D fixtures can be built
+    // Create AmePhysicsBody for entities with colliders
     if (physicsWorld) {
         // Ensure Body component exists and get ids for relevant components
         ecs_entity_t body_id = ecs_lookup(world, "AmePhysicsBody");
@@ -438,6 +500,9 @@ SDL_AppResult SDL_AppIterate(void* appstate) {
 
     // Progress ECS world to run systems
     ecs_progress(world, 0);
+    // Debug: how many systems ran this frame
+    const ecs_world_info_t* wi = ecs_get_world_info(world);
+    SDL_Log("[DEBUG] flecs systems ran this frame: %lld", (long long)wi->systems_ran_frame);
 
     ame_rp_run_ecs(world);
 

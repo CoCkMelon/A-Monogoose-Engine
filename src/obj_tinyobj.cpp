@@ -1,5 +1,6 @@
 #include "ame/obj.h"
 #include "ame/physics.h"
+#include "ame/collider2d_system.h"
 #include <flecs.h>
 
 // Compile tinyobjloader implementation in this translation unit
@@ -21,16 +22,9 @@
 
 // Mirror PODs used in engine registration (avoid C++ includes of facade headers)
 typedef struct MeshData { const float* pos; const float* uv; const float* col; size_t count; } MeshData;
-typedef struct Col2D { int type; float w,h; float radius; int isTrigger; int dirty; } Col2D;
 typedef struct MaterialData { uint32_t tex; float r,g,b,a; int dirty; } MaterialData;
 typedef struct MaterialTexPath { const char* path; } MaterialTexPath;
-// Extended collider PODs for additional collider types
-// EdgeCollider2D: a single segment
-typedef struct EdgeCol2D { float x1,y1,x2,y2; int isTrigger; int dirty; } EdgeCol2D;
-// ChainCollider2D: polyline/loop in 2D
-typedef struct ChainCol2D { const float* points; size_t count; int isLoop; int isTrigger; int dirty; } ChainCol2D;
-// MeshCollider2D: triangle soup in 2D
-typedef struct MeshCol2D { const float* vertices; size_t count; int isTrigger; int dirty; } MeshCol2D;
+// Note: Col2D, EdgeCol2D, ChainCol2D, MeshCol2D are now imported from ame/collider2d_system.h
 
 static ecs_entity_t ensure_comp(ecs_world_t* w, const char* name, int size, int align) {
     ecs_entity_t id = ecs_lookup(w, name);

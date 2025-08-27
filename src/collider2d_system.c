@@ -104,6 +104,14 @@ static void SysMeshCollider2DApply(ecs_iter_t* it){
     }
 }
 
+// Simple verification system to test MeshCollider2D query
+static void VerifyMeshColliderQuery(ecs_iter_t* it) {
+    fprintf(stderr, "[VERIFY] MeshCollider query found %d entities\n", it->count);
+    for (int i = 0; i < it->count; i++) {
+        fprintf(stderr, "[VERIFY] Entity %llu in MeshCollider query\n", (unsigned long long)it->entities[i]);
+    }
+}
+
 void ame_collider2d_system_register(ecs_world_t* w) {
     ecs_entity_t ColId = ecs_lookup(w, "Collider2D");
     if (!ColId) {
@@ -207,6 +215,18 @@ void ame_collider2d_system_register(ecs_world_t* w) {
         sdm.query.terms[1].id = BodyId;
         ecs_entity_t sys_id = ecs_system_init(w, &sdm);
         fprintf(stderr, "[collider2d_system] MeshCollider system registered with ID=%llu\n", (unsigned long long)sys_id);
+        // Debug: verify system tag
+        fprintf(stderr, "[collider2d_system] SysMeshCollider2DApply has EcsSystem: %s\n", 
+                ecs_has_id(w, sys_id, EcsSystem) ? "YES" : "NO");
+        
+        // Also register verification system to test query
+        ecs_system_desc_t verify_desc = {0};
+        ecs_entity_desc_t verify_ed = {0}; verify_ed.name = "VerifyMeshColliderQuery"; verify_ed.add = (ecs_id_t[]){ EcsOnUpdate, 0 };
+        verify_desc.entity = ecs_entity_init(w, &verify_ed);
+        verify_desc.callback = VerifyMeshColliderQuery;
+        verify_desc.query.terms[0].id = MeshId;
+        ecs_system_init(w, &verify_desc);
+        fprintf(stderr, "[collider2d_system] Verification system registered\n");
     } else {
         fprintf(stderr, "[collider2d_system] MeshCollider2D component not found, skipping system registration\n");
     }
