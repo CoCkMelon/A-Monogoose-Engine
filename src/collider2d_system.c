@@ -1,5 +1,7 @@
 #include <flecs.h>
 #include "ame/collider2d_system.h"
+#include <math.h>
+#include <stdio.h>
 
 static void SysCollider2DApply(ecs_iter_t* it) {
     Col2D* c = ecs_field(it, Col2D, 0);
@@ -81,10 +83,15 @@ static void SysMeshCollider2DApply(ecs_iter_t* it){
     MeshCol2D* mc = ecs_field(it, MeshCol2D, 0);
     AmePhysicsBody* pb = ecs_field(it, AmePhysicsBody, 1);
     ecs_entity_t TransformId = ecs_lookup(it->world, "AmeTransform2D");
+    fprintf(stderr, "[MeshCollider] System called with %d entities\n", it->count);
     for (int i=0;i<it->count;i++){
+        fprintf(stderr, "[MeshCollider] Entity %llu: mc=%p pb=%p\n", (unsigned long long)it->entities[i], (void*)mc, (void*)pb);
+        if (mc) fprintf(stderr, "[MeshCollider]   mc[%d]: dirty=%d count=%zu\n", i, mc[i].dirty, mc[i].count);
+        if (pb) fprintf(stderr, "[MeshCollider]   pb[%d]: body=%p\n", i, (void*)pb[i].body);
         if (!mc || !pb) continue;
         if (!pb[i].body) continue;
         if (!mc[i].dirty || mc[i].count < 3) continue;
+        fprintf(stderr, "[MeshCollider] Processing entity %llu with %zu vertices\n", (unsigned long long)it->entities[i], mc[i].count);
         ame_physics_destroy_all_fixtures(pb[i].body);
         size_t tri_count = mc[i].count / 3;
         ame_physics_add_mesh_triangles_world(pb[i].body, mc[i].vertices, tri_count, mc[i].isTrigger != 0, 0.0f, 0.3f);
@@ -93,6 +100,7 @@ static void SysMeshCollider2DApply(ecs_iter_t* it){
             if (tr) { ame_physics_set_angle(pb[i].body, tr->angle); }
         }
         mc[i].dirty = 0;
+        fprintf(stderr, "[MeshCollider] Finished processing entity %llu\n", (unsigned long long)it->entities[i]);
     }
 }
 
@@ -122,6 +130,17 @@ void ame_collider2d_system_register(ecs_world_t* w) {
     sd.callback = SysCollider2DApply;
     sd.query.terms[0].id = ColId;
     sd.query.terms[1].id = BodyId;
+    // Exclude entities that also have specialized collider components to avoid overriding them
+    // Note: add these Not-terms only if the component IDs exist
+    {
+        int ti = 2;
+        ecs_entity_t EdgeIdT = ecs_lookup(w, "EdgeCollider2D");
+        ecs_entity_t ChainIdT = ecs_lookup(w, "ChainCollider2D");
+        ecs_entity_t MeshIdT = ecs_lookup(w, "MeshCollider2D");
+        if (EdgeIdT) { sd.query.terms[ti].id = EdgeIdT; sd.query.terms[ti].oper = EcsNot; ti++; }
+        if (ChainIdT) { sd.query.terms[ti].id = ChainIdT; sd.query.terms[ti].oper = EcsNot; ti++; }
+        if (MeshIdT) { sd.query.terms[ti].id = MeshIdT; sd.query.terms[ti].oper = EcsNot; ti++; }
+    }
     ecs_system_init(w, &sd);
 
     // Extras types registration and systems
@@ -173,14 +192,22 @@ void ame_collider2d_system_register(ecs_world_t* w) {
         ecs_system_init(w, &sdc);
     }
     if (MeshId){
+        fprintf(stderr, "[collider2d_system] Registering MeshCollider system with MeshId=%llu BodyId=%llu\n",
+                (unsigned long long)MeshId, (unsigned long long)BodyId);
         ecs_entity_t existing_sys = ecs_lookup(w, "SysMeshCollider2DApply");
-        if (existing_sys) { ecs_delete(w, existing_sys); }
+        if (existing_sys) { 
+            fprintf(stderr, "[collider2d_system] Deleting existing MeshCollider system %llu\n", (unsigned long long)existing_sys);
+            ecs_delete(w, existing_sys); 
+        }
         ecs_system_desc_t sdm = (ecs_system_desc_t){0};
         ecs_entity_desc_t ed = {0}; ed.name = "SysMeshCollider2DApply"; ed.add = (ecs_id_t[]){ EcsOnUpdate, 0 };
         sdm.entity = ecs_entity_init(w, &ed);
         sdm.callback = SysMeshCollider2DApply;
         sdm.query.terms[0].id = MeshId;
         sdm.query.terms[1].id = BodyId;
-        (void)ecs_system_init(w, &sdm);
+        ecs_entity_t sys_id = ecs_system_init(w, &sdm);
+        fprintf(stderr, "[collider2d_system] MeshCollider system registered with ID=%llu\n", (unsigned long long)sys_id);
+    } else {
+        fprintf(stderr, "[collider2d_system] MeshCollider2D component not found, skipping system registration\n");
     }
 }
