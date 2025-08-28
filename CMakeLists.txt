@@ -13,6 +13,8 @@ cmake_minimum_required(VERSION 3.16)
 project(a_mongoose_engine C CXX)
 
 option(AME_BUILD_EXAMPLES "Build engine example programs" OFF)
+option(AME_WITH_FLECS "Build with Flecs ECS integration" ON)
+option(AME_BUILD_UNITYLIKE "Build C++ unity-like facade (requires Flecs)" ON)
 
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
@@ -34,8 +36,10 @@ find_package(SDL3_image REQUIRED)
 add_library(glad STATIC third_party/glad/src/gl.c)
 target_include_directories(glad PUBLIC third_party/glad/include)
 
-# Flecs ECS
-add_subdirectory(third_party/flecs)
+# Flecs ECS (optional)
+if(AME_WITH_FLECS)
+  add_subdirectory(third_party/flecs)
+endif()
 
 # Box2D Physics (using FetchContent for cleaner integration)
 include(FetchContent)
@@ -79,12 +83,10 @@ include_directories(
 # Engine objects (initial modules)
 add_library(ame STATIC
     src/camera.c
-    src/render_pipeline_ecs.cpp
     src/gl_loader.c
     src/dialogue.c
     src/embedded_dialogues.c
     src/story_route.c
-    src/ecs.c
     src/tilemap.c
     src/tilemap_tmx.c
     src/render_pipeline.c
@@ -92,9 +94,16 @@ add_library(ame STATIC
     src/physics.cpp
     src/audio_ray.c
     src/text_system.c
+)
+# Flecs-dependent sources
+if(AME_WITH_FLECS)
+  target_sources(ame PRIVATE
+    src/render_pipeline_ecs.cpp
+    src/ecs.c
     src/collider2d_system.c
     src/obj_tinyobj.cpp
-)
+  )
+endif()
 # Ensure required POSIX and math macros on glibc (M_PI, clock_gettime, etc.)
 target_compile_definitions(ame PRIVATE _GNU_SOURCE AME_USE_TINYOBJLOADER=1)
 
@@ -115,7 +124,10 @@ endif()
 target_link_libraries(ame PUBLIC SDL3::SDL3)
 
 # Link vendored glad
-target_link_libraries(ame PUBLIC glad flecs box2d)
+target_link_libraries(ame PUBLIC glad box2d)
+if(AME_WITH_FLECS)
+  target_link_libraries(ame PUBLIC flecs)
+endif()
 
 # Audio dependencies via pkg-config
 pkg_check_modules(PORTAUDIO REQUIRED IMPORTED_TARGET portaudio-2.0)
@@ -135,8 +147,9 @@ if(tinyobjloader_SOURCE_DIR)
 endif()
 
 # --------------------------
-# Unity-like C++ façade lib
+# Unity-like C++ façade lib (optional, requires Flecs)
 # --------------------------
+if(AME_BUILD_UNITYLIKE AND AME_WITH_FLECS)
 # Fetch glm (header-only) for the façade without adding as a subproject
 include(FetchContent)
 FetchContent_Declare(
@@ -175,6 +188,7 @@ target_include_directories(unitylike PUBLIC
 )
 
 target_link_libraries(unitylike PUBLIC ame flecs)
+endif()
 
 # Ensure story route header is public
 install(FILES include/ame_story_route.h DESTINATION include)
@@ -209,13 +223,19 @@ if(AME_BUILD_EXAMPLES)
   add_executable(dialogue_ui_example examples/dialogue_ui_example/main.c)
 
   # Example: flecs_scene (interactive ECS scene)
-  add_executable(flecs_scene examples/flecs_scene/main.c)
+  if(AME_WITH_FLECS)
+    add_executable(flecs_scene examples/flecs_scene/main.c)
+  endif()
 
   # Example: flecs_script_scene (script-defined scene rendered with GL)
-  add_executable(flecs_script_scene examples/flecs_script_scene/main.c)
+  if(AME_WITH_FLECS)
+    add_executable(flecs_script_scene examples/flecs_script_scene/main.c)
+  endif()
 
   # Example: obj_loading (OBJ importer, 2D rendering via ECS pipeline)
-  add_subdirectory(examples/obj_loading)
+  if(AME_WITH_FLECS)
+    add_subdirectory(examples/obj_loading)
+  endif()
 
   # Example: tilemap_render (Tiled JSON tilemap rendering)
   add_executable(tilemap_render examples/tilemap_render/main.c)
@@ -242,7 +262,9 @@ if(AME_BUILD_EXAMPLES)
   # ------------------------------
   # Example: unitylike_platformer_ecs (Unity-like with ECS rendering)
   # ------------------------------
-  add_subdirectory(examples/unitylike_platformer_ecs)
+  if(AME_BUILD_UNITYLIKE AND AME_WITH_FLECS)
+    add_subdirectory(examples/unitylike_platformer_ecs)
+  endif()
 
   # ------------------------------
   # Example: unitylike_textured_ground (Unity-like, build ground from textures)
@@ -253,23 +275,31 @@ if(AME_BUILD_EXAMPLES)
   # ------------------------------
   # Example: unitylike_box2d_car (Unity-like, Box2D car sidescroller)
   # ------------------------------
-  add_subdirectory(examples/unitylike_box2d_car)
+  if(AME_BUILD_UNITYLIKE AND AME_WITH_FLECS)
+    add_subdirectory(examples/unitylike_box2d_car)
+  endif()
 
   # ------------------------------
   # Example: parent/child transforms demo
   # ------------------------------
-  add_subdirectory(examples/example_parent_child)
+  if(AME_WITH_FLECS)
+    add_subdirectory(examples/example_parent_child)
+  endif()
 
   # ------------------------------
   # Example: Flecs Script loader
   # ------------------------------
-  add_executable(scene_script_example examples/scene_file/scene_script_example.c)
+  if(AME_WITH_FLECS)
+    add_executable(scene_script_example examples/scene_file/scene_script_example.c)
+  endif()
 
   # Link script/json addons via flecs
-  if (TARGET flecs)
-    target_link_libraries(scene_script_example PRIVATE flecs)
-  else()
-    target_link_libraries(scene_script_example PRIVATE flecs_static)
+  if(AME_WITH_FLECS)
+    if (TARGET flecs)
+      target_link_libraries(scene_script_example PRIVATE flecs)
+    else()
+      target_link_libraries(scene_script_example PRIVATE flecs_static)
+    endif()
   endif()
 
   # Prefer the shared lib if enabled, fall back to static otherwise
@@ -358,11 +388,13 @@ if(AME_BUILD_EXAMPLES)
   endif()
   target_link_libraries(dialogue_ui_example PRIVATE SDL3::SDL3 Threads::Threads ame SDL3_ttf::SDL3_ttf glad)
   # Link flecs example
-  target_link_libraries(flecs_scene PRIVATE SDL3::SDL3 Threads::Threads ame flecs)
-  # Link flecs script GL example
-  target_link_libraries(flecs_script_scene PRIVATE SDL3::SDL3 Threads::Threads ame flecs)
-  # Link tilemap example
-  target_link_libraries(tilemap_render PRIVATE SDL3::SDL3 Threads::Threads ame flecs)
+  if(AME_WITH_FLECS)
+    target_link_libraries(flecs_scene PRIVATE SDL3::SDL3 Threads::Threads ame flecs)
+    # Link flecs script GL example
+    target_link_libraries(flecs_script_scene PRIVATE SDL3::SDL3 Threads::Threads ame flecs)
+    # Link tilemap example
+    target_link_libraries(tilemap_render PRIVATE SDL3::SDL3 Threads::Threads ame flecs)
+  endif()
   # Link audio example
   target_link_libraries(audio_pan_example PRIVATE SDL3::SDL3 Threads::Threads ame)
   # Link opus example

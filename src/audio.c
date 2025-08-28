@@ -1,6 +1,9 @@
 #include "ame/audio.h"
 #include "ame/ecs.h"
+
+#if AME_WITH_FLECS
 #include <flecs.h>
+#endif
 
 #include <math.h>
 #include <stdlib.h>
@@ -437,6 +440,7 @@ void ame_audio_shutdown(void) {
     pthread_mutex_destroy(&g_mixer.mtx);
 }
 
+#if AME_WITH_FLECS
 AmeEcsId ame_audio_register_component(AmeEcsWorld *ew) {
     ecs_world_t *w = (ecs_world_t*)ame_ecs_world_ptr(ew);
     if (!w) return 0;
@@ -448,6 +452,13 @@ AmeEcsId ame_audio_register_component(AmeEcsWorld *ew) {
     ecs_entity_t id = ecs_component_init(w, &cd);
     return (AmeEcsId)id;
 }
+#else
+AmeEcsId ame_audio_register_component(AmeEcsWorld *ew) {
+    (void)ew;
+    // No ECS available; indicate no component id.
+    return (AmeEcsId)0;
+}
+#endif
 
 void ame_audio_sync_sources_refs(const struct AmeAudioSourceRef *refs, size_t count) {
     mixer_set_active_refs(refs, count);

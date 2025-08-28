@@ -52,19 +52,8 @@ static SDL_AppResult init_app(void) {
     if (!ameWorld) return SDL_APP_FAILURE;
     ecs_world_t* world = (ecs_world_t*)ame_ecs_world_ptr(ameWorld);
 
-    // Ensure pipeline is set so EcsOnUpdate systems run
-    {
-        ecs_pipeline_desc_t pd = {};
-        // Builtin default pipeline phases
-        pd.query.expr = "OnStart || PreFrame || OnLoad || PostLoad || PreUpdate || OnUpdate || OnValidate || PostUpdate || PreStore || OnStore || PostFrame";
-        ecs_entity_t pipe = ecs_pipeline_init(world, &pd);
-        if (pipe) {
-            ecs_set_pipeline(world, pipe);
-            SDL_Log("[DEBUG] Set custom pipeline=%llu", (unsigned long long)pipe);
-        } else {
-            SDL_Log("[DEBUG] Failed to create pipeline; will rely on default");
-        }
-    }
+    // Use engine-provided default pipeline; do not re-import or override here to avoid double-import crashes.
+    // The engine already imports FlecsPipeline and sets up default phases.
 
     // Create physics world (gravity downwards)
     physicsWorld = ame_physics_world_create(0.0f, -9.8f, 1.0f/60.0f);
@@ -498,8 +487,8 @@ SDL_AppResult SDL_AppIterate(void* appstate) {
         }
     }
 
-    // Progress ECS world to run systems
-    ecs_progress(world, 0);
+    // Progress ECS world to run systems (use fixed timestep to ensure systems run)
+    ecs_progress(world, 1.0f/60.0f);
     // Debug: how many systems ran this frame
     const ecs_world_info_t* wi = ecs_get_world_info(world);
     SDL_Log("[DEBUG] flecs systems ran this frame: %lld", (long long)wi->systems_ran_frame);

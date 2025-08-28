@@ -14,6 +14,126 @@ namespace unitylike {
 
 static std::vector<ecs_entity_t> g_script_entities;
 static std::unordered_map<ecs_entity_t, ScriptHost> g_script_hosts;
+static bool g_systems_registered = false;
+static float g_current_dt = 0.0f;
+static float g_fixed_dt = 1.0f/60.0f;
+
+// ECS system functions for script execution
+static void ScriptAwakeSystem(ecs_iter_t* it) {
+    // Run Awake for all scripts that haven't been awoken
+    for (ecs_entity_t e : g_script_entities) {
+        ScriptHost* shp = __get_script_host(e);
+        if (!shp) continue;
+        ScriptHost& sh = *shp;
+        if (!sh.awoken) {
+            for (auto* s : sh.scripts) if (s) s->Awake();
+            sh.awoken = true;
+        }
+    }
+}
+
+static void ScriptStartSystem(ecs_iter_t* it) {
+    // Run Start for all scripts that have been awoken but not started
+    for (ecs_entity_t e : g_script_entities) {
+        ScriptHost* shp = __get_script_host(e);
+        if (!shp) continue;
+        ScriptHost& sh = *shp;
+        if (sh.awoken && !sh.started) {
+            for (auto* s : sh.scripts) if (s) s->Start();
+            sh.started = true;
+        }
+    }
+}
+
+static void ScriptUpdateSystem(ecs_iter_t* it) {
+    // Run Update for all started scripts
+    for (ecs_entity_t e : g_script_entities) {
+        ScriptHost* shp = __get_script_host(e);
+        if (!shp) continue;
+        ScriptHost& sh = *shp;
+        if (sh.started) {
+            for (auto* s : sh.scripts) if (s) s->Update(g_current_dt);
+        }
+    }
+}
+
+static void ScriptLateUpdateSystem(ecs_iter_t* it) {
+    // Run LateUpdate for all started scripts
+    for (ecs_entity_t e : g_script_entities) {
+        ScriptHost* shp = __get_script_host(e);
+        if (!shp) continue;
+        ScriptHost& sh = *shp;
+        if (sh.started) {
+            for (auto* s : sh.scripts) if (s) s->LateUpdate();
+        }
+    }
+}
+
+static void ScriptFixedUpdateSystem(ecs_iter_t* it) {
+    // Run FixedUpdate for all started scripts
+    for (ecs_entity_t e : g_script_entities) {
+        ScriptHost* shp = __get_script_host(e);
+        if (!shp) continue;
+        ScriptHost& sh = *shp;
+        if (sh.started) {
+            for (auto* s : sh.scripts) if (s) s->FixedUpdate(g_fixed_dt);
+        }
+    }
+}
+
+// Register the script systems with appropriate ECS phases
+static void register_script_systems(ecs_world_t* world) {
+    if (g_systems_registered) return;
+    
+    // Awake system - runs early in the frame
+    ecs_system_desc_t awake_desc = {0};
+    awake_desc.entity = ecs_entity_init(world, &(ecs_entity_desc_t){ 
+        .name = "UnitylikeScriptAwake", 
+        .add = (ecs_id_t[]){ EcsOnLoad, 0 } 
+    });
+    awake_desc.callback = ScriptAwakeSystem;
+    ecs_system_init(world, &awake_desc);
+    
+    // Start system - runs after Awake but before Update
+    ecs_system_desc_t start_desc = {0};
+    start_desc.entity = ecs_entity_init(world, &(ecs_entity_desc_t){ 
+        .name = "UnitylikeScriptStart", 
+        .add = (ecs_id_t[]){ EcsPreUpdate, 0 } 
+    });
+    start_desc.callback = ScriptStartSystem;
+    ecs_system_init(world, &start_desc);
+    
+    // Update system - main update phase
+    ecs_system_desc_t update_desc = {0};
+    update_desc.entity = ecs_entity_init(world, &(ecs_entity_desc_t){ 
+        .name = "UnitylikeScriptUpdate", 
+        .add = (ecs_id_t[]){ EcsOnUpdate, 0 } 
+    });
+    update_desc.callback = ScriptUpdateSystem;
+    ecs_system_init(world, &update_desc);
+    
+    // LateUpdate system - after main update
+    ecs_system_desc_t late_update_desc = {0};
+    late_update_desc.entity = ecs_entity_init(world, &(ecs_entity_desc_t){ 
+        .name = "UnitylikeScriptLateUpdate", 
+        .add = (ecs_id_t[]){ EcsPostUpdate, 0 } 
+    });
+    late_update_desc.callback = ScriptLateUpdateSystem;
+    ecs_system_init(world, &late_update_desc);
+    
+    // FixedUpdate system - runs at fixed intervals
+    // Note: For now we'll run this with regular update, but could be separated later
+    ecs_system_desc_t fixed_update_desc = {0};
+    fixed_update_desc.entity = ecs_entity_init(world, &(ecs_entity_desc_t){ 
+        .name = "UnitylikeScriptFixedUpdate", 
+        .add = (ecs_id_t[]){ EcsOnUpdate, 0 } 
+    });
+    fixed_update_desc.callback = ScriptFixedUpdateSystem;
+    ecs_system_init(world, &fixed_update_desc);
+    
+    g_systems_registered = true;
+    SDL_Log("[UnityLike] Script execution systems registered with ECS pipeline");
+}
 
 void __register_script_entity(ecs_world_t* /*w*/, std::uint64_t e) {
     ecs_entity_t ee = (ecs_entity_t)e;
@@ -39,6 +159,7 @@ void __remove_script_host(std::uint64_t e){
 Scene::Scene(ecs_world_t* world) : world_(world) {
     assert(world_ != nullptr);
     ensure_components_registered(world_);
+    register_script_systems(world_);
 }
 
 Scene::~Scene() {

@@ -1,5 +1,7 @@
 #include <stdlib.h>
 #include <string.h>
+
+#if AME_WITH_FLECS
 #include <flecs.h>
 
 // Mirror of façade TextData POD
@@ -46,3 +48,11 @@ void ame_text_system_register(ecs_world_t* w) {
     sd.query.terms[0].id = TextId;
     ecs_system_init(w, &sd);
 }
+#else
+// When Flecs is disabled, provide a no-op symbol so callers can keep calling it.
+typedef struct ecs_world_t ecs_world_t;
+void ame_text_system_register(ecs_world_t* w) {
+    (void)w;
+    // No ECS available; nothing to register.
+}
+#endif

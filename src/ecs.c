@@ -5,19 +5,33 @@
 #include <flecs.h>
 #include <flecs/addons/system.h>
 #include <flecs/addons/pipeline.h>
+#include <SDL3/SDL.h>
 
 struct AmeEcsWorld {
     ecs_world_t *world;
 };
+
+// Use the default Flecs builtin pipeline instead of creating custom one
+static ecs_entity_t ame_create_default_pipeline(ecs_world_t *world) {
+    // Return 0 to use Flecs default builtin pipeline
+    return 0;
+}
 
 AmeEcsWorld* ame_ecs_world_create(void) {
     AmeEcsWorld *w = (AmeEcsWorld*)calloc(1, sizeof(AmeEcsWorld));
     if (!w) return NULL;
     w->world = ecs_init();
     if (!w->world) { free(w); return NULL; }
-    // Explicitly import required addons to ensure pipelines & systems work
-    FlecsSystemImport(w->world);
-    FlecsPipelineImport(w->world);
+
+    // Centralized pipeline setup
+    ecs_entity_t pipeline = ame_create_default_pipeline(w->world);
+    if (pipeline) {
+        ecs_set_pipeline(w->world, pipeline);
+        SDL_Log("[ECS] Custom pipeline created and set: %llu", (unsigned long long)pipeline);
+    } else {
+        SDL_Log("[ECS] Using Flecs default builtin pipeline");
+    }
+
     return w;
 }
 

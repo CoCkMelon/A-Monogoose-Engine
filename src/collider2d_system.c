@@ -134,7 +134,7 @@ void ame_collider2d_system_register(ecs_world_t* w) {
 
     // Base collider system
     ecs_system_desc_t sd = {0};
-    sd.entity = ecs_entity_init(w, &(ecs_entity_desc_t){ .name = "SysCollider2DApply", .add = (ecs_id_t[]){ EcsOnUpdate, 0 } });
+    sd.entity = ecs_entity_init(w, &(ecs_entity_desc_t){ .name = "SysCollider2DApply", .add = (ecs_id_t[]){ ecs_pair(EcsDependsOn, EcsOnUpdate), 0 } });
     sd.callback = SysCollider2DApply;
     sd.query.terms[0].id = ColId;
     sd.query.terms[1].id = BodyId;
@@ -183,7 +183,7 @@ void ame_collider2d_system_register(ecs_world_t* w) {
 
     if (EdgeId){
         ecs_system_desc_t sde = (ecs_system_desc_t){0};
-        ecs_entity_desc_t ed = {0}; ed.name = "SysEdgeCollider2DApply"; ed.add = (ecs_id_t[]){ EcsOnUpdate, 0 };
+        ecs_entity_desc_t ed = {0}; ed.name = "SysEdgeCollider2DApply"; ed.add = (ecs_id_t[]){ ecs_pair(EcsDependsOn, EcsOnUpdate), 0 };
         sde.entity = ecs_entity_init(w, &ed);
         sde.callback = SysEdgeCollider2DApply;
         sde.query.terms[0].id = EdgeId;
@@ -192,7 +192,7 @@ void ame_collider2d_system_register(ecs_world_t* w) {
     }
     if (ChainId){
         ecs_system_desc_t sdc = (ecs_system_desc_t){0};
-        ecs_entity_desc_t ed = {0}; ed.name = "SysChainCollider2DApply"; ed.add = (ecs_id_t[]){ EcsOnUpdate, 0 };
+        ecs_entity_desc_t ed = {0}; ed.name = "SysChainCollider2DApply"; ed.add = (ecs_id_t[]){ ecs_pair(EcsDependsOn, EcsOnUpdate), 0 };
         sdc.entity = ecs_entity_init(w, &ed);
         sdc.callback = SysChainCollider2DApply;
         sdc.query.terms[0].id = ChainId;
@@ -208,7 +208,7 @@ void ame_collider2d_system_register(ecs_world_t* w) {
             ecs_delete(w, existing_sys); 
         }
         ecs_system_desc_t sdm = (ecs_system_desc_t){0};
-        ecs_entity_desc_t ed = {0}; ed.name = "SysMeshCollider2DApply"; ed.add = (ecs_id_t[]){ EcsOnUpdate, 0 };
+        ecs_entity_desc_t ed = {0}; ed.name = "SysMeshCollider2DApply"; ed.add = (ecs_id_t[]){ ecs_pair(EcsDependsOn, EcsOnUpdate), 0 };
         sdm.entity = ecs_entity_init(w, &ed);
         sdm.callback = SysMeshCollider2DApply;
         sdm.query.terms[0].id = MeshId;
@@ -221,7 +221,7 @@ void ame_collider2d_system_register(ecs_world_t* w) {
         
         // Also register verification system to test query
         ecs_system_desc_t verify_desc = {0};
-        ecs_entity_desc_t verify_ed = {0}; verify_ed.name = "VerifyMeshColliderQuery"; verify_ed.add = (ecs_id_t[]){ EcsOnUpdate, 0 };
+        ecs_entity_desc_t verify_ed = {0}; verify_ed.name = "VerifyMeshColliderQuery"; verify_ed.add = (ecs_id_t[]){ ecs_pair(EcsDependsOn, EcsOnUpdate), 0 };
         verify_desc.entity = ecs_entity_init(w, &verify_ed);
         verify_desc.callback = VerifyMeshColliderQuery;
         verify_desc.query.terms[0].id = MeshId;
