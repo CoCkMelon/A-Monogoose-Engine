@@ -16,7 +16,9 @@ typedef uint64_t AmeEcsId;
 // Audio source types handled by the engine mixer
 typedef enum AmeAudioSourceType {
     AME_AUDIO_SOURCE_OSC_SIGMOID = 1,
-    AME_AUDIO_SOURCE_OPUS = 2
+    AME_AUDIO_SOURCE_OPUS = 2,
+    AME_AUDIO_SOURCE_SAW_WORK = 3,
+    AME_AUDIO_SOURCE_SAW_CUT = 4
 } AmeAudioSourceType;
 
 // Sigmoid oscillator parameters
@@ -45,6 +47,29 @@ typedef struct AmeAudioSource {
     union {
         AmeAudioSigmoidOsc osc;
         AmeAudioPcm pcm;
+        struct {
+            // Continuous circular-saw work buzz
+            float base_freq_hz; // nominal buzz frequency
+            float drive;        // waveshaper drive (0..2)
+            float noise_mix;    // 0..1 additional noise content
+            float lfo_phase;    // internal LFO phase [0..1)
+            float lfo_rate_hz;  // LFO rate (e.g., 3-8 Hz)
+            float phase;        // oscillator phase [0..1)
+            uint32_t rnd;       // RNG state for noise
+            float hp_z1;        // simple 1-pole HP filter state for noise
+        } saw_work;
+        struct {
+            // Short cutting transient (burst of tone+noise)
+            float freq_hz;
+            float noise_mix;
+            float drive;
+            int samples_left;   // remaining samples in envelope
+            int attack;         // samples
+            int decay;          // samples
+            uint32_t rnd;       // RNG state for noise
+            float hp_z1;        // filter state
+            float phase;        // tone phase
+        } saw_cut;
     } u;
 } AmeAudioSource;
 
@@ -61,6 +86,23 @@ AmeEcsId ame_audio_register_component(AmeEcsWorld *w);
 
 // Utility helpers for sources
 void ame_audio_source_init_sigmoid(AmeAudioSource *s, float freq_hz, float shape_k, float gain);
+
+// Initialize continuous circular-saw work buzz generator
+void ame_audio_source_init_saw_work(AmeAudioSource *s,
+                                    float base_freq_hz,
+                                    float drive,
+                                    float noise_mix,
+                                    float lfo_rate_hz,
+                                    float gain);
+
+// Initialize short circular-saw cutting burst (one-shot)
+// duration_sec controls total length; attack is short fraction of it.
+void ame_audio_source_init_saw_cut(AmeAudioSource *s,
+                                   float freq_hz,
+                                   float drive,
+                                   float noise_mix,
+                                   float duration_sec,
+                                   float gain);
 
 // Load an Opus file from a path on disk into an AmeAudioPcm buffer inside the component.
 // Returns true on success. The component's type will be set to OPUS and ready to play.

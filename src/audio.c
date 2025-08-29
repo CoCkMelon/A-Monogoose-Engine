@@ -126,6 +126,54 @@ void ame_audio_source_init_sigmoid(AmeAudioSource *src, float freq_hz, float sha
     src->u.osc.phase = 0.0f;
 }
 
+void ame_audio_source_init_saw_work(AmeAudioSource *s,
+                                    float base_freq_hz,
+                                    float drive,
+                                    float noise_mix,
+                                    float lfo_rate_hz,
+                                    float gain) {
+    if (!s) return;
+    memset(s, 0, sizeof(*s));
+    s->type = AME_AUDIO_SOURCE_SAW_WORK;
+    s->gain = gain;
+    s->pan = 0.0f;
+    s->playing = true;
+    s->u.saw_work.base_freq_hz = base_freq_hz > 10.0f ? base_freq_hz : 120.0f;
+    s->u.saw_work.drive = AME_CLAMP(drive, 0.0f, 2.5f);
+    s->u.saw_work.noise_mix = AME_CLAMP(noise_mix, 0.0f, 1.0f);
+    s->u.saw_work.lfo_rate_hz = (lfo_rate_hz > 0.1f ? lfo_rate_hz : 4.0f);
+    s->u.saw_work.lfo_phase = 0.0f;
+    s->u.saw_work.phase = 0.0f;
+    s->u.saw_work.rnd = 0x1234567u;
+    s->u.saw_work.hp_z1 = 0.0f;
+}
+
+void ame_audio_source_init_saw_cut(AmeAudioSource *s,
+                                   float freq_hz,
+                                   float drive,
+                                   float noise_mix,
+                                   float duration_sec,
+                                   float gain) {
+    if (!s) return;
+    memset(s, 0, sizeof(*s));
+    s->type = AME_AUDIO_SOURCE_SAW_CUT;
+    s->gain = gain;
+    s->pan = 0.0f;
+    s->playing = true;
+    float dur = duration_sec > 0.02f ? duration_sec : 0.08f;
+    int total = (int)(dur * (float)g_mixer.sample_rate);
+    if (total < 16) total = 16;
+    s->u.saw_cut.attack = AME_CLAMP((int)(0.12f * (float)total), 4, total/2);
+    s->u.saw_cut.decay  = total - s->u.saw_cut.attack;
+    s->u.saw_cut.samples_left = total;
+    s->u.saw_cut.freq_hz = freq_hz > 30.0f ? freq_hz : 220.0f;
+    s->u.saw_cut.noise_mix = AME_CLAMP(noise_mix, 0.0f, 1.0f);
+    s->u.saw_cut.drive = AME_CLAMP(drive, 0.0f, 3.0f);
+    s->u.saw_cut.rnd = 0x9e3779b9u;
+    s->u.saw_cut.hp_z1 = 0.0f;
+    s->u.saw_cut.phase = 0.0f;
+}
+
 static void free_pcm(AmeAudioPcm *pcm) {
     if (!pcm) return;
     free(pcm->samples);
@@ -259,6 +307,130 @@ static int pa_callback(const void *input, void *output,
                 pcm->cursor = cur;
                 break;
             }
+            case AME_AUDIO_SOURCE_SAW_WORK: {
+                float base = AME_CLAMP(s->u.saw_work.base_freq_hz, 20.0f, 4000.0f);
+                float lfo_rate = s->u.saw_work.lfo_rate_hz;
+                float phase = s->u.saw_work.phase;
+                float lfo = s->u.saw_work.lfo_phase;
+                uint32_t rng = s->u.saw_work.rnd;
+                float hp = s->u.saw_work.hp_z1;
+                float drive = s->u.saw_work.drive;
+                float noise_mix = s->u.saw_work.noise_mix;
+
+                // TWO SEPARATE FREQUENCIES - NOT HARMONICALLY RELATED!
+                float motor_freq = base * 0.25f;  // Low motor rumble (e.g., 50-100 Hz)
+                float blade_freq = base * 12.7f;  // High metal screech (non-harmonic ratio!)
+
+                float motor_inc = motor_freq / (float)g_mixer.sample_rate;
+                float blade_inc = blade_freq / (float)g_mixer.sample_rate;
+                float lfo_inc = lfo_rate / (float)g_mixer.sample_rate;
+
+                // Separate phase accumulators for each layer
+                static float motor_phase = 0.0f;
+                static float blade_phase = 0.0f;
+                static float blade_phase2 = 0.0f;  // Second blade oscillator for beating
+
+                for (unsigned long n = 0; n < frameCount; ++n) {
+                    // ===== LAYER 1: LOW MOTOR RUMBLE =====
+                    // Thick sawtooth with pulse-width modulation
+                    float motor_saw = (motor_phase * 2.0f) - 1.0f;
+                    float motor_pulse = (motor_phase < 0.3f + sinf(lfo * 2.0f * (float)M_PI) * 0.2f) ? 1.0f : -1.0f;
+                    float motor = motor_saw * 0.7f + motor_pulse * 0.3f;
+
+                    // Add sub-bass thump
+                    float t = motor_phase * 2.0f * (float)M_PI;
+                    motor += sinf(t * 0.5f) * 0.4f;  // Sub-octave
+                    motor += sinf(t * 2.0f) * 0.2f;  // 2nd harmonic
+
+                    // Heavy saturation on motor
+                    motor = tanhf(motor * 3.0f) * 0.5f;
+
+                    // ===== LAYER 2: HIGH METAL SCREECH =====
+                    // Two detuned oscillators for metallic beating
+                    float blade1 = (blade_phase < 0.5f) ? 1.0f : -1.0f;  // Square wave
+                    float blade2 = (blade_phase2 < 0.5f) ? 1.0f : -1.0f;
+                    float metal = (blade1 + blade2 * 0.8f) * 0.3f;
+
+                    // Ring modulation for metallic timbre
+                    float ring_mod = sinf(blade_phase * 37.0f * (float)M_PI);
+                    metal *= (1.0f + ring_mod * 0.5f);
+
+                    // Harsh clipping
+                    if (metal > 0.3f) metal = 0.3f;
+                    if (metal < -0.3f) metal = -0.3f;
+
+                    // ===== LAYER 3: GRINDING NOISE =====
+                    rng = rng * 1664525u + 1013904223u;
+                    float noise = ((rng >> 9) & 0x7fffff) / 8388607.0f * 2.0f - 1.0f;
+
+                    // Resonant filter on noise (metallic coloration)
+                    float cutoff = 0.1f + fabsf(metal) * 0.3f;  // Modulate by metal amplitude
+                    hp = hp + cutoff * (noise - hp);
+                    float filtered_noise = noise - hp;
+
+                    // ===== MIX ALL LAYERS =====
+                    // Key: Keep layers SEPARATE in frequency domain
+                    float output = motor * 0.6f +           // Low rumble
+                                  metal * 0.25f +            // High screech
+                                  filtered_noise * noise_mix * 0.15f;  // Texture
+
+                    // Add occasional "bite" when blade catches
+                    if ((rng & 0xFF) < 2) {  // Random impulses
+                        output += ((rng >> 8) & 1) ? 0.5f : -0.5f;
+                    }
+
+                    // Update phases
+                    motor_phase += motor_inc * (1.0f + sinf(lfo * 2.0f * (float)M_PI) * 0.01f);
+                    blade_phase += blade_inc;
+                    blade_phase2 += blade_inc * 1.007f;  // Slight detune for beating
+
+                    if (motor_phase >= 1.0f) motor_phase -= 1.0f;
+                    if (blade_phase >= 1.0f) blade_phase -= 1.0f;
+                    if (blade_phase2 >= 1.0f) blade_phase2 -= 1.0f;
+
+                    lfo += lfo_inc;
+                    if (lfo >= 1.0f) lfo -= 1.0f;
+
+                    out[n*2+0] += output * gl;
+                    out[n*2+1] += output * gr;
+                }
+
+                s->u.saw_work.phase = motor_phase;
+                s->u.saw_work.lfo_phase = lfo;
+                s->u.saw_work.rnd = rng;
+                s->u.saw_work.hp_z1 = hp;
+                break;
+            }
+            case AME_AUDIO_SOURCE_SAW_CUT: {
+                // Simple saw cut - gameplay controls timing, mixer just plays the sound
+                float base = AME_CLAMP(s->u.saw_cut.freq_hz, 30.0f, 8000.0f);
+                float phase = s->u.saw_cut.phase;
+                uint32_t rng = s->u.saw_cut.rnd;
+                float hp = s->u.saw_cut.hp_z1;
+                float drive = s->u.saw_cut.drive;
+                float noise_mix = s->u.saw_cut.noise_mix;
+                float inc = base / (float)g_mixer.sample_rate;
+                for (unsigned long n = 0; n < frameCount; ++n) {
+                    float t = phase * 2.0f * (float)M_PI;
+                    // Square wave core for a harsher cut transient
+                    float tone = (sinf(t) >= 0.0f) ? 1.0f : -1.0f;
+                    // Gentle soft-clip to keep it under control
+                    tone = tanhf(tone * (1.0f + drive * 2.0f));
+                    rng = rng * 1664525u + 1013904223u;
+                    float wn = ((rng >> 9) & 0x7fffff) / 8388607.0f * 2.0f - 1.0f;
+                    float lp = hp + 0.95f * (wn - hp);
+                    float high = wn - lp;
+                    float mix = tone * (1.0f - noise_mix) + high * noise_mix;
+                    out[n*2+0] += mix * gl;
+                    out[n*2+1] += mix * gr;
+                    phase += inc; if (phase >= 1.0f) phase -= 1.0f;
+                    hp = lp;
+                }
+                s->u.saw_cut.phase = phase;
+                s->u.saw_cut.rnd = rng;
+                s->u.saw_cut.hp_z1 = hp;
+                break;
+            }
             default: break;
         }
     }
@@ -277,17 +449,31 @@ static int pa_callback(const void *input, void *output,
         g_mixer.fade_in_remaining = r;
     }
 
-    // Write back stateful fields (phase/cursor) into mixer storage under lock
+    // Write back phase updates to mixer storage for oscillators to maintain continuity
     pthread_mutex_lock(&g_mixer.mtx);
-    size_t write_n = (count <= g_mixer.active_count) ? count : g_mixer.active_count;
-    for (size_t i = 0; i < write_n; ++i) {
-        if (g_mixer.active_vals[i].type == AME_AUDIO_SOURCE_OSC_SIGMOID && tmp_vals[i].type == AME_AUDIO_SOURCE_OSC_SIGMOID) {
-            g_mixer.active_vals[i].u.osc.phase = tmp_vals[i].u.osc.phase;
-        } else if (g_mixer.active_vals[i].type == AME_AUDIO_SOURCE_OPUS && tmp_vals[i].type == AME_AUDIO_SOURCE_OPUS) {
-            g_mixer.active_vals[i].u.pcm.cursor = tmp_vals[i].u.pcm.cursor;
+    for (size_t i = 0; i < count && i < g_mixer.active_count; ++i) {
+        AmeAudioSource *src = &tmp_vals[i];
+        AmeAudioSource *stored = &g_mixer.active_vals[i];
+        
+        // Only write back phase for oscillators - maintain phase continuity
+        if (src->type == AME_AUDIO_SOURCE_OSC_SIGMOID && stored->type == AME_AUDIO_SOURCE_OSC_SIGMOID) {
+            stored->u.osc.phase = src->u.osc.phase;
+        } else if (src->type == AME_AUDIO_SOURCE_OPUS && stored->type == AME_AUDIO_SOURCE_OPUS) {
+            stored->u.pcm.cursor = src->u.pcm.cursor;
+        } else if (src->type == AME_AUDIO_SOURCE_SAW_WORK && stored->type == AME_AUDIO_SOURCE_SAW_WORK) {
+            stored->u.saw_work.phase = src->u.saw_work.phase;
+            stored->u.saw_work.lfo_phase = src->u.saw_work.lfo_phase;
+            stored->u.saw_work.rnd = src->u.saw_work.rnd;
+            stored->u.saw_work.hp_z1 = src->u.saw_work.hp_z1;
+        } else if (src->type == AME_AUDIO_SOURCE_SAW_CUT && stored->type == AME_AUDIO_SOURCE_SAW_CUT) {
+            stored->u.saw_cut.phase = src->u.saw_cut.phase;
+            stored->u.saw_cut.rnd = src->u.saw_cut.rnd;
+            stored->u.saw_cut.hp_z1 = src->u.saw_cut.hp_z1;
+            stored->u.saw_cut.samples_left = src->u.saw_cut.samples_left;
         }
-        // Also reflect 'playing' flag if it turned off
-        g_mixer.active_vals[i].playing = tmp_vals[i].playing;
+        
+        // Write back playing state for sources that auto-stop (like non-looping opus)
+        stored->playing = src->playing;
     }
     pthread_mutex_unlock(&g_mixer.mtx);
 
