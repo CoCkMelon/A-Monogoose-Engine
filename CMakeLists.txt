@@ -9,7 +9,13 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_BINARY_DIR)
   ")
 endif()
 
+# Enforce IPO/LTO policy by default even in subprojects
+set(CMAKE_POLICY_DEFAULT_CMP0069 NEW CACHE STRING "" FORCE)
 cmake_minimum_required(VERSION 3.16)
+# Ensure IPO/LTO policy is enforced so INTERPROCEDURAL_OPTIMIZATION takes effect
+if(POLICY CMP0069)
+  cmake_policy(SET CMP0069 NEW)
+endif()
 project(a_mongoose_engine C CXX)
 
 # Global build defaults and optimizations
@@ -143,6 +149,28 @@ else()
   find_package(SDL3_image REQUIRED)
 endif()
 
+# SDL_ttf fetch or find (needed by consumers; do this even if examples are off)
+if(AME_FORCE_STATIC_SDL OR (AME_PREFER_STATIC_SDL AND AME_FETCH_STATIC_SDL))
+  set(CMAKE_DISABLE_FIND_PACKAGE_SDL3_ttf ON)
+  message(STATUS "Fetching SDL3_ttf source (static preferred)")
+  set(_AME_TTF_OLD_BUILD_SHARED_LIBS ${BUILD_SHARED_LIBS})
+  if(AME_FORCE_STATIC_SDL OR AME_PREFER_STATIC_SDL)
+    set(BUILD_SHARED_LIBS OFF)
+  endif()
+  set(SDL3TTF_VENDORED OFF CACHE BOOL "" FORCE)
+  include(FetchContent)
+  FetchContent_Declare(
+    sdl3_ttf
+    GIT_REPOSITORY https://github.com/libsdl-org/SDL_ttf.git
+    GIT_TAG main
+    GIT_SHALLOW TRUE
+  )
+  FetchContent_MakeAvailable(sdl3_ttf)
+  set(BUILD_SHARED_LIBS ${_AME_TTF_OLD_BUILD_SHARED_LIBS})
+else()
+  find_package(SDL3_ttf REQUIRED)
+endif()
+
 # Select SDL targets (prefer static when available)
 set(AME_SDL3_TARGET SDL3::SDL3)
 if(AME_PREFER_STATIC_SDL AND TARGET SDL3::SDL3-static)
@@ -154,10 +182,12 @@ if((AME_FORCE_STATIC_SDL OR AME_PREFER_STATIC_SDL) AND TARGET SDL3_image::SDL3_i
   set(AME_SDL3_IMAGE_TARGET SDL3_image::SDL3_image-static)
 endif()
 
-# Default for TTF (will be overridden if examples are enabled and SDL3_ttf is found)
-set(AME_SDL3_TTF_TARGET SDL3_ttf::SDL3_ttf)
-# Track whether TTF was fetched to avoid alias collisions
-set(_AME_FETCHED_TTF OFF)
+# Select SDL_ttf target, prefer static when available
+if((AME_FORCE_STATIC_SDL OR AME_PREFER_STATIC_SDL) AND TARGET SDL3_ttf::SDL3_ttf-static)
+  set(AME_SDL3_TTF_TARGET SDL3_ttf::SDL3_ttf-static)
+else()
+  set(AME_SDL3_TTF_TARGET SDL3_ttf::SDL3_ttf)
+endif()
 
 # Vendored glad
 add_library(glad STATIC third_party/glad/src/gl.c)
@@ -251,7 +281,7 @@ else()
     target_link_libraries(ame PUBLIC GL)
 endif()
 
-target_link_libraries(ame PUBLIC ${AME_SDL3_TARGET})
+target_link_libraries(ame PUBLIC ${AME_SDL3_TARGET} ${AME_SDL3_IMAGE_TARGET} ${AME_SDL3_TTF_TARGET})
 
 # Link vendored glad
 target_link_libraries(ame PUBLIC glad box2d)
