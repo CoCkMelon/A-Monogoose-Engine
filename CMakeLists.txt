@@ -12,6 +12,22 @@ endif()
 cmake_minimum_required(VERSION 3.16)
 project(a_mongoose_engine C CXX)
 
+# Global build defaults and optimizations
+# Default all libs to static unless explicitly overridden
+set(BUILD_SHARED_LIBS OFF CACHE BOOL "Build shared libraries" FORCE)
+
+# Enable IPO/LTO where available
+include(CheckIPOSupported)
+check_ipo_supported(RESULT ame_ipo_supported OUTPUT ame_ipo_error)
+if(ame_ipo_supported)
+  set(CMAKE_INTERPROCEDURAL_OPTIMIZATION ON)
+endif()
+
+# Strong Release optimization flags
+set(CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE} -O3 -DNDEBUG" CACHE STRING "" FORCE)
+set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -O3 -DNDEBUG" CACHE STRING "" FORCE)
+set(CMAKE_EXE_LINKER_FLAGS_RELEASE "${CMAKE_EXE_LINKER_FLAGS_RELEASE} -Wl,--as-needed" CACHE STRING "" FORCE)
+
 option(AME_BUILD_EXAMPLES "Build engine example programs" OFF)
 option(AME_WITH_FLECS "Build with Flecs ECS integration" ON)
 option(AME_BUILD_UNITYLIKE "Build C++ unity-like facade (requires Flecs)" ON)
@@ -149,6 +165,9 @@ target_include_directories(glad PUBLIC third_party/glad/include)
 
 # Flecs ECS (optional)
 if(AME_WITH_FLECS)
+  # Prefer building only the static Flecs library
+  set(FLECS_STATIC_LIBS ON CACHE BOOL "" FORCE)
+  set(FLECS_SHARED_LIBS OFF CACHE BOOL "" FORCE)
   add_subdirectory(third_party/flecs)
 endif()
 
@@ -237,7 +256,13 @@ target_link_libraries(ame PUBLIC ${AME_SDL3_TARGET})
 # Link vendored glad
 target_link_libraries(ame PUBLIC glad box2d)
 if(AME_WITH_FLECS)
-  target_link_libraries(ame PUBLIC flecs)
+  if(TARGET flecs_static)
+    target_link_libraries(ame PUBLIC flecs_static)
+  elseif(TARGET flecs)
+    target_link_libraries(ame PUBLIC flecs)
+  else()
+    message(FATAL_ERROR "Flecs requested but no flecs targets found")
+  endif()
 endif()
 
 # Audio dependencies via pkg-config
@@ -530,11 +555,16 @@ target_link_libraries(line_draw PRIVATE ${AME_SDL3_TARGET} Threads::Threads ame)
   target_link_libraries(dialogue_ui_example PRIVATE ${AME_SDL3_TARGET} Threads::Threads ame ${AME_SDL3_TTF_TARGET} glad)
   # Link flecs example
   if(AME_WITH_FLECS)
-    target_link_libraries(flecs_scene PRIVATE ${AME_SDL3_TARGET} Threads::Threads ame flecs)
+    if(TARGET flecs_static)
+      set(_flecs_example_target flecs_static)
+    else()
+      set(_flecs_example_target flecs)
+    endif()
+    target_link_libraries(flecs_scene PRIVATE ${AME_SDL3_TARGET} Threads::Threads ame ${_flecs_example_target})
     # Link flecs script GL example
-    target_link_libraries(flecs_script_scene PRIVATE ${AME_SDL3_TARGET} Threads::Threads ame flecs)
+    target_link_libraries(flecs_script_scene PRIVATE ${AME_SDL3_TARGET} Threads::Threads ame ${_flecs_example_target})
     # Link tilemap example
-    target_link_libraries(tilemap_render PRIVATE ${AME_SDL3_TARGET} Threads::Threads ame flecs)
+    target_link_libraries(tilemap_render PRIVATE ${AME_SDL3_TARGET} Threads::Threads ame ${_flecs_example_target})
   endif()
   # Link audio example
   target_link_libraries(audio_pan_example PRIVATE ${AME_SDL3_TARGET} Threads::Threads ame)
