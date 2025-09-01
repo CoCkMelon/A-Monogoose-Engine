@@ -19,7 +19,12 @@ else()
   target_link_libraries(unitylike_minimal PRIVATE GL)
 endif()
 
-target_link_libraries(unitylike_minimal PRIVATE SDL3::SDL3 Threads::Threads unitylike ame flecs)
+# Use top-level-selected SDL target if defined
+if(DEFINED AME_SDL3_TARGET)
+  target_link_libraries(unitylike_minimal PRIVATE ${AME_SDL3_TARGET} Threads::Threads unitylike ame flecs)
+else()
+  target_link_libraries(unitylike_minimal PRIVATE SDL3::SDL3 Threads::Threads unitylike ame flecs)
+endif()
 
 # asyncinput selection mirroring top-level
 if(TARGET asyncinput_shared)

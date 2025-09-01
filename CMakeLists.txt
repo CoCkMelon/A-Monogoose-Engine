@@ -15,6 +15,12 @@ project(a_mongoose_engine C CXX)
 option(AME_BUILD_EXAMPLES "Build engine example programs" OFF)
 option(AME_WITH_FLECS "Build with Flecs ECS integration" ON)
 option(AME_BUILD_UNITYLIKE "Build C++ unity-like facade (requires Flecs)" ON)
+# Prefer static variants of SDL3, SDL3_image, SDL3_ttf when available (default OFF as SDL3 static is large)
+option(AME_PREFER_STATIC_SDL "Prefer linking against static SDL3/SDL3_image/SDL3_ttf if available" OFF)
+# If enabled, fetch and build static SDL3/SDL3_image/SDL3_ttf when static targets are not found
+option(AME_FETCH_STATIC_SDL "Fetch and build static SDL3/SDL3_image/SDL3_ttf if static targets are missing" OFF)
+# If enabled, force using static SDL; will fetch if not available
+option(AME_FORCE_STATIC_SDL "Force static SDL; fetch and build static SDL if not available" OFF)
 
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
@@ -24,13 +30,118 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# Find SDL3 and OpenGL
-find_package(SDL3 REQUIRED)
+# OpenGL, Threads, PkgConfig
 find_package(OpenGL REQUIRED)
 find_package(Threads REQUIRED)
 find_package(PkgConfig REQUIRED)
-# SDL3_ttf is only required by examples; look it up later when examples are enabled
-find_package(SDL3_image REQUIRED)
+
+# Decide whether to fetch SDL components first to avoid alias collisions
+include(FetchContent)
+if(AME_FORCE_STATIC_SDL)
+  set(AME_PREFER_STATIC_SDL ON CACHE BOOL "" FORCE)
+endif()
+
+# Internal flags to control whether we will fetch these components
+set(_AME_FETCH_SDL3 OFF)
+set(_AME_FETCH_SDL3_IMAGE OFF)
+set(_AME_FETCH_SDL3_TTF OFF)
+
+if(AME_FORCE_STATIC_SDL)
+  set(_AME_FETCH_SDL3 ON)
+  set(_AME_FETCH_SDL3_IMAGE ON)
+  set(_AME_FETCH_SDL3_TTF ON)
+elseif(AME_PREFER_STATIC_SDL AND AME_FETCH_STATIC_SDL)
+  # We'll fetch when static targets are missing; to avoid alias collisions with system packages,
+  # skip find_package for these and rely on fetched projects to define the targets.
+  set(_AME_FETCH_SDL3 ON)
+  set(_AME_FETCH_SDL3_IMAGE ON)
+  # TTF is only needed with examples; decide later
+endif()
+
+# If fetching, disable system packages so they don't define conflicting imported targets
+if(_AME_FETCH_SDL3_IMAGE)
+  set(CMAKE_DISABLE_FIND_PACKAGE_SDL3_image ON)
+endif()
+
+# Now either fetch or find SDL3
+if(_AME_FETCH_SDL3)
+  message(STATUS "Fetching SDL3 source (static available)")
+  # Build shared+static and minimize subsystems to what this project needs
+  set(SDL_SHARED ON CACHE BOOL "" FORCE)
+  set(SDL_STATIC ON CACHE BOOL "" FORCE)
+  set(SDL_INSTALL OFF CACHE BOOL "" FORCE)
+  set(SDL_EXAMPLES OFF CACHE BOOL "" FORCE)
+  set(SDL_TESTS OFF CACHE BOOL "" FORCE)
+  # Disable unused subsystems
+  set(SDL_AUDIO OFF CACHE BOOL "" FORCE)
+  set(SDL_RENDER OFF CACHE BOOL "" FORCE)
+  set(SDL_CAMERA OFF CACHE BOOL "" FORCE)
+  set(SDL_HAPTIC OFF CACHE BOOL "" FORCE)
+  set(SDL_JOYSTICK OFF CACHE BOOL "" FORCE)
+  set(SDL_HIDAPI OFF CACHE BOOL "" FORCE)
+  set(SDL_POWER OFF CACHE BOOL "" FORCE)
+  set(SDL_SENSOR OFF CACHE BOOL "" FORCE)
+  set(SDL_DIALOG OFF CACHE BOOL "" FORCE)
+  set(SDL_GPU OFF CACHE BOOL "" FORCE)
+  # Keep desktop video backends and OpenGL; turn off GLES/Vulkan if not needed
+  set(SDL_OPENGL ON CACHE BOOL "" FORCE)
+  set(SDL_OPENGLES OFF CACHE BOOL "" FORCE)
+  set(SDL_VULKAN OFF CACHE BOOL "" FORCE)
+  # Avoid enabling optional audio backends explicitly
+  set(SDL_ALSA OFF CACHE BOOL "" FORCE)
+  set(SDL_PIPEWIRE OFF CACHE BOOL "" FORCE)
+  set(SDL_PULSEAUDIO OFF CACHE BOOL "" FORCE)
+  set(SDL_SNDIO OFF CACHE BOOL "" FORCE)
+
+  FetchContent_Declare(
+    sdl3
+    GIT_REPOSITORY https://github.com/libsdl-org/SDL.git
+    GIT_TAG release-3.2.2
+    GIT_SHALLOW TRUE
+  )
+  FetchContent_MakeAvailable(sdl3)
+else()
+  find_package(SDL3 REQUIRED)
+endif()
+
+# SDL_image fetch or find
+if(_AME_FETCH_SDL3_IMAGE)
+  message(STATUS "Fetching SDL3_image source (static or shared based on BUILD_SHARED_LIBS)")
+  # SDL_image decides shared/static from BUILD_SHARED_LIBS. To link consistently with static SDL,
+  # force SDL_image static by temporarily setting BUILD_SHARED_LIBS=OFF.
+  set(_AME_OLD_BUILD_SHARED_LIBS ${BUILD_SHARED_LIBS})
+  if(AME_FORCE_STATIC_SDL OR AME_PREFER_STATIC_SDL)
+    set(BUILD_SHARED_LIBS OFF)
+  endif()
+  set(SDL3IMAGE_VENDORED OFF CACHE BOOL "" FORCE)
+  FetchContent_Declare(
+    sdl3_image
+    GIT_REPOSITORY https://github.com/libsdl-org/SDL_image.git
+    GIT_TAG release-3.2.0
+    GIT_SHALLOW TRUE
+  )
+  FetchContent_MakeAvailable(sdl3_image)
+  # Restore prior setting for the rest of the project
+  set(BUILD_SHARED_LIBS ${_AME_OLD_BUILD_SHARED_LIBS})
+else()
+  find_package(SDL3_image REQUIRED)
+endif()
+
+# Select SDL targets (prefer static when available)
+set(AME_SDL3_TARGET SDL3::SDL3)
+if(AME_PREFER_STATIC_SDL AND TARGET SDL3::SDL3-static)
+  set(AME_SDL3_TARGET SDL3::SDL3-static)
+endif()
+
+set(AME_SDL3_IMAGE_TARGET SDL3_image::SDL3_image)
+if((AME_FORCE_STATIC_SDL OR AME_PREFER_STATIC_SDL) AND TARGET SDL3_image::SDL3_image-static)
+  set(AME_SDL3_IMAGE_TARGET SDL3_image::SDL3_image-static)
+endif()
+
+# Default for TTF (will be overridden if examples are enabled and SDL3_ttf is found)
+set(AME_SDL3_TTF_TARGET SDL3_ttf::SDL3_ttf)
+# Track whether TTF was fetched to avoid alias collisions
+set(_AME_FETCHED_TTF OFF)
 
 # Vendored glad
 add_library(glad STATIC third_party/glad/src/gl.c)
@@ -121,7 +232,7 @@ else()
     target_link_libraries(ame PUBLIC GL)
 endif()
 
-target_link_libraries(ame PUBLIC SDL3::SDL3)
+target_link_libraries(ame PUBLIC ${AME_SDL3_TARGET})
 
 # Link vendored glad
 target_link_libraries(ame PUBLIC glad box2d)
@@ -133,7 +244,7 @@ endif()
 pkg_check_modules(PORTAUDIO REQUIRED IMPORTED_TARGET portaudio-2.0)
 pkg_check_modules(OPUSFILE REQUIRED IMPORTED_TARGET opusfile)
 
-target_link_libraries(ame PUBLIC PkgConfig::PORTAUDIO PkgConfig::OPUSFILE SDL3_image::SDL3_image)
+target_link_libraries(ame PUBLIC PkgConfig::PORTAUDIO PkgConfig::OPUSFILE ${AME_SDL3_IMAGE_TARGET})
 
 # Link math library where needed (Linux)
 if(UNIX AND NOT APPLE)
@@ -198,7 +309,37 @@ install(FILES include/ame_story_route.h DESTINATION include)
 # ==============================
 if(AME_BUILD_EXAMPLES)
   # text_editor and dialogue_ui_example require SDL3_ttf
-  find_package(SDL3_ttf REQUIRED)
+  # If we decided to fetch SDL, also fetch TTF to avoid conflicts
+  if(AME_FORCE_STATIC_SDL OR (AME_PREFER_STATIC_SDL AND AME_FETCH_STATIC_SDL))
+    set(CMAKE_DISABLE_FIND_PACKAGE_SDL3_ttf ON)
+    message(STATUS "Fetching SDL3_ttf source (static or shared based on BUILD_SHARED_LIBS)")
+    # SDL_ttf also keys off BUILD_SHARED_LIBS; force static to match SDL core choice
+    set(_AME_TTF_OLD_BUILD_SHARED_LIBS ${BUILD_SHARED_LIBS})
+    if(AME_FORCE_STATIC_SDL OR AME_PREFER_STATIC_SDL)
+      set(BUILD_SHARED_LIBS OFF)
+    endif()
+    set(SDL3TTF_VENDORED OFF CACHE BOOL "" FORCE)
+    include(FetchContent)
+    FetchContent_Declare(
+      sdl3_ttf
+      GIT_REPOSITORY https://github.com/libsdl-org/SDL_ttf.git
+      GIT_TAG main
+      GIT_SHALLOW TRUE
+    )
+    FetchContent_MakeAvailable(sdl3_ttf)
+    # Restore
+    set(BUILD_SHARED_LIBS ${_AME_TTF_OLD_BUILD_SHARED_LIBS})
+    set(_AME_FETCHED_TTF ON)
+  else()
+    find_package(SDL3_ttf REQUIRED)
+  endif()
+
+  # Prefer static TTF when available
+  if((AME_FORCE_STATIC_SDL OR AME_PREFER_STATIC_SDL) AND TARGET SDL3_ttf::SDL3_ttf-static)
+    set(AME_SDL3_TTF_TARGET SDL3_ttf::SDL3_ttf-static)
+  else()
+    set(AME_SDL3_TTF_TARGET SDL3_ttf::SDL3_ttf)
+  endif()
 
   # Example: line_draw
   add_executable(line_draw examples/line_draw/main.c)
@@ -378,29 +519,29 @@ if(AME_BUILD_EXAMPLES)
       target_link_libraries(audio_ray_example PRIVATE GL)
   endif()
 
-  target_link_libraries(line_draw PRIVATE SDL3::SDL3 Threads::Threads ame)
-  target_link_libraries(rhythm_game PRIVATE SDL3::SDL3 Threads::Threads ame)
-  target_link_libraries(raymarch_arcade PRIVATE SDL3::SDL3 Threads::Threads ame)
-  target_link_libraries(dialogue_example PRIVATE SDL3::SDL3 Threads::Threads ame)
-  target_link_libraries(pixel_platformer PRIVATE SDL3::SDL3 Threads::Threads ame SDL3_image::SDL3_image)
+target_link_libraries(line_draw PRIVATE ${AME_SDL3_TARGET} Threads::Threads ame)
+  target_link_libraries(rhythm_game PRIVATE ${AME_SDL3_TARGET} Threads::Threads ame)
+  target_link_libraries(raymarch_arcade PRIVATE ${AME_SDL3_TARGET} Threads::Threads ame)
+  target_link_libraries(dialogue_example PRIVATE ${AME_SDL3_TARGET} Threads::Threads ame)
+  target_link_libraries(pixel_platformer PRIVATE ${AME_SDL3_TARGET} Threads::Threads ame ${AME_SDL3_IMAGE_TARGET})
   if(TARGET text_editor)
-      target_link_libraries(text_editor PRIVATE SDL3::SDL3 Threads::Threads ame SDL3_ttf::SDL3_ttf)
+      target_link_libraries(text_editor PRIVATE ${AME_SDL3_TARGET} Threads::Threads ame ${AME_SDL3_TTF_TARGET})
   endif()
-  target_link_libraries(dialogue_ui_example PRIVATE SDL3::SDL3 Threads::Threads ame SDL3_ttf::SDL3_ttf glad)
+  target_link_libraries(dialogue_ui_example PRIVATE ${AME_SDL3_TARGET} Threads::Threads ame ${AME_SDL3_TTF_TARGET} glad)
   # Link flecs example
   if(AME_WITH_FLECS)
-    target_link_libraries(flecs_scene PRIVATE SDL3::SDL3 Threads::Threads ame flecs)
+    target_link_libraries(flecs_scene PRIVATE ${AME_SDL3_TARGET} Threads::Threads ame flecs)
     # Link flecs script GL example
-    target_link_libraries(flecs_script_scene PRIVATE SDL3::SDL3 Threads::Threads ame flecs)
+    target_link_libraries(flecs_script_scene PRIVATE ${AME_SDL3_TARGET} Threads::Threads ame flecs)
     # Link tilemap example
-    target_link_libraries(tilemap_render PRIVATE SDL3::SDL3 Threads::Threads ame flecs)
+    target_link_libraries(tilemap_render PRIVATE ${AME_SDL3_TARGET} Threads::Threads ame flecs)
   endif()
   # Link audio example
-  target_link_libraries(audio_pan_example PRIVATE SDL3::SDL3 Threads::Threads ame)
+  target_link_libraries(audio_pan_example PRIVATE ${AME_SDL3_TARGET} Threads::Threads ame)
   # Link opus example
-  target_link_libraries(audio_opus_example PRIVATE SDL3::SDL3 Threads::Threads ame)
+  target_link_libraries(audio_opus_example PRIVATE ${AME_SDL3_TARGET} Threads::Threads ame)
   # Link audio ray example
-  target_link_libraries(audio_ray_example PRIVATE SDL3::SDL3 Threads::Threads ame)
+  target_link_libraries(audio_ray_example PRIVATE ${AME_SDL3_TARGET} Threads::Threads ame)
 
   # Compile definitions for SDL3 callback main style
   add_compile_definitions(SDL_MAIN_USE_CALLBACKS=1)

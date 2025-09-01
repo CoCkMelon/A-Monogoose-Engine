@@ -15,7 +15,11 @@ else()
   target_link_libraries(example_parent_child PRIVATE GL)
 endif()
 
-target_link_libraries(example_parent_child PRIVATE SDL3::SDL3 Threads::Threads unitylike ame flecs)
+if(DEFINED AME_SDL3_TARGET)
+  target_link_libraries(example_parent_child PRIVATE ${AME_SDL3_TARGET} Threads::Threads unitylike ame flecs)
+else()
+  target_link_libraries(example_parent_child PRIVATE SDL3::SDL3 Threads::Threads unitylike ame flecs)
+endif()
 
 if(TARGET asyncinput_shared)
   target_link_libraries(example_parent_child PRIVATE asyncinput_shared)

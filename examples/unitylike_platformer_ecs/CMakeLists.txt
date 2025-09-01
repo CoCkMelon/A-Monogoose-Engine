@@ -17,12 +17,12 @@ else()
 endif()
 
 target_link_libraries(unitylike_platformer_ecs PRIVATE 
-  SDL3::SDL3 
+  ${AME_SDL3_TARGET}
   Threads::Threads 
   unitylike 
   ame 
   flecs 
-  SDL3_image::SDL3_image
+  ${AME_SDL3_IMAGE_TARGET}
   glad
 )
 
