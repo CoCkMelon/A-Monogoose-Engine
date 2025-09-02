@@ -60,7 +60,7 @@ static void update_audio_pan(void) {
 SDL_AppResult SDL_AppInit(void **appstate, int argc, char **argv) {
     (void)argc; (void)argv; (void)appstate;
     SDL_SetAppMetadata("AME - Audio Pan Example", "0.1", "com.example.ame.audio_pan");
-    if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS)) {
+    if (!SDL_Init(SDL_INIT_VIDEO)) {
         SDL_Log("SDL_Init failed: %s", SDL_GetError()); 
         return SDL_APP_FAILURE; 
     }

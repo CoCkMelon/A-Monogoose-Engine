@@ -12,12 +12,12 @@
 typedef struct { float x, y; } Position;
 typedef struct { float vx, vy; } Velocity;
 
-typedef struct { Uint64 start_ticks; } AppTime;
+typedef struct { Uint64 start_ns; } AppTime;
 static AppTime g_time;
 
 static float secs_since_start(void) {
-    Uint64 now = SDL_GetTicks();
-    return (float)((now - g_time.start_ticks) / 1000.0);
+    Uint64 now = SDL_GetTicksNS();
+    return (float)((now - g_time.start_ns) / 1e9);
 }
 
 // SDL/GL state
@@ -168,7 +168,7 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char **argv) {
     if (!SDL_Init(SDL_INIT_VIDEO)) { SDL_Log("SDL_Init failed: %s", SDL_GetError()); return SDL_APP_FAILURE; }
     if (!init_gl()) return SDL_APP_FAILURE;
 
-    g_time.start_ticks = SDL_GetTicks();
+    g_time.start_ns = SDL_GetTicksNS();
 
     if (init_world() != SDL_APP_CONTINUE) return SDL_APP_FAILURE;
     SDL_Log("flecs_scene started");

@@ -87,9 +87,9 @@ extern "C" SDL_AppResult SDL_AppInit(void **appstate, int argc, char **argv) {
 extern "C" SDL_AppResult SDL_AppIterate(void *appstate) {
     AppState* st = (AppState*)appstate;
 
-    static Uint64 prev = SDL_GetTicks();
-    Uint64 now = SDL_GetTicks();
-    float dt = (now - prev) / 1000.0f; prev = now;
+    static Uint64 prev = SDL_GetTicksNS();
+    Uint64 now = SDL_GetTicksNS();
+    float dt = (float)((now - prev) / 1e9); prev = now;
 
     // Drive scripts (Update/LateUpdate) via the facade scene
     st->scene->Step(dt);
