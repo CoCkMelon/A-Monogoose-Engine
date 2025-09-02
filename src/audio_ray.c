@@ -1,7 +1,11 @@
+#define _USE_MATH_DEFINES
 #include "ame/audio_ray.h"
 #include "ame/acoustics.h"
 #include <math.h>
 #include <string.h>
+#ifndef M_PI_2
+#define M_PI_2 1.57079632679489661923
+#endif
 
 #ifndef AME_CLAMP
 #define AME_CLAMP(x,lo,hi) ((x) < (lo) ? (lo) : ((x) > (hi) ? (hi) : (x)))

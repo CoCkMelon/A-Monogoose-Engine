@@ -5,13 +5,19 @@
 #include <flecs.h>
 #endif
 
+#define _USE_MATH_DEFINES
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
+#ifndef _WIN32
 #include <strings.h>
+#endif
 #include <pthread.h>
 #include <stdatomic.h>
 #include <stdio.h>
+#ifndef M_PI_2
+#define M_PI_2 1.57079632679489661923
+#endif
 
 #include <portaudio.h>
 #include <opusfile.h>

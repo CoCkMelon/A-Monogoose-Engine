@@ -24,7 +24,7 @@ static void SysCollider2DApply(ecs_iter_t* it) {
             } else if (c[i].type == 1) {
                 float r = c[i].radius > 0 ? c[i].radius : (pb[i].width > pb[i].height ? pb[i].width : pb[i].height) * 0.5f;
                 float bx = 0, by = 0; ame_physics_get_position(pb[i].body, &bx, &by);
-                const int N = 8;
+                enum {N = 8};
                 float verts[6 * N];
                 for (int k = 0; k < N; ++k) {
                     float a0 = (float)k * (6.28318530718f / N);
