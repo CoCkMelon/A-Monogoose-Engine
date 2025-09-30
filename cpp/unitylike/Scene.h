@@ -7,6 +7,8 @@
 #include <cstdint>
 #include <vector>
 #include <type_traits>
+#include <unordered_map>
+#include <typeinfo>
 #include <glm/vec2.hpp>
 #include <glm/vec3.hpp>
 #include <glm/vec4.hpp>
@@ -26,28 +28,84 @@ namespace unitylike {
 class GameObject;
 class Transform;
 class MongooseBehaviour;
+class Rigidbody2D;
+class Collider2D;
 
-// Internal script host storage (managed outside ECS to avoid POD constraints)
-struct ScriptHost {
-    std::vector<MongooseBehaviour*> scripts;
+// Script component template - each script type gets its own component
+// This allows Flecs to handle lifecycle properly
+template<typename T>
+struct ScriptComponent {
+    T* script = nullptr;
     bool awoken = false;
     bool started = false;
+    
+    // Constructor hook - called when component is added
+    static void ctor(void* ptr, int32_t count, const ecs_type_info_t* ti) {
+        for (int i = 0; i < count; i++) {
+            ScriptComponent<T>* comp = static_cast<ScriptComponent<T>*>(ptr) + i;
+            comp->script = nullptr;
+            comp->awoken = false;
+            comp->started = false;
+        }
+    }
+    
+    // Destructor hook - called when component is removed
+    static void dtor(void* ptr, int32_t count, const ecs_type_info_t* ti) {
+        for (int i = 0; i < count; i++) {
+            ScriptComponent<T>* comp = static_cast<ScriptComponent<T>*>(ptr) + i;
+            if (comp->script) {
+                comp->script->OnDestroy();
+                delete comp->script;
+                comp->script = nullptr;
+            }
+        }
+    }
 };
 
-// Internal: component id for ScriptHost (registered by Scene)
-extern ecs_entity_t g_comp_script_host;
-// Internal: register an entity as having scripts (used by AddScript)
-void __register_script_entity(ecs_world_t* w, std::uint64_t e);
-// Internal: host management (implemented in SceneCore.cpp)
-ScriptHost* __get_script_host(std::uint64_t e);
-void __ensure_script_host(std::uint64_t e);
-void __remove_script_host(std::uint64_t e);
+// Internal script management implementation
+// Register observers/systems for a script component
+void __register_script_handlers(ecs_world_t* w, ecs_entity_t comp_id);
+
+template<typename T>
+ecs_entity_t __get_script_component_id(ecs_world_t* w) {
+    extern std::unordered_map<const std::type_info*, ecs_entity_t> g_script_component_registry;
+    
+    const std::type_info* type_id = &typeid(T);
+    
+    // Check if already registered
+    auto it = g_script_component_registry.find(type_id);
+    if (it != g_script_component_registry.end()) {
+        return it->second;
+    }
+    
+    // Register new script component with Flecs hooks
+    ecs_component_desc_t desc = {0};
+    ecs_entity_desc_t entity_desc = {0};
+    entity_desc.name = typeid(T).name();
+    desc.entity = ecs_entity_init(w, &entity_desc);
+    desc.type.size = sizeof(ScriptComponent<T>);
+    desc.type.alignment = alignof(ScriptComponent<T>);
+    
+    // Set up lifecycle hooks
+    desc.type.hooks.ctor = ScriptComponent<T>::ctor;
+    desc.type.hooks.dtor = ScriptComponent<T>::dtor;
+    
+    ecs_entity_t comp_id = ecs_component_init(w, &desc);
+    g_script_component_registry[type_id] = comp_id;
+
+    // Register observers and systems for this script component
+    __register_script_handlers(w, comp_id);
+    
+    return comp_id;
+}
 
 // Forward declaration of internal component id holder
 struct CompIds {
     ecs_entity_t transform;
     ecs_entity_t body;
     ecs_entity_t scale2d;
+    ecs_entity_t tag;
+    ecs_entity_t layer;
     ecs_entity_t sprite;
     ecs_entity_t material;
     ecs_entity_t tilemap;
@@ -60,6 +118,8 @@ extern CompIds g_comp;
 
 // Internal component PODs (façade data stored in ECS)
 struct Scale2D { float sx; float sy; };
+struct TagData { char tag_str[64]; };
+struct LayerData { int layer; };
 struct SpriteData { std::uint32_t tex; float u0,v0,u1,v1; float w,h; float r,g,b,a; int visible; int sorting_layer; int order_in_layer; float z; int dirty; };
 struct MaterialData { std::uint32_t tex; float r,g,b,a; int dirty; };
 struct TilemapRefData {
@@ -109,21 +169,38 @@ public:
     GameObject() = default;
     GameObject(Scene* scene, Entity e) : scene_(scene), e_(e) {}
 
-    bool activeSelf() const; // TODO: map to enable/disable
+    bool activeSelf() const;
     void SetActive(bool v);
 
     const std::string& name() const; // backed by an internal cache
     void name(const std::string&);
+    
+    // Tag and layer system
+    std::string tag() const;
+    void tag(const std::string& t);
+    bool CompareTag(const std::string& t) const;
+    int layer() const;
+    void layer(int l);
 
+    // Component helpers
     template<typename T, typename... Args>
     T& AddComponent(Args&&...);
     template<typename T>
     T* TryGetComponent();
     template<typename T>
     T& GetComponent();
-
+    template<typename T>
+    bool HasComponent() const;
+    template<typename T>
+    void RemoveComponent();
     template<typename T, typename... Args>
-    T& AddScript(Args&&...);
+    T& GetOrAddComponent(Args&&... args);
+
+    // Script helpers
+    template<typename T, typename... Args>
+    T& AddScript(Args&&... args);
+    template<typename T>
+    T* GetScript();
 
     Transform& transform();
 
@@ -157,8 +234,32 @@ public:
     // World/composed accessors (read-only): computed by traversing EcsChildOf chain
     glm::vec3 worldPosition() const;
     glm::quat worldRotation() const;
+    
+    // Helper methods
+    void Translate(const glm::vec3& translation, bool relativeTo = true); // true=self, false=world
+    void Rotate(float angle); // rotate by angle in radians (2D)
+    void LookAt2D(const glm::vec2& worldTarget); // set rotation so +X faces toward target
+    glm::vec2 right() const;  // local right direction (2D: cos(angle), sin(angle))
+    glm::vec2 up() const;     // local up direction (2D: perpendicular to right)
+    float eulerAngles() const; // return Z rotation angle in radians (2D only)
+    void eulerAngles(float angleZ); // set Z rotation angle in radians
+    
+    // Space transformation helpers
+    glm::vec2 TransformPoint(const glm::vec2& localPoint) const;
+    glm::vec2 TransformDirection(const glm::vec2& localDir) const;
+    glm::vec2 InverseTransformPoint(const glm::vec2& worldPoint) const;
+    glm::vec2 InverseTransformDirection(const glm::vec2& worldDir) const;
 private:
     GameObject owner_;
+};
+
+// Forward declare collision structs
+struct Collision2D {
+    GameObject gameObject;
+    Rigidbody2D* rigidbody;
+    Collider2D* collider;
+    glm::vec2 relativeVelocity;
+    // Contacts omitted for MVP
 };
 
 class MongooseBehaviour {
@@ -170,6 +271,16 @@ public:
     virtual void FixedUpdate(float fixedDeltaTime) {}
     virtual void LateUpdate() {}
     virtual void OnDestroy() {}
+    
+    // Collision callbacks (2D physics)
+    virtual void OnCollisionEnter2D(const Collision2D& collision) {}
+    virtual void OnCollisionStay2D(const Collision2D& collision) {}
+    virtual void OnCollisionExit2D(const Collision2D& collision) {}
+    
+    // Trigger callbacks (2D physics)
+    virtual void OnTriggerEnter2D(Collider2D* other) {}
+    virtual void OnTriggerStay2D(Collider2D* other) {}
+    virtual void OnTriggerExit2D(Collider2D* other) {}
 
     GameObject& gameObject() { return owner_; }
     Transform& transform();
@@ -189,11 +300,51 @@ namespace Time {
 
 class Rigidbody2D {
 public:
+    enum class BodyType { Dynamic = 0, Kinematic = 1, Static = 2 };
+    
     explicit Rigidbody2D(GameObject owner) : owner_(owner) {}
+    
+    // Velocity
     glm::vec2 velocity() const;
     void velocity(const glm::vec2& v);
+    float angularVelocity() const;
+    void angularVelocity(float v);
+    
+    // Body type
+    BodyType bodyType() const;
+    void bodyType(BodyType type);
     bool isKinematic() const;
     void isKinematic(bool v);
+    
+    // Forces and impulses
+    void AddForce(const glm::vec2& force);
+    void AddForceAtPosition(const glm::vec2& force, const glm::vec2& position);
+    void AddTorque(float torque);
+    void AddImpulse(const glm::vec2& impulse);
+    void AddAngularImpulse(float impulse);
+    
+    // Mass and physics properties
+    float mass() const;
+    void mass(float m);
+    float gravityScale() const;
+    void gravityScale(float scale);
+    float drag() const;
+    void drag(float d);
+    float angularDrag() const;
+    void angularDrag(float d);
+    
+    // Constraints (freeze position/rotation)
+    enum Constraints {
+        None = 0,
+        FreezePositionX = 1 << 0,
+        FreezePositionY = 1 << 1,
+        FreezeRotation = 1 << 2,
+        FreezePosition = FreezePositionX | FreezePositionY,
+        FreezeAll = FreezePosition | FreezeRotation
+    };
+    int constraints() const;
+    void constraints(int c);
+    
 private:
     GameObject owner_;
 };
@@ -505,18 +656,99 @@ T& GameObject::GetComponent() {
     return *p;
 }
 
+template<typename T>
+bool GameObject::HasComponent() const {
+    static_assert(
+        std::is_same_v<T, Transform> || std::is_same_v<T, Rigidbody2D> ||
+        std::is_same_v<T, SpriteRenderer> || std::is_same_v<T, Material> ||
+        std::is_same_v<T, TilemapRenderer> || std::is_same_v<T, MeshRenderer> || std::is_same_v<T, Camera> ||
+        std::is_same_v<T, TextRenderer> || std::is_same_v<T, Collider2D>,
+        "HasComponent<T>: supported types are Transform, Rigidbody2D, Sprite, Material, Tilemap, Mesh, Camera, Text, Collider2D"
+    );
+    if (!scene_ || !e_) return false;
+    ecs_world_t* w = scene_->world();
+    ensure_components_registered(w);
+    if constexpr (std::is_same_v<T, Transform>) return ecs_get_id(w, (ecs_entity_t)e_, g_comp.transform) != nullptr;
+    else if constexpr (std::is_same_v<T, Rigidbody2D>) return ecs_get_id(w, (ecs_entity_t)e_, g_comp.body) != nullptr;
+    else if constexpr (std::is_same_v<T, SpriteRenderer>) return ecs_get_id(w, (ecs_entity_t)e_, g_comp.sprite) != nullptr;
+    else if constexpr (std::is_same_v<T, Material>) return ecs_get_id(w, (ecs_entity_t)e_, g_comp.material) != nullptr;
+    else if constexpr (std::is_same_v<T, TilemapRenderer>) return ecs_get_id(w, (ecs_entity_t)e_, g_comp.tilemap) != nullptr;
+    else if constexpr (std::is_same_v<T, MeshRenderer>) return ecs_get_id(w, (ecs_entity_t)e_, g_comp.mesh) != nullptr;
+    else if constexpr (std::is_same_v<T, Camera>) return ecs_get_id(w, (ecs_entity_t)e_, g_comp.camera) != nullptr;
+    else if constexpr (std::is_same_v<T, TextRenderer>) return ecs_get_id(w, (ecs_entity_t)e_, g_comp.text) != nullptr;
+    else if constexpr (std::is_same_v<T, Collider2D>) return ecs_get_id(w, (ecs_entity_t)e_, g_comp.collider2d) != nullptr;
+}
+
+template<typename T>
+void GameObject::RemoveComponent() {
+    static_assert(
+        std::is_same_v<T, Transform> || std::is_same_v<T, Rigidbody2D> ||
+        std::is_same_v<T, SpriteRenderer> || std::is_same_v<T, Material> ||
+        std::is_same_v<T, TilemapRenderer> || std::is_same_v<T, MeshRenderer> || std::is_same_v<T, Camera> ||
+        std::is_same_v<T, TextRenderer> || std::is_same_v<T, Collider2D>,
+        "RemoveComponent<T>: supported types are Transform, Rigidbody2D, Sprite, Material, Tilemap, Mesh, Camera, Text, Collider2D"
+    );
+    if (!scene_ || !e_) return;
+    ecs_world_t* w = scene_->world();
+    ensure_components_registered(w);
+    if constexpr (std::is_same_v<T, Transform>) ecs_remove_id(w, (ecs_entity_t)e_, g_comp.transform);
+    else if constexpr (std::is_same_v<T, Rigidbody2D>) ecs_remove_id(w, (ecs_entity_t)e_, g_comp.body);
+    else if constexpr (std::is_same_v<T, SpriteRenderer>) ecs_remove_id(w, (ecs_entity_t)e_, g_comp.sprite);
+    else if constexpr (std::is_same_v<T, Material>) ecs_remove_id(w, (ecs_entity_t)e_, g_comp.material);
+    else if constexpr (std::is_same_v<T, TilemapRenderer>) ecs_remove_id(w, (ecs_entity_t)e_, g_comp.tilemap);
+    else if constexpr (std::is_same_v<T, MeshRenderer>) ecs_remove_id(w, (ecs_entity_t)e_, g_comp.mesh);
+    else if constexpr (std::is_same_v<T, Camera>) ecs_remove_id(w, (ecs_entity_t)e_, g_comp.camera);
+    else if constexpr (std::is_same_v<T, TextRenderer>) ecs_remove_id(w, (ecs_entity_t)e_, g_comp.text);
+    else if constexpr (std::is_same_v<T, Collider2D>) ecs_remove_id(w, (ecs_entity_t)e_, g_comp.collider2d);
+}
+
+template<typename T, typename... Args>
+T& GameObject::GetOrAddComponent(Args&&... args) {
+    if (auto* p = TryGetComponent<T>()) return *p;
+    return AddComponent<T>(std::forward<Args>(args)...);
+}
+
 template<typename T, typename... Args>
 T& GameObject::AddScript(Args&&... args) {
-    // Ensure host exists (managed outside ECS to avoid moving non-POD types)
+    static_assert(std::is_base_of_v<MongooseBehaviour, T>, "Script must inherit from MongooseBehaviour");
+    
     ecs_world_t* w = scene_->world();
-    __ensure_script_host(e_);
-    ScriptHost* host = __get_script_host(e_);
-    // Create script and attach
+    ensure_components_registered(w);
+    
+    // Get or create the component type for this script
+    ecs_entity_t script_component_id = __get_script_component_id<T>(w);
+    
+    // Create the script instance
     T* script = new T(std::forward<Args>(args)...);
     script->__set_owner(*this);
-    host->scripts.push_back(script);
-    __register_script_entity(w, e_);
+    
+    // Create and set the script component
+    ScriptComponent<T> comp;
+    comp.script = script;
+    comp.awoken = false;
+    comp.started = false;
+    
+    ecs_set_id(w, (ecs_entity_t)e_, script_component_id, sizeof(ScriptComponent<T>), &comp);
+    
     return *script;
+}
+
+template<typename T>
+T* GameObject::GetScript() {
+    static_assert(std::is_base_of_v<MongooseBehaviour, T>, "Script must inherit from MongooseBehaviour");
+    
+    ecs_world_t* w = scene_->world();
+    if (!w || !e_) return nullptr;
+    
+    // Get the component ID for this script type
+    ecs_entity_t script_component_id = __get_script_component_id<T>(w);
+    if (script_component_id == 0) return nullptr;
+    
+    // Get the ScriptComponent
+    const ScriptComponent<T>* comp = (const ScriptComponent<T>*)ecs_get_id(w, (ecs_entity_t)e_, script_component_id);
+    if (!comp || !comp->script) return nullptr;
+    
+    return comp->script;
 }
 
 

@@ -356,6 +356,11 @@ target_include_directories(unitylike PUBLIC
 target_link_libraries(unitylike PUBLIC ame flecs)
 endif()
 
+# Add multithreaded script example
+add_executable(multithreaded_test examples/multithreaded_scripts/main.cpp)
+target_link_libraries(multithreaded_test unitylike flecs pthread)
+target_include_directories(multithreaded_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} include third_party/flecs/include)
+
 # Ensure story route header is public
 install(FILES include/ame_story_route.h DESTINATION include)
 

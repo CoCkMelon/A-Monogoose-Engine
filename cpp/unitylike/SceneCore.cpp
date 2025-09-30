@@ -3,156 +3,206 @@
 #include <flecs.h>
 #include <cassert>
 #include <unordered_map>
-#include <vector>
+#include <typeinfo>
 #include <SDL3/SDL.h>
 
 namespace unitylike {
 
-// Globals declared in header (remove duplicate definitions)
-// CompIds g_comp{};
-// ecs_entity_t g_comp_script_host = 0;
-
-static std::vector<ecs_entity_t> g_script_entities;
-static std::unordered_map<ecs_entity_t, ScriptHost> g_script_hosts;
+// Global script component registry
+std::unordered_map<const std::type_info*, ecs_entity_t> g_script_component_registry;
 static bool g_systems_registered = false;
 static float g_current_dt = 0.0f;
 static float g_fixed_dt = 1.0f/60.0f;
 
-// ECS system functions for script execution
-static void ScriptAwakeSystem(ecs_iter_t* it) {
-    // Run Awake for all scripts that haven't been awoken
-    for (ecs_entity_t e : g_script_entities) {
-        ScriptHost* shp = __get_script_host(e);
-        if (!shp) continue;
-        ScriptHost& sh = *shp;
-        if (!sh.awoken) {
-            for (auto* s : sh.scripts) if (s) s->Awake();
-            sh.awoken = true;
+
+// Observer that runs when script components are added - handles Awake automatically
+static void ScriptOnAddObserver(ecs_iter_t* it) {
+    // This runs for each component type that triggers it
+    void* components = ecs_field_w_size(it, 0, 1);
+    
+    for (int i = 0; i < it->count; i++) {
+        struct BaseScriptComponent { void* script; bool awoken; bool started; };
+        BaseScriptComponent* base = ((BaseScriptComponent*)components) + i;
+        
+        if (base->script && !base->awoken) {
+            ((MongooseBehaviour*)base->script)->Awake();
+            base->awoken = true;
         }
     }
 }
 
-static void ScriptStartSystem(ecs_iter_t* it) {
-    // Run Start for all scripts that have been awoken but not started
-    for (ecs_entity_t e : g_script_entities) {
-        ScriptHost* shp = __get_script_host(e);
-        if (!shp) continue;
-        ScriptHost& sh = *shp;
-        if (sh.awoken && !sh.started) {
-            for (auto* s : sh.scripts) if (s) s->Start();
-            sh.started = true;
+// Observer that runs when script components are removed - handles OnDestroy
+static void ScriptOnRemoveObserver(ecs_iter_t* it) {
+    void* components = ecs_field_w_size(it, 0, 1);
+    
+    for (int i = 0; i < it->count; i++) {
+        struct BaseScriptComponent { void* script; bool awoken; bool started; };
+        BaseScriptComponent* base = ((BaseScriptComponent*)components) + i;
+        
+        if (base->script) {
+            ((MongooseBehaviour*)base->script)->OnDestroy();
+            // Note: Don't delete here - the ScriptComponent destructor will handle it
         }
     }
 }
 
+// Update system - handles Start and Update
 static void ScriptUpdateSystem(ecs_iter_t* it) {
-    // Run Update for all started scripts
-    for (ecs_entity_t e : g_script_entities) {
-        ScriptHost* shp = __get_script_host(e);
-        if (!shp) continue;
-        ScriptHost& sh = *shp;
-        if (sh.started) {
-            for (auto* s : sh.scripts) if (s) s->Update(g_current_dt);
+    void* components = ecs_field_w_size(it, 0, 1);
+    
+    for (int i = 0; i < it->count; i++) {
+        struct BaseScriptComponent { void* script; bool awoken; bool started; };
+        BaseScriptComponent* base = ((BaseScriptComponent*)components) + i;
+        
+        if (base->script && base->awoken) {
+            if (!base->started) {
+                ((MongooseBehaviour*)base->script)->Start();
+                base->started = true;
+            }
+            ((MongooseBehaviour*)base->script)->Update(g_current_dt);
         }
     }
 }
 
+// LateUpdate system
 static void ScriptLateUpdateSystem(ecs_iter_t* it) {
-    // Run LateUpdate for all started scripts
-    for (ecs_entity_t e : g_script_entities) {
-        ScriptHost* shp = __get_script_host(e);
-        if (!shp) continue;
-        ScriptHost& sh = *shp;
-        if (sh.started) {
-            for (auto* s : sh.scripts) if (s) s->LateUpdate();
+    void* components = ecs_field_w_size(it, 0, 1);
+    
+    for (int i = 0; i < it->count; i++) {
+        struct BaseScriptComponent { void* script; bool awoken; bool started; };
+        BaseScriptComponent* base = ((BaseScriptComponent*)components) + i;
+        
+        if (base->script && base->started) {
+            ((MongooseBehaviour*)base->script)->LateUpdate();
         }
     }
 }
 
+// FixedUpdate system
 static void ScriptFixedUpdateSystem(ecs_iter_t* it) {
-    // Run FixedUpdate for all started scripts
-    for (ecs_entity_t e : g_script_entities) {
-        ScriptHost* shp = __get_script_host(e);
-        if (!shp) continue;
-        ScriptHost& sh = *shp;
-        if (sh.started) {
-            for (auto* s : sh.scripts) if (s) s->FixedUpdate(g_fixed_dt);
+    void* components = ecs_field_w_size(it, 0, 1);
+    
+    for (int i = 0; i < it->count; i++) {
+        struct BaseScriptComponent { void* script; bool awoken; bool started; };
+        BaseScriptComponent* base = ((BaseScriptComponent*)components) + i;
+        
+        if (base->script && base->started) {
+            ((MongooseBehaviour*)base->script)->FixedUpdate(g_fixed_dt);
         }
     }
 }
 
-// Register the script systems with appropriate ECS phases
+// Register observers and systems for a specific script component type
+static void register_script_observers_and_systems(ecs_world_t* world, ecs_entity_t comp_id) {
+    // Avoid registering empty comp_id
+    if (!comp_id) return;
+    // OnAdd observer for Awake
+    ecs_observer_desc_t on_add_desc = {0};
+    ecs_entity_desc_t on_add_entity_desc = {0};
+    on_add_entity_desc.name = "ScriptOnAdd";
+    on_add_desc.entity = ecs_entity_init(world, &on_add_entity_desc);
+    on_add_desc.filter.terms[0].id = comp_id;
+    on_add_desc.events[0] = EcsOnAdd;
+    on_add_desc.callback = ScriptOnAddObserver;
+    ecs_observer_init(world, &on_add_desc);
+    
+    // OnRemove observer for OnDestroy
+    ecs_observer_desc_t on_remove_desc = {0};
+    ecs_entity_desc_t on_remove_entity_desc = {0};
+    on_remove_entity_desc.name = "ScriptOnRemove";
+    on_remove_desc.entity = ecs_entity_init(world, &on_remove_entity_desc);
+    on_remove_desc.filter.terms[0].id = comp_id;
+    on_remove_desc.events[0] = EcsOnRemove;
+    on_remove_desc.callback = ScriptOnRemoveObserver;
+    ecs_observer_init(world, &on_remove_desc);
+    
+    // Update system
+    ecs_system_desc_t update_desc = {0};
+    ecs_entity_desc_t update_entity_desc = {0};
+    update_entity_desc.name = "ScriptUpdate";
+    update_desc.entity = ecs_entity_init(world, &update_entity_desc);
+    update_desc.query.filter.terms[0].id = comp_id;
+    update_desc.callback = ScriptUpdateSystem;
+    update_desc.multi_threaded = true;
+    ecs_system_init(world, &update_desc);
+    
+    // LateUpdate system
+    ecs_system_desc_t late_update_desc = {0};
+    ecs_entity_desc_t late_update_entity_desc = {0};
+    late_update_entity_desc.name = "ScriptLateUpdate";
+    late_update_desc.entity = ecs_entity_init(world, &late_update_entity_desc);
+    late_update_desc.query.filter.terms[0].id = comp_id;
+    late_update_desc.callback = ScriptLateUpdateSystem;
+    late_update_desc.multi_threaded = true;
+    ecs_system_init(world, &late_update_desc);
+    
+    // FixedUpdate system
+    ecs_system_desc_t fixed_update_desc = {0};
+    ecs_entity_desc_t fixed_update_entity_desc = {0};
+    fixed_update_entity_desc.name = "ScriptFixedUpdate";
+    fixed_update_desc.entity = ecs_entity_init(world, &fixed_update_entity_desc);
+    fixed_update_desc.query.filter.terms[0].id = comp_id;
+    fixed_update_desc.callback = ScriptFixedUpdateSystem;
+    fixed_update_desc.multi_threaded = true;
+    ecs_system_init(world, &fixed_update_desc);
+}
+
+// Expose registration for template to call
+void __register_script_handlers(ecs_world_t* world, ecs_entity_t comp_id) {
+    register_script_observers_and_systems(world, comp_id);
+}
+
+// Register the script systems using wildcard queries to catch any script component
 static void register_script_systems(ecs_world_t* world) {
     if (g_systems_registered) return;
     
-    // Awake system - runs early in the frame
+    ensure_components_registered(world);
+    
+    // Systems that run on any entity - they'll check for script components internally
+    // This approach allows proper multithreading while being flexible
+    
+    ecs_entity_desc_t awake_entity_desc = {0};
+    awake_entity_desc.name = "UnitylikeScriptAwake";
     ecs_system_desc_t awake_desc = {0};
-    awake_desc.entity = ecs_entity_init(world, &(ecs_entity_desc_t){ 
-        .name = "UnitylikeScriptAwake", 
-        .add = (ecs_id_t[]){ EcsOnLoad, 0 } 
-    });
+    awake_desc.entity = ecs_entity_init(world, &awake_entity_desc);
     awake_desc.callback = ScriptAwakeSystem;
+    awake_desc.multi_threaded = true;
     ecs_system_init(world, &awake_desc);
     
-    // Start system - runs after Awake but before Update
+    ecs_entity_desc_t start_entity_desc = {0};
+    start_entity_desc.name = "UnitylikeScriptStart";
     ecs_system_desc_t start_desc = {0};
-    start_desc.entity = ecs_entity_init(world, &(ecs_entity_desc_t){ 
-        .name = "UnitylikeScriptStart", 
-        .add = (ecs_id_t[]){ EcsPreUpdate, 0 } 
-    });
+    start_desc.entity = ecs_entity_init(world, &start_entity_desc);
     start_desc.callback = ScriptStartSystem;
+    start_desc.multi_threaded = true;
     ecs_system_init(world, &start_desc);
     
-    // Update system - main update phase
+    ecs_entity_desc_t update_entity_desc = {0};
+    update_entity_desc.name = "UnitylikeScriptUpdate";
     ecs_system_desc_t update_desc = {0};
-    update_desc.entity = ecs_entity_init(world, &(ecs_entity_desc_t){ 
-        .name = "UnitylikeScriptUpdate", 
-        .add = (ecs_id_t[]){ EcsOnUpdate, 0 } 
-    });
+    update_desc.entity = ecs_entity_init(world, &update_entity_desc);
     update_desc.callback = ScriptUpdateSystem;
+    update_desc.multi_threaded = true;
     ecs_system_init(world, &update_desc);
     
-    // LateUpdate system - after main update
+    ecs_entity_desc_t late_update_entity_desc = {0};
+    late_update_entity_desc.name = "UnitylikeScriptLateUpdate";
     ecs_system_desc_t late_update_desc = {0};
-    late_update_desc.entity = ecs_entity_init(world, &(ecs_entity_desc_t){ 
-        .name = "UnitylikeScriptLateUpdate", 
-        .add = (ecs_id_t[]){ EcsPostUpdate, 0 } 
-    });
+    late_update_desc.entity = ecs_entity_init(world, &late_update_entity_desc);
     late_update_desc.callback = ScriptLateUpdateSystem;
+    late_update_desc.multi_threaded = true;
     ecs_system_init(world, &late_update_desc);
     
-    // FixedUpdate system - runs at fixed intervals
-    // Note: For now we'll run this with regular update, but could be separated later
+    ecs_entity_desc_t fixed_update_entity_desc = {0};
+    fixed_update_entity_desc.name = "UnitylikeScriptFixedUpdate";
     ecs_system_desc_t fixed_update_desc = {0};
-    fixed_update_desc.entity = ecs_entity_init(world, &(ecs_entity_desc_t){ 
-        .name = "UnitylikeScriptFixedUpdate", 
-        .add = (ecs_id_t[]){ EcsOnUpdate, 0 } 
-    });
+    fixed_update_desc.entity = ecs_entity_init(world, &fixed_update_entity_desc);
     fixed_update_desc.callback = ScriptFixedUpdateSystem;
+    fixed_update_desc.multi_threaded = true;
     ecs_system_init(world, &fixed_update_desc);
     
     g_systems_registered = true;
-    SDL_Log("[UnityLike] Script execution systems registered with ECS pipeline");
-}
-
-void __register_script_entity(ecs_world_t* /*w*/, std::uint64_t e) {
-    ecs_entity_t ee = (ecs_entity_t)e;
-    for (auto id : g_script_entities) { if (id == ee) return; }
-    g_script_entities.push_back(ee);
-}
-
-ScriptHost* __get_script_host(std::uint64_t e){
-    auto it = g_script_hosts.find((ecs_entity_t)e);
-    if (it == g_script_hosts.end()) return nullptr;
-    return &it->second;
-}
-void __ensure_script_host(std::uint64_t e){
-    auto ee = (ecs_entity_t)e;
-    if (!g_script_hosts.count(ee)) g_script_hosts.emplace(ee, ScriptHost{});
-}
-void __remove_script_host(std::uint64_t e){
-    auto ee = (ecs_entity_t)e;
-    g_script_hosts.erase(ee);
+    SDL_Log("[UnityLike] Script execution systems registered with ECS pipeline (multithreaded)");
 }
 
 // Scene core
@@ -163,16 +213,8 @@ Scene::Scene(ecs_world_t* world) : world_(world) {
 }
 
 Scene::~Scene() {
-    // Cleanup: delete all scripts from all hosts to avoid leaks
-    for (auto& kv : g_script_hosts) {
-        ScriptHost& sh = kv.second;
-        for (auto* s : sh.scripts) {
-            if (s) { s->OnDestroy(); delete s; }
-        }
-        sh.scripts.clear();
-    }
-    g_script_hosts.clear();
-    g_script_entities.clear();
+    // Scripts are now managed by Flecs components with proper destructors
+    // No manual cleanup needed - Flecs will call the component destructors
 }
 
 GameObject Scene::Create(const std::string& name) {
@@ -187,12 +229,7 @@ GameObject Scene::Create(const std::string& name) {
 
 void Scene::Destroy(GameObject& go) {
     if (!go.id()) return;
-    ScriptHost* host = __get_script_host(go.id());
-    if (host) {
-        for (auto* s : host->scripts) { if (s) { s->OnDestroy(); delete s; } }
-        host->scripts.clear();
-        __remove_script_host(go.id());
-    }
+    // Flecs will automatically call component destructors, including script cleanup
     ecs_delete(world_, (ecs_entity_t)go.id());
 }
 
@@ -209,48 +246,20 @@ extern void unitylike_set_fixed_dt(float fdt);
 void Scene::Step(float dt) {
     ensure_components_registered(world_);
     unitylike_begin_update(dt);
-
-    // Pass 1: Awake all scripts on all entities before any Start
-    for (ecs_entity_t e : g_script_entities) {
-        ScriptHost* shp = __get_script_host(e);
-        if (!shp) continue;
-        ScriptHost& sh = *shp;
-        if (!sh.awoken) {
-            for (auto* s : sh.scripts) if (s) s->Awake();
-            sh.awoken = true;
-        }
-    }
-
-    // Pass 2: Start all scripts on all entities after Awake pass
-    for (ecs_entity_t e : g_script_entities) {
-        ScriptHost* shp = __get_script_host(e);
-        if (!shp) continue;
-        ScriptHost& sh = *shp;
-        if (!sh.started) {
-            for (auto* s : sh.scripts) if (s) s->Start();
-            sh.started = true;
-        }
-    }
-
-    // Pass 3: Regular Update and LateUpdate
-    for (ecs_entity_t e : g_script_entities) {
-        ScriptHost* shp = __get_script_host(e);
-        if (!shp) continue;
-        ScriptHost& sh = *shp;
-        for (auto* s : sh.scripts) if (s) s->Update(dt);
-        for (auto* s : sh.scripts) if (s) s->LateUpdate();
-    }
+    g_current_dt = dt;
+    
+    // Let Flecs run all registered systems - they will handle script execution
+    // The systems are properly registered with multithreading support
+    ecs_progress(world_, 0);
 }
 
 void Scene::StepFixed(float fdt) {
     ensure_components_registered(world_);
     unitylike_set_fixed_dt(fdt);
-    for (ecs_entity_t e : g_script_entities) {
-        ScriptHost* shp = __get_script_host(e);
-        if (!shp) continue;
-        ScriptHost& sh = *shp;
-        for (auto* s : sh.scripts) if (s) s->FixedUpdate(fdt);
-    }
+    g_fixed_dt = fdt;
+    
+    // Fixed update systems will be called by the main Step() method
+    // since they're registered as regular ECS systems
 }
 
 // GameObject basics
@@ -291,6 +300,46 @@ bool GameObject::IsValid() const {
     if (!scene_ || !e_) return false;
     ecs_world_t* w = scene_->world();
     return ecs_is_alive(w, (ecs_entity_t)e_);
+}
+
+std::string GameObject::tag() const {
+    if (!scene_ || !e_) return "";
+    ecs_world_t* w = scene_->world();
+    ensure_components_registered(w);
+    TagData* td = (TagData*)ecs_get_id(w, (ecs_entity_t)e_, g_comp.tag);
+    if (!td) return "Untagged";
+    return std::string(td->tag_str);
+}
+
+void GameObject::tag(const std::string& t) {
+    if (!scene_ || !e_) return;
+    ecs_world_t* w = scene_->world();
+    ensure_components_registered(w);
+    TagData td = {0};
+    strncpy(td.tag_str, t.c_str(), sizeof(td.tag_str) - 1);
+    td.tag_str[sizeof(td.tag_str) - 1] = '\0';
+    ecs_set_id(w, (ecs_entity_t)e_, g_comp.tag, sizeof(TagData), &td);
+}
+
+bool GameObject::CompareTag(const std::string& t) const {
+    return tag() == t;
+}
+
+int GameObject::layer() const {
+    if (!scene_ || !e_) return 0;
+    ecs_world_t* w = scene_->world();
+    ensure_components_registered(w);
+    LayerData* ld = (LayerData*)ecs_get_id(w, (ecs_entity_t)e_, g_comp.layer);
+    if (!ld) return 0;
+    return ld->layer;
+}
+
+void GameObject::layer(int l) {
+    if (!scene_ || !e_) return;
+    ecs_world_t* w = scene_->world();
+    ensure_components_registered(w);
+    LayerData ld = { l };
+    ecs_set_id(w, (ecs_entity_t)e_, g_comp.layer, sizeof(LayerData), &ld);
 }
 
 void GameObject::SetParent(const GameObject& parent, bool keepWorld) {
