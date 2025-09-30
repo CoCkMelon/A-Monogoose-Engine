@@ -5,7 +5,6 @@
 namespace unitylike {
 
 CompIds g_comp{}; // global component ids
-ecs_entity_t g_comp_script_host = 0; // id for ScriptHost
 
 void __register_script_entity(ecs_world_t* /*w*/, std::uint64_t e);
 
@@ -38,6 +37,26 @@ void ensure_components_registered(ecs_world_t* w) {
         cdp.type.size = (int32_t)sizeof(Scale2D);
         cdp.type.alignment = (int32_t)alignof(Scale2D);
         g_comp.scale2d = ecs_component_init(w, &cdp);
+    }
+    // Tag (façade-only)
+    if (g_comp.tag == 0) {
+        struct TagData { char tag_str[64]; };
+        ecs_component_desc_t cdp = (ecs_component_desc_t){0};
+        ecs_entity_desc_t edp = {0}; edp.name = "Tag";
+        cdp.entity = ecs_entity_init(w, &edp);
+        cdp.type.size = (int32_t)sizeof(TagData);
+        cdp.type.alignment = (int32_t)alignof(TagData);
+        g_comp.tag = ecs_component_init(w, &cdp);
+    }
+    // Layer (façade-only)
+    if (g_comp.layer == 0) {
+        struct LayerData { int layer; };
+        ecs_component_desc_t cdp = (ecs_component_desc_t){0};
+        ecs_entity_desc_t edp = {0}; edp.name = "Layer";
+        cdp.entity = ecs_entity_init(w, &edp);
+        cdp.type.size = (int32_t)sizeof(LayerData);
+        cdp.type.alignment = (int32_t)alignof(LayerData);
+        g_comp.layer = ecs_component_init(w, &cdp);
     }
     // Sprite
     if (g_comp.sprite == 0) {
@@ -105,15 +124,7 @@ void ensure_components_registered(ecs_world_t* w) {
         cdp.type.alignment = (int32_t)alignof(Col2D);
         g_comp.collider2d = ecs_component_init(w, &cdp);
     }
-    // Script host
-    if (g_comp_script_host == 0) {
-        ecs_component_desc_t cdp = (ecs_component_desc_t){0};
-        ecs_entity_desc_t edp = {0}; edp.name = "ScriptHost";
-        cdp.entity = ecs_entity_init(w, &edp);
-        cdp.type.size = (int32_t)sizeof(ScriptHost);
-        cdp.type.alignment = (int32_t)alignof(ScriptHost);
-        g_comp_script_host = ecs_component_init(w, &cdp);
-    }
+    // Script components are now registered dynamically per script type
 }
 
 } // namespace unitylike

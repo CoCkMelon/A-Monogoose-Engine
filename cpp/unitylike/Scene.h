@@ -49,6 +49,17 @@ struct ScriptComponent {
         }
     }
     
+    // On-set hook - called when component data is set
+    static void on_set(ecs_iter_t* it) {
+        for (int i = 0; i < it->count; i++) {
+            ScriptComponent<T>* comp = ecs_field(it, ScriptComponent<T>, 0) + i;
+            if (comp->script && !comp->awoken) {
+                comp->script->Awake();
+                comp->awoken = true;
+            }
+        }
+    }
+    
     // Destructor hook - called when component is removed
     static void dtor(void* ptr, int32_t count, const ecs_type_info_t* ti) {
         for (int i = 0; i < count; i++) {
@@ -89,6 +100,7 @@ ecs_entity_t __get_script_component_id(ecs_world_t* w) {
     // Set up lifecycle hooks
     desc.type.hooks.ctor = ScriptComponent<T>::ctor;
     desc.type.hooks.dtor = ScriptComponent<T>::dtor;
+    desc.type.hooks.on_set = ScriptComponent<T>::on_set;
     
     ecs_entity_t comp_id = ecs_component_init(w, &desc);
     g_script_component_registry[type_id] = comp_id;
