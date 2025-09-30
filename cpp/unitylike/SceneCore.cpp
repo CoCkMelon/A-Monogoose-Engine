@@ -177,34 +177,56 @@ static void register_script_update_systems(ecs_world_t* world, ecs_entity_t comp
     
     // Update system for Start and Update calls
     ecs_system_desc_t update_desc = {0};
-    ecs_entity_desc_t update_entity_desc = {0};
     std::string update_name = "ScriptUpdate_" + std::to_string(comp_id);
+    ecs_id_t add_ids[3] = {
+        ecs_pair(EcsDependsOn, EcsOnUpdate),
+        EcsOnUpdate,
+        0
+    };
+    ecs_entity_desc_t update_entity_desc = {0};
     update_entity_desc.name = update_name.c_str();
+    update_entity_desc.add = add_ids;
+    update_desc.entity = ecs_entity_init(world, &update_entity_desc);
     update_desc.entity = ecs_entity_init(world, &update_entity_desc);
     update_desc.query.terms[0].id = comp_id;
     update_desc.callback = ScriptUpdateSystem;
+    update_desc.multi_threaded = true; // Enable multithreading
     ecs_entity_t system1 = ecs_system_init(world, &update_desc);
     SDL_Log("[UnityLike] Registered Update system: %lu", (unsigned long)system1);
     
     // LateUpdate system
     ecs_system_desc_t late_update_desc = {0};
-    ecs_entity_desc_t late_update_entity_desc = {0};
     std::string late_update_name = "ScriptLateUpdate_" + std::to_string(comp_id);
+    ecs_id_t late_add_ids[3] = {
+        ecs_pair(EcsDependsOn, EcsPostUpdate),
+        EcsPostUpdate,
+        0
+    };
+    ecs_entity_desc_t late_update_entity_desc = {0};
     late_update_entity_desc.name = late_update_name.c_str();
+    late_update_entity_desc.add = late_add_ids;
     late_update_desc.entity = ecs_entity_init(world, &late_update_entity_desc);
     late_update_desc.query.terms[0].id = comp_id;
     late_update_desc.callback = ScriptLateUpdateSystem;
+    late_update_desc.multi_threaded = true; // Enable multithreading
     ecs_entity_t system2 = ecs_system_init(world, &late_update_desc);
     SDL_Log("[UnityLike] Registered LateUpdate system: %lu", (unsigned long)system2);
     
     // FixedUpdate system
     ecs_system_desc_t fixed_update_desc = {0};
-    ecs_entity_desc_t fixed_update_entity_desc = {0};
     std::string fixed_update_name = "ScriptFixedUpdate_" + std::to_string(comp_id);
+    ecs_id_t fixed_add_ids[3] = {
+        ecs_pair(EcsDependsOn, EcsOnUpdate),
+        EcsOnUpdate, // FixedUpdate runs in same phase as Update for now
+        0
+    };
+    ecs_entity_desc_t fixed_update_entity_desc = {0};
     fixed_update_entity_desc.name = fixed_update_name.c_str();
+    fixed_update_entity_desc.add = fixed_add_ids;
     fixed_update_desc.entity = ecs_entity_init(world, &fixed_update_entity_desc);
     fixed_update_desc.query.terms[0].id = comp_id;
     fixed_update_desc.callback = ScriptFixedUpdateSystem;
+    fixed_update_desc.multi_threaded = true; // Enable multithreading
     ecs_entity_t system3 = ecs_system_init(world, &fixed_update_desc);
     SDL_Log("[UnityLike] Registered FixedUpdate system: %lu", (unsigned long)system3);
 }
