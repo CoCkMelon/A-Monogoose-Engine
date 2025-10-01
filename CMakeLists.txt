@@ -254,6 +254,8 @@ add_library(ame STATIC
     src/physics.cpp
     src/audio_ray.c
     src/text_system.c
+    src/scene_builder.c
+    src/prefab.c
 )
 # Flecs-dependent sources
 if(AME_WITH_FLECS)
@@ -340,6 +342,7 @@ add_library(unitylike STATIC
     cpp/unitylike/Collider2D.cpp
     cpp/unitylike/CameraFacade.cpp
     cpp/unitylike/Time.cpp
+    cpp/unitylike/SceneAsset.cpp
 )
 
 # Expose includes (cpp/ for headers, include/ for C APIs, asyncinput for input keys, glm)
@@ -485,6 +488,24 @@ if(AME_BUILD_EXAMPLES)
   # ------------------------------
   if(AME_WITH_FLECS)
     add_subdirectory(examples/example_parent_child)
+  endif()
+
+  # ------------------------------
+  # Example: prefab smoke test (C++ RegisterPrefab bridge)
+  # ------------------------------
+  if(AME_BUILD_UNITYLIKE AND AME_WITH_FLECS)
+    add_executable(prefab_smoke examples/prefab_smoke/main.cpp)
+    target_link_libraries(prefab_smoke unitylike flecs)
+    target_include_directories(prefab_smoke PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} include third_party/flecs/include)
+  endif()
+
+  # ------------------------------
+  # Example: unitylike scene hierarchy + scene loading test
+  # ------------------------------
+  if(AME_BUILD_UNITYLIKE AND AME_WITH_FLECS)
+    add_executable(unitylike_scene_hierarchy_test examples/unitylike_scene_hierarchy_test/main.cpp)
+    target_link_libraries(unitylike_scene_hierarchy_test unitylike flecs)
+    target_include_directories(unitylike_scene_hierarchy_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} include third_party/flecs/include)
   endif()
 
   # ------------------------------
