@@ -342,6 +342,7 @@ add_library(unitylike STATIC
     cpp/unitylike/Collider2D.cpp
     cpp/unitylike/CameraFacade.cpp
     cpp/unitylike/Time.cpp
+    cpp/unitylike/AudioComponents.cpp
     cpp/unitylike/SceneAsset.cpp
 )
 
@@ -481,6 +482,13 @@ if(AME_BUILD_EXAMPLES)
   # ------------------------------
   if(AME_BUILD_UNITYLIKE AND AME_WITH_FLECS)
     add_subdirectory(examples/unitylike_box2d_car)
+  endif()
+
+  # ------------------------------
+  # Example: unitylike_audio_example (Unity-like with spatial audio)
+  # ------------------------------
+  if(AME_BUILD_UNITYLIKE AND AME_WITH_FLECS)
+    add_subdirectory(examples/unitylike_audio_example)
   endif()
 
   # ------------------------------

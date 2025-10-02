@@ -6,6 +6,13 @@
 #include <typeinfo>
 #include <SDL3/SDL.h>
 
+extern "C" {
+#include "ame/audio.h"
+#include "ame/audio_ray.h"
+#include "ame/acoustics.h"
+#include "ame/physics.h"
+}
+
 namespace unitylike {
 
 // Global script component registry
@@ -13,6 +20,98 @@ std::unordered_map<const std::type_info*, ecs_entity_t> g_script_component_regis
 static bool g_systems_registered = false;
 static float g_current_dt = 0.0f;
 static float g_fixed_dt = 1.0f/60.0f;
+
+// Audio sync system - syncs AudioSource components with the audio mixer
+static void AudioSyncSystem(ecs_iter_t* it) {
+    // Get all AudioSourceData components and sync them with the audio mixer
+    std::vector<AmeAudioSourceRef> refs;
+    refs.reserve(it->count);
+    
+    AudioSourceData* sources = ecs_field(it, AudioSourceData, 0);
+    ecs_world_t* world = it->world;
+    
+    // Find the physics world from the scene's world
+    AmePhysicsWorld* physics_world = nullptr;
+    // Try to get physics world - this is a simplification, in a real implementation
+    // you'd store a reference to the physics world in the scene
+    
+    // Find the main listener position (if any)
+    glm::vec3 listener_pos = {0, 0, 0};
+    AudioListener* main_listener = AudioListener::main();
+    float listener_volume = 1.0f;
+    bool listener_mute = false;
+    if (main_listener) {
+        listener_volume = main_listener->volume();
+        listener_mute = main_listener->mute();
+        // Get listener transform if it has one
+        if (main_listener->gameObject().HasComponent<Transform>()) {
+            auto pos = main_listener->gameObject().transform().position();
+            listener_pos = pos;
+        }
+    }
+    
+    for (int i = 0; i < it->count; i++) {
+        AudioSourceData* asd = &sources[i];
+        if (!asd) continue;
+        
+        ecs_entity_t entity = it->entities[i];
+        float final_gain = asd->volume * listener_volume;
+        float final_pan = asd->source.pan;
+        
+        // Apply spatial audio if enabled
+        if (asd->spatial_audio && main_listener) {
+            // Get the audio source's transform
+            AmeTransform2D* transform = (AmeTransform2D*)ecs_get_id(world, entity, g_comp.transform);
+            if (transform) {
+                AmeAudioRayParams ray_params = {0};
+                ray_params.listener_x = listener_pos.x;
+                ray_params.listener_y = listener_pos.y;
+                ray_params.source_x = transform->x;
+                ray_params.source_y = transform->y;
+                ray_params.min_distance = asd->min_distance;
+                ray_params.max_distance = asd->max_distance;
+                ray_params.occlusion_db = asd->occlusion_db;
+                ray_params.air_absorption_db_per_meter = asd->air_absorption_db_per_meter;
+                
+                float gain_l, gain_r;
+                if (ame_audio_ray_compute(physics_world, &ray_params, &gain_l, &gain_r)) {
+                    // Use the spatial audio gains to compute effective volume and pan
+                    float total_gain = (gain_l + gain_r) * 0.5f;
+                    final_gain *= total_gain;
+                    
+                    // Calculate pan from left/right balance
+                    if (total_gain > 0.001f) {
+                        float balance = (gain_r - gain_l) / (gain_l + gain_r);
+                        final_pan = balance; // -1 = left, 1 = right
+                    }
+                }
+            }
+        }
+        
+        // Apply muting
+        if (asd->mute || listener_mute) {
+            final_gain = 0.0f;
+        }
+        
+        asd->source.gain = final_gain;
+        asd->source.pan = final_pan;
+        asd->source.playing = asd->is_playing && !asd->mute && !listener_mute;
+        
+        // Create ref for this audio source
+        AmeAudioSourceRef ref;
+        ref.src = &asd->source;
+        ref.stable_id = (uint64_t)entity; // Use entity ID as stable ID
+        refs.push_back(ref);
+        
+        // Clear dirty flag
+        asd->dirty = 0;
+    }
+    
+    // Sync all audio sources with the mixer
+    if (!refs.empty()) {
+        ame_audio_sync_sources_refs(refs.data(), refs.size());
+    }
+}
 
 
 // Observer that runs when script components are added - handles Awake automatically
@@ -236,6 +335,17 @@ static void register_script_systems(ecs_world_t* world) {
     if (g_systems_registered) return;
     
     ensure_components_registered(world);
+    
+    // Register audio sync system
+    ecs_entity_desc_t audio_sync_entity_desc = {0};
+    audio_sync_entity_desc.name = "AudioSyncSystem";
+    ecs_system_desc_t audio_sync_desc = {0};
+    audio_sync_desc.entity = ecs_entity_init(world, &audio_sync_entity_desc);
+    audio_sync_desc.query.terms[0].id = g_comp.audio_source;
+    audio_sync_desc.callback = AudioSyncSystem;
+    audio_sync_desc.multi_threaded = false; // Audio sync should be single-threaded for safety
+    ecs_system_init(world, &audio_sync_desc);
+    SDL_Log("[UnityLike] AudioSync system registered");
     
     // Systems that run on any entity - they'll check for script components internally
     // This approach allows proper multithreading while being flexible

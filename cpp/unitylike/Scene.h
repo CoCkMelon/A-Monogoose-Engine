@@ -4,6 +4,7 @@
 // Names mirror Unity C# except for MongooseBehaviour branding.
 
 #include <string>
+#include <cstring>
 #include <cstdint>
 #include <vector>
 #include <type_traits>
@@ -20,6 +21,8 @@ extern "C" {
 #include "ame/tilemap.h"   // AmeTilemap
 #include "ame/camera.h"    // AmeCamera
 #include "ame/audio.h"     // AmeAudioSource
+#include "ame/audio_ray.h" // AmeAudioRayParams
+#include "ame/acoustics.h" // AmeAcousticMaterial
 }
 
 struct ecs_world_t; // from flecs
@@ -154,7 +157,21 @@ struct TilemapRefData {
 struct MeshData { const float* pos; const float* uv; const float* col; std::size_t count; };
 struct TextData { const char* text_ptr; std::uint32_t font; float r,g,b,a; float size; int wrap_px; int request_set; char request_buf[256]; };
 struct Col2D { int type; float w,h; float radius; int isTrigger; int dirty; };
-struct AudioSourceData { AmeAudioSource source; float volume; float pitch; bool mute; bool loop; bool play_on_awake; bool is_playing; int dirty; };
+struct AudioSourceData { 
+    AmeAudioSource source; 
+    float volume; 
+    float pitch; 
+    bool mute; 
+    bool loop; 
+    bool play_on_awake; 
+    bool is_playing; 
+    bool spatial_audio;
+    float min_distance;
+    float max_distance;
+    float occlusion_db;
+    float air_absorption_db_per_meter;
+    int dirty; 
+};
 struct AudioListenerData { float volume; bool mute; };
 
 // Internal registration helper (defined in Components.cpp)
@@ -522,6 +539,18 @@ public:
     float pan() const;
     void pan(float p); // -1.0 = left, 0 = center, 1.0 = right
     
+    // Spatial audio
+    bool spatialAudio() const;
+    void spatialAudio(bool spatial);
+    float minDistance() const;
+    void minDistance(float distance);
+    float maxDistance() const;
+    void maxDistance(float distance);
+    float occlusionDb() const;
+    void occlusionDb(float db);
+    float airAbsorption() const;
+    void airAbsorption(float db_per_meter);
+    
 private:
     GameObject owner_;
 };
@@ -535,6 +564,10 @@ public:
     void volume(float v);
     bool mute() const;
     void mute(bool m);
+    
+    // Access to owning GameObject
+    GameObject& gameObject() { return owner_; }
+    const GameObject& gameObject() const { return owner_; }
     
     // Static access to main listener
     static AudioListener* main();
@@ -645,13 +678,19 @@ static_assert(
         c2 = Collider2D{ *this };
         return c2;
     } else if constexpr (std::is_same_v<T, AudioSource>) {
-        AudioSourceData asd = {0};
+        AudioSourceData asd = {};
+        memset(&asd, 0, sizeof(asd));
         asd.volume = 1.0f;
         asd.pitch = 1.0f;
         asd.mute = false;
         asd.loop = false;
         asd.play_on_awake = false;
         asd.is_playing = false;
+        asd.spatial_audio = false;
+        asd.min_distance = 1.0f;
+        asd.max_distance = 500.0f;
+        asd.occlusion_db = 6.0f;
+        asd.air_absorption_db_per_meter = 0.02f;
         asd.dirty = 1;
         ecs_set_id(w, (ecs_entity_t)e_, g_comp.audio_source, sizeof(AudioSourceData), &asd);
         static thread_local AudioSource as{ GameObject() };
