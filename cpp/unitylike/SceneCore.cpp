@@ -163,33 +163,50 @@ static void ScriptOnRemoveObserver(ecs_iter_t* it) {
 
 // Update system - handles Start and Update
 static void ScriptUpdateSystem(ecs_iter_t* it) {
-    size_t comp_size = ecs_field_size(it, 0);
-    void* components = ecs_field_w_size(it, comp_size, 0);
-    
+    // Important: adding/removing components inside Start/Update can relocate the entity's table.
+    // Do NOT keep pointers from ecs_field_w_size across such modifications. Reacquire per-entity.
+    ecs_world_t* world = it->world;
+    ecs_id_t comp_id = ecs_field_id(it, 0);
+
     for (int i = 0; i < it->count; i++) {
         struct BaseScriptComponent { void* script; bool awoken; bool started; };
-        BaseScriptComponent* base = (BaseScriptComponent*)((char*)components + i * comp_size);
-        
-        if (base->script && base->awoken) {
-            if (!base->started) {
-                ((MongooseBehaviour*)base->script)->Start();
-                base->started = true;
+        ecs_entity_t e = it->entities[i];
+
+        // Read current component state
+        const BaseScriptComponent* base_ro = (const BaseScriptComponent*)ecs_get_id(world, e, comp_id);
+        if (!base_ro || !base_ro->script || !base_ro->awoken) {
+            continue;
+        }
+
+        // If Start hasn't run yet, run it now. This may modify the world (and relocate the entity).
+        if (!base_ro->started) {
+            ((MongooseBehaviour*)base_ro->script)->Start();
+            // Reacquire a mutable pointer and mark as modified
+            BaseScriptComponent* base_rw = (BaseScriptComponent*)ecs_get_mut_id(world, e, comp_id);
+            if (base_rw) {
+                base_rw->started = true;
+                ecs_modified_id(world, e, comp_id);
             }
-            ((MongooseBehaviour*)base->script)->Update(g_current_dt);
+        }
+
+        // Reacquire after potential modifications and call Update safely
+        const BaseScriptComponent* base_now = (const BaseScriptComponent*)ecs_get_id(world, e, comp_id);
+        if (base_now && base_now->script) {
+            ((MongooseBehaviour*)base_now->script)->Update(g_current_dt);
         }
     }
 }
 
 // LateUpdate system
 static void ScriptLateUpdateSystem(ecs_iter_t* it) {
-    size_t comp_size = ecs_field_size(it, 0);
-    void* components = ecs_field_w_size(it, comp_size, 0);
-    
+    ecs_world_t* world = it->world;
+    ecs_id_t comp_id = ecs_field_id(it, 0);
+
     for (int i = 0; i < it->count; i++) {
         struct BaseScriptComponent { void* script; bool awoken; bool started; };
-        BaseScriptComponent* base = (BaseScriptComponent*)((char*)components + i * comp_size);
-        
-        if (base->script && base->started) {
+        ecs_entity_t e = it->entities[i];
+        const BaseScriptComponent* base = (const BaseScriptComponent*)ecs_get_id(world, e, comp_id);
+        if (base && base->script && base->started) {
             ((MongooseBehaviour*)base->script)->LateUpdate();
         }
     }
@@ -197,14 +214,14 @@ static void ScriptLateUpdateSystem(ecs_iter_t* it) {
 
 // FixedUpdate system
 static void ScriptFixedUpdateSystem(ecs_iter_t* it) {
-    size_t comp_size = ecs_field_size(it, 0);
-    void* components = ecs_field_w_size(it, comp_size, 0);
-    
+    ecs_world_t* world = it->world;
+    ecs_id_t comp_id = ecs_field_id(it, 0);
+
     for (int i = 0; i < it->count; i++) {
         struct BaseScriptComponent { void* script; bool awoken; bool started; };
-        BaseScriptComponent* base = (BaseScriptComponent*)((char*)components + i * comp_size);
-        
-        if (base->script && base->started) {
+        ecs_entity_t e = it->entities[i];
+        const BaseScriptComponent* base = (const BaseScriptComponent*)ecs_get_id(world, e, comp_id);
+        if (base && base->script && base->started) {
             ((MongooseBehaviour*)base->script)->FixedUpdate(g_fixed_dt);
         }
     }
@@ -344,13 +361,14 @@ static void register_script_update_systems(ecs_world_t* world, ecs_entity_t comp
     SDL_Log("[UnityLike] Registered FixedUpdate system: %lu", (unsigned long)system3);
 }
 
-// Register the script systems using wildcard queries to catch any script component
+// Register core systems that are global to the scene. Script update systems are
+// registered per script component type elsewhere (see register_script_update_systems).
 static void register_script_systems(ecs_world_t* world) {
     if (g_systems_registered) return;
-    
+
     ensure_components_registered(world);
-    
-    // Register audio sync system
+
+    // Register audio sync system only
     ecs_entity_desc_t audio_sync_entity_desc = {0};
     audio_sync_entity_desc.name = "AudioSyncSystem";
     ecs_system_desc_t audio_sync_desc = {0};
@@ -360,44 +378,9 @@ static void register_script_systems(ecs_world_t* world) {
     audio_sync_desc.multi_threaded = false; // Audio sync should be single-threaded for safety
     ecs_system_init(world, &audio_sync_desc);
     SDL_Log("[UnityLike] AudioSync system registered");
-    
-    // Systems that run on any entity - they'll check for script components internally
-    // This approach allows proper multithreading while being flexible
-    
-    ecs_entity_desc_t awake_entity_desc = {0};
-    awake_entity_desc.name = "UnitylikeScriptAwake";
-    ecs_system_desc_t awake_desc = {0};
-    awake_desc.entity = ecs_entity_init(world, &awake_entity_desc);
-    awake_desc.callback = ScriptUpdateSystem;
-    awake_desc.multi_threaded = true;
-    ecs_system_init(world, &awake_desc);
-    
-    ecs_entity_desc_t update_entity_desc = {0};
-    update_entity_desc.name = "UnitylikeScriptUpdate";
-    ecs_system_desc_t update_desc = {0};
-    update_desc.entity = ecs_entity_init(world, &update_entity_desc);
-    update_desc.callback = ScriptUpdateSystem;
-    update_desc.multi_threaded = true;
-    ecs_system_init(world, &update_desc);
-    
-    ecs_entity_desc_t late_update_entity_desc = {0};
-    late_update_entity_desc.name = "UnitylikeScriptLateUpdate";
-    ecs_system_desc_t late_update_desc = {0};
-    late_update_desc.entity = ecs_entity_init(world, &late_update_entity_desc);
-    late_update_desc.callback = ScriptLateUpdateSystem;
-    late_update_desc.multi_threaded = true;
-    ecs_system_init(world, &late_update_desc);
-    
-    ecs_entity_desc_t fixed_update_entity_desc = {0};
-    fixed_update_entity_desc.name = "UnitylikeScriptFixedUpdate";
-    ecs_system_desc_t fixed_update_desc = {0};
-    fixed_update_desc.entity = ecs_entity_init(world, &fixed_update_entity_desc);
-    fixed_update_desc.callback = ScriptFixedUpdateSystem;
-    fixed_update_desc.multi_threaded = true;
-    ecs_system_init(world, &fixed_update_desc);
-    
+
+    // Mark as registered
     g_systems_registered = true;
-    SDL_Log("[UnityLike] Script execution systems registered with ECS pipeline (multithreaded)");
 }
 
 // Scene core

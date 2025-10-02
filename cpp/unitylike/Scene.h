@@ -75,6 +75,24 @@ struct ScriptComponent {
                 delete comp->script;
                 comp->script = nullptr;
             }
+            comp->awoken = false;
+            comp->started = false;
+        }
+    }
+
+    // Move hook - called when component rows are relocated between tables
+    static void move(void* dst_ptr, void* src_ptr, int32_t count, const ecs_type_info_t* ti) {
+        for (int i = 0; i < count; i++) {
+            ScriptComponent<T>* dst = static_cast<ScriptComponent<T>*>(dst_ptr) + i;
+            ScriptComponent<T>* src = static_cast<ScriptComponent<T>*>(src_ptr) + i;
+            // Transfer ownership of script pointer and flags
+            dst->script = src->script;
+            dst->awoken = src->awoken;
+            dst->started = src->started;
+            // Invalidate source so its dtor (if any) won't delete the script
+            src->script = nullptr;
+            src->awoken = false;
+            src->started = false;
         }
     }
 };
@@ -107,6 +125,7 @@ ecs_entity_t __get_script_component_id(ecs_world_t* w) {
     desc.type.hooks.ctor = ScriptComponent<T>::ctor;
     desc.type.hooks.dtor = ScriptComponent<T>::dtor;
     desc.type.hooks.on_set = ScriptComponent<T>::on_set;
+    desc.type.hooks.move = ScriptComponent<T>::move;
     
     ecs_entity_t comp_id = ecs_component_init(w, &desc);
     g_script_component_registry[type_id] = comp_id;
