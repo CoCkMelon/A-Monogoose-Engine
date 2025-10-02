@@ -368,9 +368,16 @@ static void register_script_systems(ecs_world_t* world) {
 
     ensure_components_registered(world);
 
-    // Register audio sync system only
+    // Register audio sync system to run in PostUpdate phase
     ecs_entity_desc_t audio_sync_entity_desc = {0};
     audio_sync_entity_desc.name = "AudioSyncSystem";
+    ecs_id_t audio_sync_deps[3] = {
+        ecs_pair(EcsDependsOn, EcsPostUpdate),
+        EcsPostUpdate,
+        0
+    };
+    audio_sync_entity_desc.add = audio_sync_deps;
+    
     ecs_system_desc_t audio_sync_desc = {0};
     audio_sync_desc.entity = ecs_entity_init(world, &audio_sync_entity_desc);
     audio_sync_desc.query.terms[0].id = g_comp.audio_source;
@@ -388,11 +395,23 @@ Scene::Scene(ecs_world_t* world) : world_(world) {
     assert(world_ != nullptr);
     ensure_components_registered(world_);
     register_script_systems(world_);
+    
+    // Register physics synchronization systems
+    RegisterPhysicsSyncSystems(world_);
+    
+    // Set this scene as the global scene for Physics2D
+    Physics2D::SetScene(this);
 }
 
 Scene::~Scene() {
     // Scripts are now managed by Flecs components with proper destructors
     // No manual cleanup needed - Flecs will call the component destructors
+    
+    // Cleanup physics callbacks if this was the active scene
+    if (Physics2D::GetScene() == this) {
+        Physics2D::SetScene(nullptr);
+        CleanupPhysicsCallbacks();
+    }
 }
 
 GameObject Scene::Create(const std::string& name) {
