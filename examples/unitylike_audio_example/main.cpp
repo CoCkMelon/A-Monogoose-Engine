@@ -270,6 +270,7 @@ int main() {
     
     // Initialize physics world
     AmePhysicsWorld* physics = ame_physics_world_create(0.0f, 0.0f, 1.0f/60.0f);
+    Physics2D::SetWorld(physics);
     
     // Create Unity-like scene
     Scene scene(w);
