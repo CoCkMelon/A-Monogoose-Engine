@@ -1,7 +1,7 @@
 # Unity-like API Implementation Status
 
 **A Mongoose Engine - cpp/unitylike**  
-**Last Updated:** 2025-09-30
+**Last Updated:** 2025-10-02
 
 ---
 
@@ -29,6 +29,12 @@
 | TextRenderer | ✅ Complete | Heap-managed text |
 | AudioSource | ❌ Not Implemented | |
 | AudioListener | ❌ Not Implemented | |
+| **Prefabs & Scenes** |
+| Prefabs (code-first) | ✅ Complete | C API register/instantiate; C++ RegisterPrefab bridge; SDL-mutex thread-safe |
+| Prefab management | ⚠️ Partial | No unregister/list/iterate; no parameters/overrides |
+| Scene (code-first) | ✅ Complete | Build in-memory scene, instantiate to Flecs |
+| Scene serialization | ❌ Not Implemented | Save/load formats |
+| SceneManager | ❌ Not Implemented | LoadScene, async, multi-scene |
 | **Utilities** |
 | Object.Instantiate | ❌ Not Implemented | Clone entities |
 | Object.Destroy | ✅ Complete | Immediate destroy |
@@ -46,6 +52,19 @@
 ## Detailed Status
 
 ### ✅ Fully Implemented
+
+#### Prefabs (code-first)
+- C API: ame_prefab_register, ame_prefab_instantiate
+- C++ facade: unitylike::RegisterPrefab bridges std::function to C registry
+- Thread safety: SDL mutex guards register/instantiate
+
+```cpp
+bool ok = unitylike::RegisterPrefab("Smoke/TwoNode", [](SceneAsset& asset, SceneAsset::Entity parent, const std::string& name){
+    auto root = asset.create(name.empty()?"PrefabRoot":name).transform(0,0,0);
+    if (parent.valid()) root.setParent(parent);
+    return root;
+});
+```
 
 #### Scene
 - Create/Destroy GameObject
@@ -156,6 +175,11 @@ float t = Time::timeSinceLevelLoad();
 ---
 
 ### ⚠️ Partially Implemented
+
+#### Prefab management
+- No unregister/list/enumerate APIs yet
+- No namespacing/versioning/metadata helpers
+- No prefab parameterization/overrides
 
 #### Collision Callbacks
 **Status:** Method declarations exist in MongooseBehaviour, but Box2D contact listener not connected.
@@ -347,6 +371,7 @@ void Start() override {
 ## Examples
 
 ### Working Examples
+- `examples/prefab_smoke` - Verifies C++ RegisterPrefab bridge and world transform
 - `examples/unitylike_minimal` - Basic GameObject, Transform, MongooseBehaviour
 - `examples/unitylike_box2d_car` - Rigidbody2D, forces, car physics
 - `examples/unitylike_platformer_ecs` - Platformer with hierarchy, sprites
@@ -389,6 +414,11 @@ void Start() override {
 - Simplify camera queries
 
 ### 6. AudioSource Component (Medium Priority)
+
+### 7. Prefab Management (Medium Priority)
+- Add unregister/list APIs to prefab registry
+- Optional: namespacing/versioning, parameters/overrides
+- Add concurrent registration/instantiation stress tests
 - Wrap AmeAudioSource in component
 - Integrate with audio thread sync
 
@@ -405,6 +435,8 @@ void Start() override {
 ---
 
 ## Known Issues & Limitations
+
+- Prefab registry: no unregister/list; parameters/overrides not yet supported
 
 1. **2D Only:** Transform uses AmeTransform2D (x, y, angle). 3D requires separate system.
 2. **Static Component Types:** AddComponent<T> hardcoded for specific types. No runtime reflection.

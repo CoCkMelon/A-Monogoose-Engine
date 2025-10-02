@@ -19,6 +19,7 @@ extern "C" {
 #include "ame/physics.h"   // AmeTransform2D, AmePhysicsBody
 #include "ame/tilemap.h"   // AmeTilemap
 #include "ame/camera.h"    // AmeCamera
+#include "ame/audio.h"     // AmeAudioSource
 }
 
 struct ecs_world_t; // from flecs
@@ -30,6 +31,8 @@ class Transform;
 class MongooseBehaviour;
 class Rigidbody2D;
 class Collider2D;
+class AudioSource;
+class AudioListener;
 
 // Script component template - each script type gets its own component
 // This allows Flecs to handle lifecycle properly
@@ -125,6 +128,8 @@ struct CompIds {
     ecs_entity_t camera;
     ecs_entity_t text;
     ecs_entity_t collider2d;
+    ecs_entity_t audio_source;
+    ecs_entity_t audio_listener;
 };
 extern CompIds g_comp;
 
@@ -149,6 +154,8 @@ struct TilemapRefData {
 struct MeshData { const float* pos; const float* uv; const float* col; std::size_t count; };
 struct TextData { const char* text_ptr; std::uint32_t font; float r,g,b,a; float size; int wrap_px; int request_set; char request_buf[256]; };
 struct Col2D { int type; float w,h; float radius; int isTrigger; int dirty; };
+struct AudioSourceData { AmeAudioSource source; float volume; float pitch; bool mute; bool loop; bool play_on_awake; bool is_playing; int dirty; };
+struct AudioListenerData { float volume; bool mute; };
 
 // Internal registration helper (defined in Components.cpp)
 void ensure_components_registered(ecs_world_t* w);
@@ -479,6 +486,65 @@ private:
     GameObject owner_;
 };
 
+// AudioSource component wrapper
+class AudioSource {
+public:
+    explicit AudioSource(GameObject owner) : owner_(owner) {}
+    
+    // Playback control
+    void Play();
+    void Stop();
+    void Pause();
+    void UnPause();
+    
+    // Audio properties
+    float volume() const;
+    void volume(float v);
+    float pitch() const;
+    void pitch(float p);
+    bool mute() const;
+    void mute(bool m);
+    bool loop() const;
+    void loop(bool l);
+    bool playOnAwake() const;
+    void playOnAwake(bool p);
+    
+    // Playback state
+    bool isPlaying() const;
+    
+    // Audio clip loading
+    bool LoadOpusFile(const char* filepath, bool loop_audio = false);
+    void InitSigmoidOsc(float freq_hz, float shape_k = 6.0f, float gain = 1.0f);
+    void InitSawWork(float base_freq_hz, float drive = 1.0f, float noise_mix = 0.3f, float lfo_rate_hz = 4.0f, float gain = 1.0f);
+    void InitSawCut(float freq_hz, float drive = 1.0f, float noise_mix = 0.5f, float duration_sec = 0.1f, float gain = 1.0f);
+    
+    // Pan control
+    float pan() const;
+    void pan(float p); // -1.0 = left, 0 = center, 1.0 = right
+    
+private:
+    GameObject owner_;
+};
+
+// AudioListener component wrapper  
+class AudioListener {
+public:
+    explicit AudioListener(GameObject owner) : owner_(owner) {}
+    
+    float volume() const;
+    void volume(float v);
+    bool mute() const;
+    void mute(bool m);
+    
+    // Static access to main listener
+    static AudioListener* main();
+    static void SetMain(AudioListener* listener);
+    
+private:
+    GameObject owner_;
+    static AudioListener* main_listener_;
+};
+
 // Template implementations
 
 // Note: The façade only supports a small set of component types in the MVP.
@@ -491,8 +557,9 @@ static_assert(
         std::is_same_v<T, Transform> || std::is_same_v<T, Rigidbody2D> ||
         std::is_same_v<T, SpriteRenderer> || std::is_same_v<T, Material> ||
         std::is_same_v<T, TilemapRenderer> || std::is_same_v<T, MeshRenderer> || std::is_same_v<T, Camera> ||
-        std::is_same_v<T, TextRenderer> || std::is_same_v<T, Collider2D>,
-        "AddComponent<T>: MVP supports Transform, Rigidbody2D, Sprite, Material, Tilemap, Mesh, Camera, Text, Collider2D"
+        std::is_same_v<T, TextRenderer> || std::is_same_v<T, Collider2D> ||
+        std::is_same_v<T, AudioSource> || std::is_same_v<T, AudioListener>,
+        "AddComponent<T>: MVP supports Transform, Rigidbody2D, Sprite, Material, Tilemap, Mesh, Camera, Text, Collider2D, AudioSource, AudioListener"
     );
     ecs_world_t* w = scene_->world();
     // Ensure underlying component ids are registered
@@ -577,6 +644,27 @@ static_assert(
         static thread_local Collider2D c2{ GameObject() };
         c2 = Collider2D{ *this };
         return c2;
+    } else if constexpr (std::is_same_v<T, AudioSource>) {
+        AudioSourceData asd = {0};
+        asd.volume = 1.0f;
+        asd.pitch = 1.0f;
+        asd.mute = false;
+        asd.loop = false;
+        asd.play_on_awake = false;
+        asd.is_playing = false;
+        asd.dirty = 1;
+        ecs_set_id(w, (ecs_entity_t)e_, g_comp.audio_source, sizeof(AudioSourceData), &asd);
+        static thread_local AudioSource as{ GameObject() };
+        as = AudioSource{ *this };
+        return as;
+    } else if constexpr (std::is_same_v<T, AudioListener>) {
+        AudioListenerData ald = {0};
+        ald.volume = 1.0f;
+        ald.mute = false;
+        ecs_set_id(w, (ecs_entity_t)e_, g_comp.audio_listener, sizeof(AudioListenerData), &ald);
+        static thread_local AudioListener al{ GameObject() };
+        al = AudioListener{ *this };
+        return al;
     }
 }
 
@@ -586,8 +674,9 @@ static_assert(
         std::is_same_v<T, Transform> || std::is_same_v<T, Rigidbody2D> ||
         std::is_same_v<T, SpriteRenderer> || std::is_same_v<T, Material> ||
         std::is_same_v<T, TilemapRenderer> || std::is_same_v<T, MeshRenderer> || std::is_same_v<T, Camera> ||
-        std::is_same_v<T, TextRenderer> || std::is_same_v<T, Collider2D>,
-        "TryGetComponent<T>: supported types are Transform, Rigidbody2D, Sprite, Material, Tilemap, Mesh, Camera, Text, Collider2D"
+        std::is_same_v<T, TextRenderer> || std::is_same_v<T, Collider2D> ||
+        std::is_same_v<T, AudioSource> || std::is_same_v<T, AudioListener>,
+        "TryGetComponent<T>: supported types are Transform, Rigidbody2D, Sprite, Material, Tilemap, Mesh, Camera, Text, Collider2D, AudioSource, AudioListener"
     );
     ecs_world_t* w = scene_->world();
     extern void ensure_components_registered(ecs_world_t*);
@@ -656,6 +745,20 @@ static_assert(
             return &c2;
         }
         return nullptr;
+    } else if constexpr (std::is_same_v<T, AudioSource>) {
+        if (ecs_get_id(w, (ecs_entity_t)e_, g_comp.audio_source)) {
+            static thread_local AudioSource as{ GameObject() };
+            as = AudioSource{ *this };
+            return &as;
+        }
+        return nullptr;
+    } else if constexpr (std::is_same_v<T, AudioListener>) {
+        if (ecs_get_id(w, (ecs_entity_t)e_, g_comp.audio_listener)) {
+            static thread_local AudioListener al{ GameObject() };
+            al = AudioListener{ *this };
+            return &al;
+        }
+        return nullptr;
     }
 }
 
@@ -682,8 +785,9 @@ bool GameObject::HasComponent() const {
         std::is_same_v<T, Transform> || std::is_same_v<T, Rigidbody2D> ||
         std::is_same_v<T, SpriteRenderer> || std::is_same_v<T, Material> ||
         std::is_same_v<T, TilemapRenderer> || std::is_same_v<T, MeshRenderer> || std::is_same_v<T, Camera> ||
-        std::is_same_v<T, TextRenderer> || std::is_same_v<T, Collider2D>,
-        "HasComponent<T>: supported types are Transform, Rigidbody2D, Sprite, Material, Tilemap, Mesh, Camera, Text, Collider2D"
+        std::is_same_v<T, TextRenderer> || std::is_same_v<T, Collider2D> ||
+        std::is_same_v<T, AudioSource> || std::is_same_v<T, AudioListener>,
+        "HasComponent<T>: supported types are Transform, Rigidbody2D, Sprite, Material, Tilemap, Mesh, Camera, Text, Collider2D, AudioSource, AudioListener"
     );
     if (!scene_ || !e_) return false;
     ecs_world_t* w = scene_->world();
@@ -697,6 +801,8 @@ bool GameObject::HasComponent() const {
     else if constexpr (std::is_same_v<T, Camera>) return ecs_get_id(w, (ecs_entity_t)e_, g_comp.camera) != nullptr;
     else if constexpr (std::is_same_v<T, TextRenderer>) return ecs_get_id(w, (ecs_entity_t)e_, g_comp.text) != nullptr;
     else if constexpr (std::is_same_v<T, Collider2D>) return ecs_get_id(w, (ecs_entity_t)e_, g_comp.collider2d) != nullptr;
+    else if constexpr (std::is_same_v<T, AudioSource>) return ecs_get_id(w, (ecs_entity_t)e_, g_comp.audio_source) != nullptr;
+    else if constexpr (std::is_same_v<T, AudioListener>) return ecs_get_id(w, (ecs_entity_t)e_, g_comp.audio_listener) != nullptr;
 }
 
 template<typename T>
@@ -705,8 +811,9 @@ void GameObject::RemoveComponent() {
         std::is_same_v<T, Transform> || std::is_same_v<T, Rigidbody2D> ||
         std::is_same_v<T, SpriteRenderer> || std::is_same_v<T, Material> ||
         std::is_same_v<T, TilemapRenderer> || std::is_same_v<T, MeshRenderer> || std::is_same_v<T, Camera> ||
-        std::is_same_v<T, TextRenderer> || std::is_same_v<T, Collider2D>,
-        "RemoveComponent<T>: supported types are Transform, Rigidbody2D, Sprite, Material, Tilemap, Mesh, Camera, Text, Collider2D"
+        std::is_same_v<T, TextRenderer> || std::is_same_v<T, Collider2D> ||
+        std::is_same_v<T, AudioSource> || std::is_same_v<T, AudioListener>,
+        "RemoveComponent<T>: supported types are Transform, Rigidbody2D, Sprite, Material, Tilemap, Mesh, Camera, Text, Collider2D, AudioSource, AudioListener"
     );
     if (!scene_ || !e_) return;
     ecs_world_t* w = scene_->world();
@@ -720,6 +827,8 @@ void GameObject::RemoveComponent() {
     else if constexpr (std::is_same_v<T, Camera>) ecs_remove_id(w, (ecs_entity_t)e_, g_comp.camera);
     else if constexpr (std::is_same_v<T, TextRenderer>) ecs_remove_id(w, (ecs_entity_t)e_, g_comp.text);
     else if constexpr (std::is_same_v<T, Collider2D>) ecs_remove_id(w, (ecs_entity_t)e_, g_comp.collider2d);
+    else if constexpr (std::is_same_v<T, AudioSource>) ecs_remove_id(w, (ecs_entity_t)e_, g_comp.audio_source);
+    else if constexpr (std::is_same_v<T, AudioListener>) ecs_remove_id(w, (ecs_entity_t)e_, g_comp.audio_listener);
 }
 
 template<typename T, typename... Args>

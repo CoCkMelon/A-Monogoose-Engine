@@ -124,6 +124,24 @@ void ensure_components_registered(ecs_world_t* w) {
         cdp.type.alignment = (int32_t)alignof(Col2D);
         g_comp.collider2d = ecs_component_init(w, &cdp);
     }
+    // AudioSource
+    if (g_comp.audio_source == 0) {
+        ecs_component_desc_t cdp = (ecs_component_desc_t){0};
+        ecs_entity_desc_t edp = {0}; edp.name = "AudioSource";
+        cdp.entity = ecs_entity_init(w, &edp);
+        cdp.type.size = (int32_t)sizeof(AudioSourceData);
+        cdp.type.alignment = (int32_t)alignof(AudioSourceData);
+        g_comp.audio_source = ecs_component_init(w, &cdp);
+    }
+    // AudioListener
+    if (g_comp.audio_listener == 0) {
+        ecs_component_desc_t cdp = (ecs_component_desc_t){0};
+        ecs_entity_desc_t edp = {0}; edp.name = "AudioListener";
+        cdp.entity = ecs_entity_init(w, &edp);
+        cdp.type.size = (int32_t)sizeof(AudioListenerData);
+        cdp.type.alignment = (int32_t)alignof(AudioListenerData);
+        g_comp.audio_listener = ecs_component_init(w, &cdp);
+    }
     // Script components are now registered dynamically per script type
 }
 
