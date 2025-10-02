@@ -197,7 +197,9 @@ public:
         audioComp.minDistance(20.0f);
         audioComp.maxDistance(300.0f);
         audioComp.loop(true);
+        audioComp.Play(); // Start playing immediately
         audio = &audioComp;
+        SDL_Log("[PeriodicAudioSource] Started audio source, playing=%d", audioComp.isPlaying());
     }
     
     void Update(float dt) override {

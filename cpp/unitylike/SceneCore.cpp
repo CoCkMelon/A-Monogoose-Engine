@@ -122,6 +122,16 @@ static void AudioSyncSystem(ecs_iter_t* it) {
     }
     
     // Sync all audio sources with the mixer
+    static int sync_counter = 0;
+    if (++sync_counter % 60 == 0) {
+        SDL_Log("[AudioSync] Syncing %zu audio sources, has_listener=%d, listener_pos=(%.1f, %.1f)", 
+                refs.size(), has_listener, listener_pos.x, listener_pos.y);
+        if (!refs.empty()) {
+            SDL_Log("[AudioSync] First source: gain=%.2f, pan=%.2f, playing=%d", 
+                    refs[0].src->gain, refs[0].src->pan, refs[0].src->playing);
+        }
+    }
+    
     if (!refs.empty()) {
         ame_audio_sync_sources_refs(refs.data(), refs.size());
     }
