@@ -78,6 +78,14 @@ typedef struct AmeAudioSource {
 // Returns true on success.
 bool ame_audio_init(int sample_rate_hz);
 
+// Safe audio initialization with timeout (requires SDL3 for threading).
+// Attempts to initialize audio with a timeout. If initialization takes longer than timeout_ms,
+// it will abort and return false, allowing the application to continue without audio.
+// timeout_ms: timeout in milliseconds (e.g., 3000 for 3 seconds)
+// sample_rate_hz: preferred sample rate (e.g., 48000). If 0, a reasonable default is chosen.
+// Returns true on success, false on timeout or failure.
+bool ame_audio_init_safe(int sample_rate_hz, int timeout_ms);
+
 // Shutdown audio engine and free resources.
 void ame_audio_shutdown(void);
 

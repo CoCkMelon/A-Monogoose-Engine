@@ -252,10 +252,14 @@ int main() {
     // Initialize touch controls
     init_touch_controls(win_w, win_h);
     
-    // Initialize audio system
+    // Initialize audio system with timeout to prevent freezing
     SDL_Log("[DEBUG] Initializing audio...");
-    ame_audio_init(48000);
-    SDL_Log("[DEBUG] Audio initialized");
+    bool audio_available = ame_audio_init_safe(48000, 3000); // 3 second timeout
+    if (audio_available) {
+        SDL_Log("[DEBUG] Audio initialized successfully");
+    } else {
+        SDL_Log("[WARNING] Audio initialization failed or timed out - continuing without audio");
+    }
     
     // Create C ECS world and physics
     AmeEcsWorld* ameWorld = ame_ecs_world_create();

@@ -21,6 +21,7 @@
 
 #include <portaudio.h>
 #include <opusfile.h>
+#include <SDL3/SDL.h>
 
 #ifndef AME_MIN
 #define AME_MIN(a,b) ((a) < (b) ? (a) : (b))
@@ -52,6 +53,11 @@ typedef struct AmeMixer {
 static AmeMixer g_mixer = {0};
 
 static void mixer_set_active_refs(const struct AmeAudioSourceRef *refs, size_t count) {
+    // Safety check: if audio system is not running, do nothing
+    if (!atomic_load(&g_mixer.running)) {
+        return;
+    }
+    
     pthread_mutex_lock(&g_mixer.mtx);
 
     // Ensure capacity for values and origin pointers
@@ -488,9 +494,14 @@ static int pa_callback(const void *input, void *output,
 }
 
 bool ame_audio_init(int sample_rate_hz) {
-    memset(&g_mixer, 0, sizeof(g_mixer));
+    // Only initialize mutex if not already initialized (e.g., by safe_init)
+    // Check if the mixer state is completely zeroed (indicating first-time init)
+    bool needs_init = (g_mixer.sample_rate == 0);
+    if (needs_init) {
+        memset(&g_mixer, 0, sizeof(g_mixer));
+        pthread_mutex_init(&g_mixer.mtx, NULL);
+    }
     g_mixer.sample_rate = sample_rate_hz > 0 ? sample_rate_hz : 48000;
-    pthread_mutex_init(&g_mixer.mtx, NULL);
     // 20 ms fade-in
     g_mixer.fade_in_total = (int)(0.02f * (float)g_mixer.sample_rate);
     if (g_mixer.fade_in_total < 1) g_mixer.fade_in_total = 1;
@@ -614,6 +625,93 @@ bool ame_audio_init(int sample_rate_hz) {
     return true;
 }
 
+// Thread data structure for safe initialization with timeout
+typedef struct AmeAudioInitThreadData {
+    int sample_rate_hz;
+    _Atomic bool result;
+    _Atomic bool finished;
+} AmeAudioInitThreadData;
+
+// Thread function that wraps ame_audio_init
+static int audio_init_thread_func(void *data) {
+    AmeAudioInitThreadData *td = (AmeAudioInitThreadData*)data;
+    bool success = ame_audio_init(td->sample_rate_hz);
+    atomic_store(&td->result, success);
+    atomic_store(&td->finished, true);
+    return success ? 0 : 1;
+}
+
+bool ame_audio_init_safe(int sample_rate_hz, int timeout_ms) {
+    // Validate timeout
+    if (timeout_ms <= 0) {
+        fprintf(stderr, "[ame_audio] Invalid timeout %d ms, using direct init\n", timeout_ms);
+        return ame_audio_init(sample_rate_hz);
+    }
+
+    fprintf(stderr, "[ame_audio] Attempting safe audio initialization with %d ms timeout...\n", timeout_ms);
+
+    // Pre-initialize the mixer's mutex so sync functions can safely check g_mixer.running
+    // even if initialization times out. The atomic running flag defaults to false.
+    memset(&g_mixer, 0, sizeof(g_mixer));
+    pthread_mutex_init(&g_mixer.mtx, NULL);
+    atomic_store(&g_mixer.running, false);
+
+    // Initialize thread data
+    AmeAudioInitThreadData thread_data = {0};
+    thread_data.sample_rate_hz = sample_rate_hz;
+    atomic_store(&thread_data.result, false);
+    atomic_store(&thread_data.finished, false);
+
+    // Create and start the initialization thread
+    SDL_Thread *init_thread = SDL_CreateThread(audio_init_thread_func, "AudioInit", &thread_data);
+    if (!init_thread) {
+        fprintf(stderr, "[ame_audio] Failed to create initialization thread: %s\n", SDL_GetError());
+        fprintf(stderr, "[ame_audio] Falling back to direct initialization\n");
+        return ame_audio_init(sample_rate_hz);
+    }
+
+    // Wait for initialization to complete or timeout
+    Uint64 start_time = SDL_GetTicks();
+    Uint64 elapsed_ms = 0;
+    bool timed_out = false;
+
+    while (!atomic_load(&thread_data.finished) && elapsed_ms < (Uint64)timeout_ms) {
+        SDL_Delay(10); // Check every 10ms
+        elapsed_ms = SDL_GetTicks() - start_time;
+    }
+
+    if (!atomic_load(&thread_data.finished)) {
+        // Timeout occurred
+        timed_out = true;
+        fprintf(stderr, "[ame_audio] Audio initialization timed out after %llu ms\n", 
+                (unsigned long long)elapsed_ms);
+        fprintf(stderr, "[ame_audio] This is likely due to audio backend issues (ALSA/PulseAudio/JACK probe hang)\n");
+        fprintf(stderr, "[ame_audio] The application will continue without audio.\n");
+        fprintf(stderr, "[ame_audio] To force a specific audio backend, set AME_AUDIO_HOST (e.g., pulse, alsa, jack)\n");
+        
+        // NOTE: We cannot safely cancel the thread as it may be blocked in PortAudio.
+        // The thread will continue running in the background. This is a known limitation
+        // when dealing with blocking audio library initialization.
+        // In production, consider using a separate process for audio initialization.
+        SDL_DetachThread(init_thread);
+        return false;
+    }
+
+    // Initialization completed within timeout
+    int thread_return_value;
+    SDL_WaitThread(init_thread, &thread_return_value);
+    bool result = atomic_load(&thread_data.result);
+
+    if (result) {
+        fprintf(stderr, "[ame_audio] Audio initialized successfully in %llu ms\n", 
+                (unsigned long long)elapsed_ms);
+    } else {
+        fprintf(stderr, "[ame_audio] Audio initialization failed (not due to timeout)\n");
+    }
+
+    return result;
+}
+
 void ame_audio_shutdown(void) {
     atomic_store(&g_mixer.running, false);
 
@@ -653,10 +751,18 @@ AmeEcsId ame_audio_register_component(AmeEcsWorld *ew) {
 #endif
 
 void ame_audio_sync_sources_refs(const struct AmeAudioSourceRef *refs, size_t count) {
+    // Safety check: if audio system is not running, do nothing
+    if (!atomic_load(&g_mixer.running)) {
+        return;
+    }
     mixer_set_active_refs(refs, count);
 }
 
 void ame_audio_sync_sources_manual(struct AmeAudioSource **sources, size_t count) {
+    // Safety check: if audio system is not running, do nothing
+    if (!atomic_load(&g_mixer.running)) {
+        return;
+    }
     // Fallback: build refs with pointer-derived ids (not stable across relocations)
     AmeAudioSourceRef stack_refs[64];
     AmeAudioSourceRef *refs = stack_refs;
