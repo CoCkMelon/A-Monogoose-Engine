@@ -243,15 +243,19 @@ int main() {
     }
     
     // Initialize asyncinput for keyboard
+    SDL_Log("[DEBUG] Initializing asyncinput...");
     if (!input_init()) {
         SDL_Log("Failed to initialize asyncinput, using touch controls only");
     }
+    SDL_Log("[DEBUG] Asyncinput initialized");
     
     // Initialize touch controls
     init_touch_controls(win_w, win_h);
     
     // Initialize audio system
+    SDL_Log("[DEBUG] Initializing audio...");
     ame_audio_init(48000);
+    SDL_Log("[DEBUG] Audio initialized");
     
     // Create C ECS world and physics
     AmeEcsWorld* ameWorld = ame_ecs_world_create();
@@ -411,6 +415,7 @@ int main() {
     };
     
     // Game loop
+    SDL_Log("[DEBUG] Entering main loop");
     bool running = true;
     while (running) {
         SDL_Event ev;

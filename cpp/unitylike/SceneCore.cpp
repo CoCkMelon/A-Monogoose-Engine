@@ -30,24 +30,38 @@ static void AudioSyncSystem(ecs_iter_t* it) {
     AudioSourceData* sources = ecs_field(it, AudioSourceData, 0);
     ecs_world_t* world = it->world;
     
-    // Find the physics world from the scene's world
+    // Physics world is NULL for now - would need to be passed in or stored globally
     AmePhysicsWorld* physics_world = nullptr;
-    // Try to get physics world - this is a simplification, in a real implementation
-    // you'd store a reference to the physics world in the scene
     
-    // Find the main listener position (if any)
+    // Find listener position and volume by iterating entities with AudioListener
     glm::vec3 listener_pos = {0, 0, 0};
-    AudioListener* main_listener = AudioListener::main();
     float listener_volume = 1.0f;
     bool listener_mute = false;
-    if (main_listener) {
-        listener_volume = main_listener->volume();
-        listener_mute = main_listener->mute();
-        // Get listener transform if it has one
-        if (main_listener->gameObject().HasComponent<Transform>()) {
-            auto pos = main_listener->gameObject().transform().position();
-            listener_pos = pos;
+    bool has_listener = false;
+    
+    // Iterate over all entities with AudioListener to find position
+    ecs_iter_t lit = ecs_each_id(world, g_comp.audio_listener);
+    while (ecs_each_next(&lit)) {
+        for (int j = 0; j < lit.count; j++) {
+            ecs_entity_t listener_entity = lit.entities[j];
+            AudioListenerData* ald = (AudioListenerData*)ecs_get_id(world, listener_entity, g_comp.audio_listener);
+            AmeTransform2D* lt = (AmeTransform2D*)ecs_get_id(world, listener_entity, g_comp.transform);
+            
+            if (ald) {
+                listener_volume = ald->volume;
+                listener_mute = ald->mute;
+                has_listener = true;
+            }
+            
+            if (lt) {
+                listener_pos.x = lt->x;
+                listener_pos.y = lt->y;
+            }
+            
+            // Use first listener found
+            break;
         }
+        if (has_listener) break;
     }
     
     for (int i = 0; i < it->count; i++) {
@@ -59,7 +73,7 @@ static void AudioSyncSystem(ecs_iter_t* it) {
         float final_pan = asd->source.pan;
         
         // Apply spatial audio if enabled
-        if (asd->spatial_audio && main_listener) {
+        if (asd->spatial_audio && has_listener) {
             // Get the audio source's transform
             AmeTransform2D* transform = (AmeTransform2D*)ecs_get_id(world, entity, g_comp.transform);
             if (transform) {
