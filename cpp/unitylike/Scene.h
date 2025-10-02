@@ -213,6 +213,10 @@ public:
     T& AddScript(Args&&... args);
     template<typename T>
     T* GetScript();
+    template<typename T>
+    bool HasScript();
+    template<typename T>
+    void RemoveScript();
 
     Transform& transform();
 
@@ -238,10 +242,13 @@ public:
     // Local space accessors
     glm::vec3 position() const;
     void position(const glm::vec3& p);
+    void position(float x, float y) { position(glm::vec3(x, y, 0.0f)); }
+    void position(const glm::vec2& p) { position(glm::vec3(p.x, p.y, 0.0f)); }
     glm::quat rotation() const;
     void rotation(const glm::quat& q);
     glm::vec3 localScale() const;
     void localScale(const glm::vec3& s);
+    void localScale(const glm::vec2& s) { localScale(glm::vec3(s.x, s.y, 1.0f)); }
 
     // World/composed accessors (read-only): computed by traversing EcsChildOf chain
     glm::vec3 worldPosition() const;
@@ -249,6 +256,7 @@ public:
     
     // Helper methods
     void Translate(const glm::vec3& translation, bool relativeTo = true); // true=self, false=world
+    void Translate(const glm::vec2& translation, bool relativeTo = true) { Translate(glm::vec3(translation.x, translation.y, 0.0f), relativeTo); }
     void Rotate(float angle); // rotate by angle in radians (2D)
     void LookAt2D(const glm::vec2& worldTarget); // set rotation so +X faces toward target
     glm::vec2 right() const;  // local right direction (2D: cos(angle), sin(angle))
@@ -761,6 +769,27 @@ T* GameObject::GetScript() {
     if (!comp || !comp->script) return nullptr;
     
     return comp->script;
+}
+
+template<typename T>
+bool GameObject::HasScript() {
+    static_assert(std::is_base_of_v<MongooseBehaviour, T>, "Script must inherit from MongooseBehaviour");
+    ecs_world_t* w = scene_->world();
+    if (!w || !e_) return false;
+    ecs_entity_t id = __get_script_component_id<T>(w);
+    if (!id) return false;
+    const ScriptComponent<T>* comp = (const ScriptComponent<T>*)ecs_get_id(w, (ecs_entity_t)e_, id);
+    return comp && comp->script;
+}
+
+template<typename T>
+void GameObject::RemoveScript() {
+    static_assert(std::is_base_of_v<MongooseBehaviour, T>, "Script must inherit from MongooseBehaviour");
+    ecs_world_t* w = scene_->world();
+    if (!w || !e_) return;
+    ecs_entity_t id = __get_script_component_id<T>(w);
+    if (!id) return;
+    ecs_remove_id(w, (ecs_entity_t)e_, id);
 }
 
 
