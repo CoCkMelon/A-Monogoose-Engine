@@ -303,10 +303,9 @@ pkg_check_modules(OPUSFILE REQUIRED IMPORTED_TARGET opusfile)
 
 target_link_libraries(ame PUBLIC PkgConfig::PORTAUDIO PkgConfig::OPUSFILE ${AME_SDL3_IMAGE_TARGET})
 
-# Link math and pthread where needed (Linux)
+# Link math library where needed (Linux)
 if(UNIX AND NOT APPLE)
-    find_package(Threads REQUIRED)
-    target_link_libraries(ame PUBLIC m Threads::Threads)
+    target_link_libraries(ame PUBLIC m)
 endif()
 
 target_include_directories(ame PUBLIC ${CMAKE_CURRENT_LIST_DIR}/include ${CMAKE_CURRENT_LIST_DIR}/cpp)
