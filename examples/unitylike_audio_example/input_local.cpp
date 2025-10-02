@@ -4,11 +4,14 @@
 
 static std::atomic<bool> g_should_quit{false};
 static std::atomic<int>  g_move_dir{0};     // -1,0,1
+static std::atomic<int>  g_vert_dir{0};     // -1,0,1 (vertical movement)
 static std::atomic<bool> g_jump_down{false};
 static std::atomic<bool> g_prev_jump{false};
 static std::atomic<bool> g_jump_edge{false};
 static std::atomic<bool> g_left_down{false};
 static std::atomic<bool> g_right_down{false};
+static std::atomic<bool> g_up_down{false};
+static std::atomic<bool> g_down_down{false};
 
 static void on_input(const struct ni_event* ev, void* ud) {
     (void)ud;
@@ -18,7 +21,11 @@ static void on_input(const struct ni_event* ev, void* ud) {
             g_left_down.store(down, std::memory_order_relaxed);
         } else if (ev->code == NI_KEY_RIGHT || ev->code == NI_KEY_D) {
             g_right_down.store(down, std::memory_order_relaxed);
-        } else if (ev->code == NI_KEY_SPACE || ev->code == NI_KEY_W || ev->code == NI_KEY_UP) {
+        } else if (ev->code == NI_KEY_UP || ev->code == NI_KEY_W) {
+            g_up_down.store(down, std::memory_order_relaxed);
+        } else if (ev->code == NI_KEY_DOWN || ev->code == NI_KEY_S) {
+            g_down_down.store(down, std::memory_order_relaxed);
+        } else if (ev->code == NI_KEY_SPACE) {
             g_jump_down.store(down, std::memory_order_relaxed);
         }
         if (down && (ev->code == NI_KEY_ESC || ev->code == NI_KEY_Q)) {
@@ -26,6 +33,8 @@ static void on_input(const struct ni_event* ev, void* ud) {
         }
         int md = (g_right_down.load(std::memory_order_relaxed) ? 1 : 0) - (g_left_down.load(std::memory_order_relaxed) ? 1 : 0);
         g_move_dir.store(md, std::memory_order_relaxed);
+        int vd = (g_down_down.load(std::memory_order_relaxed) ? 1 : 0) - (g_up_down.load(std::memory_order_relaxed) ? 1 : 0);
+        g_vert_dir.store(vd, std::memory_order_relaxed);
     }
 }
 
@@ -52,4 +61,5 @@ void input_begin_frame(void) {
 
 bool input_should_quit(void) { return g_should_quit.load(std::memory_order_relaxed); }
 int  input_move_dir(void)    { return g_move_dir.load(std::memory_order_relaxed); }
+int  input_vert_dir(void)    { return g_vert_dir.load(std::memory_order_relaxed); }
 bool input_jump_edge(void)   { return g_jump_edge.load(std::memory_order_relaxed); }

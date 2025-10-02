@@ -86,13 +86,16 @@ int get_movement_horizontal() {
 }
 
 int get_movement_vertical() {
-    // Only touch controls for vertical movement
+    int async_move = input_vert_dir();
+    
+    // Check touch controls for vertical movement
     bool up_pressed = false, down_pressed = false;
     if (g_buttons.size() >= 4) {
         up_pressed = g_buttons[2].isPressed();   // Up arrow
         down_pressed = g_buttons[3].isPressed(); // Down arrow
     }
     
+    if (async_move != 0) return async_move; // Prefer keyboard input
     if (up_pressed && !down_pressed) return -1;
     if (down_pressed && !up_pressed) return 1;
     return 0;
