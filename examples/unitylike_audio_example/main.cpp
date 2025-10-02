@@ -9,6 +9,8 @@ extern "C" {
 
 #include <SDL3/SDL.h>
 #include <glad/gl.h>
+#include <box2d/box2d.h>
+#include <flecs.h>
 #include <vector>
 #include "input_local.h"
 
@@ -148,6 +150,14 @@ public:
         int v_input = get_movement_vertical();
         
         glm::vec2 input_vel = {h_input * speed, v_input * speed};
+        
+        // Debug: print position and input
+        static int debug_counter = 0;
+        if (++debug_counter % 60 == 0) {
+            auto pos = gameObject().transform().position();
+            SDL_Log("Player: pos=(%.1f, %.1f) input=(%d, %d) vel=(%.1f, %.1f)", 
+                    pos.x, pos.y, h_input, v_input, input_vel.x, input_vel.y);
+        }
         
         // Apply some drag but preserve input velocity
         vel.x = input_vel.x;
@@ -294,6 +304,33 @@ int main() {
     
     player.AddScript<PlayerController>();
     
+    // Get Box2D world and ECS world pointers for manual body creation
+    b2World* b2world = (b2World*)physics->world;
+    ecs_world_t* ew = (ecs_world_t*)ame_ecs_world_ptr(ameWorld);
+    
+    // Create Box2D body for player
+    if (b2world) {
+        b2BodyDef bd;
+        bd.type = b2_dynamicBody;
+        bd.position.Set(300.0f, 300.0f);
+        bd.linearDamping = 8.0f; // match drag
+        bd.userData.pointer = (uintptr_t)player.id();
+        b2Body* body = b2world->CreateBody(&bd);
+        
+        b2PolygonShape shape;
+        shape.SetAsBox(10.0f, 10.0f); // half-extents
+        b2FixtureDef fd;
+        fd.shape = &shape;
+        fd.density = 1.0f;
+        body->CreateFixture(&fd);
+        
+        AmePhysicsBody* pb = (AmePhysicsBody*)ecs_get_mut_id(ew, (ecs_entity_t)player.id(), g_comp.body);
+        if (pb) {
+            pb->body = body;
+            ecs_modified_id(ew, (ecs_entity_t)player.id(), g_comp.body);
+        }
+    }
+    
     // Create camera with audio listener
     auto camera = scene.Create("Camera");
     auto& cam = camera.AddComponent<Camera>();
@@ -318,6 +355,28 @@ int main() {
     auto& wall1Sprite = wall1.AddComponent<SpriteRenderer>();
     wall1Sprite.size({20.0f, 200.0f});
     wall1Sprite.color({0.7f, 0.7f, 0.7f, 1.0f}); // Gray for concrete
+    
+    // Create Box2D body for wall1
+    if (b2world) {
+        b2BodyDef bd;
+        bd.type = b2_staticBody;
+        bd.position.Set(500.0f, 200.0f);
+        bd.userData.pointer = (uintptr_t)wall1.id();
+        b2Body* body = b2world->CreateBody(&bd);
+        
+        b2PolygonShape shape;
+        shape.SetAsBox(10.0f, 100.0f); // half-extents
+        b2FixtureDef fd;
+        fd.shape = &shape;
+        body->CreateFixture(&fd);
+        
+        AmePhysicsBody* pb = (AmePhysicsBody*)ecs_get_mut_id(ew, (ecs_entity_t)wall1.id(), g_comp.body);
+        if (pb) {
+            pb->body = body;
+            ecs_modified_id(ew, (ecs_entity_t)wall1.id(), g_comp.body);
+        }
+    }
+    
     walls.push_back(wall1);
     
     // Wood wall - medium occlusion
@@ -331,6 +390,28 @@ int main() {
     auto& wall2Sprite = wall2.AddComponent<SpriteRenderer>();
     wall2Sprite.size({300.0f, 20.0f});
     wall2Sprite.color({0.6f, 0.4f, 0.2f, 1.0f}); // Brown for wood
+    
+    // Create Box2D body for wall2
+    if (b2world) {
+        b2BodyDef bd;
+        bd.type = b2_staticBody;
+        bd.position.Set(200.0f, 450.0f);
+        bd.userData.pointer = (uintptr_t)wall2.id();
+        b2Body* body = b2world->CreateBody(&bd);
+        
+        b2PolygonShape shape;
+        shape.SetAsBox(150.0f, 10.0f); // half-extents
+        b2FixtureDef fd;
+        fd.shape = &shape;
+        body->CreateFixture(&fd);
+        
+        AmePhysicsBody* pb = (AmePhysicsBody*)ecs_get_mut_id(ew, (ecs_entity_t)wall2.id(), g_comp.body);
+        if (pb) {
+            pb->body = body;
+            ecs_modified_id(ew, (ecs_entity_t)wall2.id(), g_comp.body);
+        }
+    }
+    
     walls.push_back(wall2);
     
     // Create audio sources at strategic positions
