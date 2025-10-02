@@ -27,8 +27,8 @@
 | MeshRenderer | ✅ Complete | Vertex data pointers |
 | Camera | ✅ Complete | Zoom, viewport, position |
 | TextRenderer | ✅ Complete | Heap-managed text |
-| AudioSource | ❌ Not Implemented | |
-| AudioListener | ❌ Not Implemented | |
+| AudioSource | ✅ Complete | Play/Stop, volume, spatial audio, occlusion |
+| AudioListener | ✅ Complete | Volume, mute, main listener |
 | **Prefabs & Scenes** |
 | Prefabs (code-first) | ✅ Complete | C API register/instantiate; C++ RegisterPrefab bridge; SDL-mutex thread-safe |
 | Prefab management | ⚠️ Partial | No unregister/list/iterate; no parameters/overrides |
@@ -163,6 +163,25 @@ sprite.size(glm::vec2(32, 32));
 sprite.color(glm::vec4(1, 1, 1, 1));
 ```
 
+#### Audio Components
+- **AudioSource:** Play/Stop/Pause, volume, pitch, mute, loop, spatial audio, distance attenuation, occlusion, air absorption
+- **AudioListener:** Volume control, mute, main listener system, attached to camera for spatial audio
+
+```cpp
+// Audio source with spatial audio
+auto& audioSource = source.AddComponent<AudioSource>();
+audioSource.InitSawWork(150.0f, 1.0f, 0.3f, 4.0f, 1.0f);
+audioSource.spatialAudio(true);
+audioSource.minDistance(20.0f);
+audioSource.maxDistance(300.0f);
+audioSource.Play();
+
+// Audio listener on camera
+auto& listener = camera.AddComponent<AudioListener>();
+listener.volume(0.8f);
+AudioListener::SetMain(&listener);
+```
+
 #### Time
 - deltaTime()
 - fixedDeltaTime()
@@ -287,14 +306,6 @@ void Start() override {
 - Store static `Camera* g_main_camera` in Camera.cpp
 - Implement projection math using AmeCamera zoom, viewport, position
 
-#### AudioSource Component
-**Missing:** Wrapper around `ame/audio.h` AmeAudioSource.
-
-**Plan:**
-- Add `AudioSourceData` ECS component
-- Store `AmeAudioSource` struct in component
-- Implement Play(), Stop(), volume(), pitch(), etc.
-- Sync to audio thread via `ame_audio_sync_sources`
 
 #### SceneManager
 **Missing:** LoadScene, multi-scene support.
@@ -376,6 +387,7 @@ void Start() override {
 - `examples/unitylike_box2d_car` - Rigidbody2D, forces, car physics
 - `examples/unitylike_platformer_ecs` - Platformer with hierarchy, sprites
 - `examples/unitylike_pixel_platformer` - Complete platformer game
+- `examples/unitylike_audio_example` - Spatial audio with AudioSource/AudioListener, touch controls
 
 ### Recommended Next Example
 **Port brackeysjam2025.2 to MongooseBehaviour:**
@@ -413,21 +425,22 @@ void Start() override {
 - ScreenToWorldPoint / WorldToScreenPoint
 - Simplify camera queries
 
-### 6. AudioSource Component (Medium Priority)
+### 6. Audio System Enhancements (Low Priority)
+- Add pitch shifting support
+- Implement audio mixing/effects
+- Add doppler effect for moving sources
 
 ### 7. Prefab Management (Medium Priority)
 - Add unregister/list APIs to prefab registry
 - Optional: namespacing/versioning, parameters/overrides
 - Add concurrent registration/instantiation stress tests
-- Wrap AmeAudioSource in component
-- Integrate with audio thread sync
 
-### 7. Coroutines (Low Priority)
+### 8. Coroutines (Low Priority)
 - Evaluate C++20 coroutines vs state machine
 - Implement WaitForSeconds, WaitForEndOfFrame
 - Only if needed for game patterns
 
-### 8. SceneManager (Low Priority)
+### 9. SceneManager (Low Priority)
 - Define scene asset format
 - Implement LoadScene, async loading
 - Multi-scene support (optional)
