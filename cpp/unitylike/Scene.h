@@ -747,8 +747,11 @@ static_assert(
         ecs_set_id(w, (ecs_entity_t)e_, g_comp.collider2d, sizeof(cd), &cd);
         return Collider2D{ *this };
     } else if constexpr (std::is_same_v<T, AudioSource>) {
-        AudioSourceData asd = {};
-        memset(&asd, 0, sizeof(asd));
+        // Properly initialize AudioSourceData with default values
+        // asd.source will be properly initialized when user calls Init* methods
+        AudioSourceData asd;
+        memset(&asd, 0, sizeof(asd)); // Zero everything
+        // Set AudioSourceData wrapper fields to defaults
         asd.volume = 1.0f;
         asd.pitch = 1.0f;
         asd.mute = false;
@@ -761,6 +764,7 @@ static_assert(
         asd.occlusion_db = 6.0f;
         asd.air_absorption_db_per_meter = 0.02f;
         asd.dirty = 1;
+        // Set the initial component data
         ecs_set_id(w, (ecs_entity_t)e_, g_comp.audio_source, sizeof(AudioSourceData), &asd);
         return AudioSource{ *this };
     } else if constexpr (std::is_same_v<T, AudioListener>) {
