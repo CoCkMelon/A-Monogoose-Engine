@@ -268,6 +268,9 @@ if(AME_WITH_FLECS)
 endif()
 # Ensure required POSIX and math macros on glibc (M_PI, clock_gettime, etc.)
 target_compile_definitions(ame PRIVATE _GNU_SOURCE AME_USE_TINYOBJLOADER=1)
+if(AME_WITH_FLECS)
+  target_compile_definitions(ame PRIVATE AME_WITH_FLECS=1)
+endif()
 
 # If generated dialogues are present, compile them and enable the macro
 if(EXISTS ${CMAKE_CURRENT_LIST_DIR}/src/embedded_dialogues_gen.c)
