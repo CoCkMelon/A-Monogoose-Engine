@@ -344,6 +344,9 @@ add_library(unitylike STATIC
     cpp/unitylike/Time.cpp
     cpp/unitylike/AudioComponents.cpp
     cpp/unitylike/SceneAsset.cpp
+    cpp/unitylike/Physics2D.cpp
+    cpp/unitylike/PhysicsSync.cpp
+    cpp/unitylike/PhysicsCallbacks.cpp
 )
 
 # Expose includes (cpp/ for headers, include/ for C APIs, asyncinput for input keys, glm)
@@ -521,6 +524,13 @@ if(AME_BUILD_EXAMPLES)
   # ------------------------------
   if(AME_WITH_FLECS)
     add_executable(scene_script_example examples/scene_file/scene_script_example.c)
+  endif()
+
+  # ------------------------------
+  # Example: Physics test (Unity-like physics API)
+  # ------------------------------
+  if(AME_BUILD_UNITYLIKE AND AME_WITH_FLECS)
+    add_subdirectory(examples/physics_test)
   endif()
 
   # Link script/json addons via flecs

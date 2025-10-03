@@ -116,33 +116,30 @@ bool get_jump_input() {
 class PlayerController : public MongooseBehaviour {
 public:
     float speed = 200.0f;
-    AudioSource* footsteps = nullptr;
-    AudioSource* jump_sound = nullptr;
+    GameObject jumpSoundGO;  // Store GameObject instead of pointer
     
     void Start() override {
         // Add footstep audio source
-        auto& footstepAudio = gameObject().AddComponent<AudioSource>();
+        auto footstepAudio = gameObject().AddComponent<AudioSource>();
         footstepAudio.InitSigmoidOsc(80.0f, 3.0f, 0.2f);
         footstepAudio.spatialAudio(true);
         footstepAudio.minDistance(30.0f);
         footstepAudio.maxDistance(200.0f);
         footstepAudio.occlusionDb(6.0f);
         footstepAudio.loop(true);
-        footsteps = &footstepAudio;
         
         // Create a child GameObject for jump sound
-        auto jumpSoundGO = gameObject().scene()->Create("JumpSound");
+        jumpSoundGO = gameObject().scene()->Create("JumpSound");
         jumpSoundGO.SetParent(gameObject(), false);
-        auto& jumpAudio = jumpSoundGO.AddComponent<AudioSource>();
+        auto jumpAudio = jumpSoundGO.AddComponent<AudioSource>();
         jumpAudio.InitSawCut(150.0f, 1.2f, 0.3f, 0.1f, 0.4f);
         jumpAudio.spatialAudio(true);
         jumpAudio.minDistance(50.0f);
         jumpAudio.maxDistance(250.0f);
-        jump_sound = &jumpAudio;
     }
     
     void Update(float dt) override {
-        auto& rb = gameObject().GetComponent<Rigidbody2D>();
+        auto rb = gameObject().GetComponent<Rigidbody2D>();
         glm::vec2 vel = rb.velocity();
         
         // Movement input from both keyboard and touch
@@ -166,19 +163,23 @@ public:
         rb.velocity(vel);
         
         // Play footsteps when moving
-        if (footsteps) {
+        if (gameObject().HasComponent<AudioSource>()) {
+            auto footsteps = gameObject().GetComponent<AudioSource>();
             bool moving = (input_vel.x != 0 || input_vel.y != 0);
-            if (moving && !footsteps->isPlaying()) {
-                footsteps->Play();
-            } else if (!moving && footsteps->isPlaying()) {
-                footsteps->Stop();
+            if (moving && !footsteps.isPlaying()) {
+                footsteps.Play();
+            } else if (!moving && footsteps.isPlaying()) {
+                footsteps.Stop();
             }
         }
         
         // Jump sound
-        if (get_jump_input() && jump_sound) {
-            jump_sound->Stop();
-            jump_sound->Play();
+        if (get_jump_input() && jumpSoundGO.IsValid()) {
+            if (jumpSoundGO.HasComponent<AudioSource>()) {
+                auto jump_sound = jumpSoundGO.GetComponent<AudioSource>();
+                jump_sound.Stop();
+                jump_sound.Play();
+            }
         }
     }
 };
@@ -188,29 +189,32 @@ class PeriodicAudioSource : public MongooseBehaviour {
 public:
     float interval = 2.0f;
     float timer = 0.0f;
-    AudioSource* audio = nullptr;
     
     void Start() override {
-        auto& audioComp = gameObject().AddComponent<AudioSource>();
-        audioComp.InitSawWork(100.0f + (rand() % 100), 1.0f, 0.3f, 2.0f, 0.3f);
+        // With the refactored engine, components are returned by value, not reference.
+        // This fixes the thread_local static bug!
+        float freq = 100.0f + (rand() % 100);
+        auto audioComp = gameObject().AddComponent<AudioSource>();
+        audioComp.InitSawWork(freq, 1.0f, 0.3f, 2.0f, 0.3f);
         audioComp.spatialAudio(true);
         audioComp.minDistance(20.0f);
         audioComp.maxDistance(300.0f);
         audioComp.loop(true);
-        audioComp.Play(); // Start playing immediately
-        audio = &audioComp;
-        SDL_Log("[PeriodicAudioSource] Started audio source, playing=%d", audioComp.isPlaying());
+        audioComp.Play();
+        SDL_Log("[PeriodicAudioSource] Audio source setup complete, playing=%d", audioComp.isPlaying());
     }
     
     void Update(float dt) override {
         timer += dt;
         if (timer >= interval) {
             timer = 0.0f;
-            if (audio) {
-                if (audio->isPlaying()) {
-                    audio->Stop();
+            // Get component fresh each time - this is the correct pattern with value-based API
+            if (gameObject().HasComponent<AudioSource>()) {
+                auto audio = gameObject().GetComponent<AudioSource>();
+                if (audio.isPlaying()) {
+                    audio.Stop();
                 } else {
-                    audio->Play();
+                    audio.Play();
                 }
             }
         }
@@ -221,9 +225,10 @@ public:
 class AudioListenerController : public MongooseBehaviour {
 public:
     void Start() override {
-        auto& listener = gameObject().AddComponent<AudioListener>();
-        listener.volume(0.8f);
-        AudioListener::SetMain(&listener);
+        gameObject().AddComponent<AudioListener>().volume(0.8f);
+        // Note: SetMain needs a pointer, but we can't store a pointer to a temporary.
+        // For now, we'll get the component fresh each time we need it.
+        // Ideally, AudioListener::SetMain should be redesigned to use GameObject instead.
     }
 };
 
@@ -289,18 +294,18 @@ int main() {
     
     // Create player
     auto player = scene.Create("Player");
-    auto& playerTransform = player.GetComponent<Transform>();
+    auto playerTransform = player.GetComponent<Transform>();
     playerTransform.position({300.0f, 300.0f, 0.0f});
     
-    auto& playerRb = player.AddComponent<Rigidbody2D>();
+    auto playerRb = player.AddComponent<Rigidbody2D>();
     playerRb.bodyType(Rigidbody2D::BodyType::Dynamic);
     playerRb.drag(8.0f); // Add drag to stop when no input
     
-    auto& playerCol = player.AddComponent<Collider2D>();
+    auto playerCol = player.AddComponent<Collider2D>();
     playerCol.type(Collider2D::Type::Box);
     playerCol.boxSize({20.0f, 20.0f});
     
-    auto& playerSprite = player.AddComponent<SpriteRenderer>();
+    auto playerSprite = player.AddComponent<SpriteRenderer>();
     playerSprite.size({20.0f, 20.0f});
     playerSprite.color({0.2f, 0.8f, 0.2f, 1.0f});
     
@@ -335,7 +340,10 @@ int main() {
     
     // Create camera with audio listener
     auto camera = scene.Create("Camera");
-    auto& cam = camera.AddComponent<Camera>();
+    auto cameraTransform = camera.GetComponent<Transform>();
+    cameraTransform.position({300.0f, 300.0f, 0.0f}); // Start at player position
+    
+    auto cam = camera.AddComponent<Camera>();
     auto c = cam.get();
     c.zoom = 1.5f;
     ame_camera_set_viewport(&c, win_w, win_h);
@@ -349,12 +357,12 @@ int main() {
     // Concrete wall - high occlusion
     auto wall1 = scene.Create("ConcreteWall");
     wall1.GetComponent<Transform>().position({500.0f, 200.0f, 0.0f});
-    auto& wall1Rb = wall1.AddComponent<Rigidbody2D>();
+    auto wall1Rb = wall1.AddComponent<Rigidbody2D>();
     wall1Rb.bodyType(Rigidbody2D::BodyType::Static);
-    auto& wall1Col = wall1.AddComponent<Collider2D>();
+    auto wall1Col = wall1.AddComponent<Collider2D>();
     wall1Col.type(Collider2D::Type::Box);
     wall1Col.boxSize({20.0f, 200.0f});
-    auto& wall1Sprite = wall1.AddComponent<SpriteRenderer>();
+    auto wall1Sprite = wall1.AddComponent<SpriteRenderer>();
     wall1Sprite.size({20.0f, 200.0f});
     wall1Sprite.color({0.7f, 0.7f, 0.7f, 1.0f}); // Gray for concrete
     
@@ -384,12 +392,12 @@ int main() {
     // Wood wall - medium occlusion
     auto wall2 = scene.Create("WoodWall");
     wall2.GetComponent<Transform>().position({200.0f, 450.0f, 0.0f});
-    auto& wall2Rb = wall2.AddComponent<Rigidbody2D>();
+    auto wall2Rb = wall2.AddComponent<Rigidbody2D>();
     wall2Rb.bodyType(Rigidbody2D::BodyType::Static);
-    auto& wall2Col = wall2.AddComponent<Collider2D>();
+    auto wall2Col = wall2.AddComponent<Collider2D>();
     wall2Col.type(Collider2D::Type::Box);
     wall2Col.boxSize({300.0f, 20.0f});
-    auto& wall2Sprite = wall2.AddComponent<SpriteRenderer>();
+    auto wall2Sprite = wall2.AddComponent<SpriteRenderer>();
     wall2Sprite.size({300.0f, 20.0f});
     wall2Sprite.color({0.6f, 0.4f, 0.2f, 1.0f}); // Brown for wood
     
@@ -430,7 +438,7 @@ int main() {
         auto source = scene.Create("AudioSource" + std::to_string(i));
         source.GetComponent<Transform>().position(sourcePositions[i]);
         
-        auto& sourceSprite = source.AddComponent<SpriteRenderer>();
+        auto sourceSprite = source.AddComponent<SpriteRenderer>();
         sourceSprite.size({12.0f, 12.0f});
         float hue = i / (float)sourcePositions.size();
         sourceSprite.color({0.8f + 0.2f * sinf(hue * 6.28f), 
@@ -599,7 +607,7 @@ int main() {
             // Pulsate audio sources when they're playing
             float scale = 1.0f;
             if (source.HasComponent<AudioSource>()) {
-                auto& audio = source.GetComponent<AudioSource>();
+                auto audio = source.GetComponent<AudioSource>();
                 if (audio.isPlaying()) {
                     scale = 1.0f + 0.3f * sinf(SDL_GetTicks() * 0.01f);
                 }

@@ -1,6 +1,7 @@
 #include "Scene.h"
 #include <flecs.h>
 #include <cstring>
+#include <SDL3/SDL.h>
 
 extern "C" {
 #include "ame/audio.h"
@@ -19,7 +20,7 @@ void AudioSource::Play() {
     ecs_world_t* w = owner_.scene()->world();
     ensure_components_registered(w);
     
-    AudioSourceData* asd = (AudioSourceData*)ecs_get_id(w, (ecs_entity_t)owner_.id(), g_comp.audio_source);
+    AudioSourceData* asd = (AudioSourceData*)ecs_get_mut_id(w, (ecs_entity_t)owner_.id(), g_comp.audio_source);
     if (!asd) return;
     
     asd->source.playing = true;
@@ -33,7 +34,7 @@ void AudioSource::Stop() {
     ecs_world_t* w = owner_.scene()->world();
     ensure_components_registered(w);
     
-    AudioSourceData* asd = (AudioSourceData*)ecs_get_id(w, (ecs_entity_t)owner_.id(), g_comp.audio_source);
+    AudioSourceData* asd = (AudioSourceData*)ecs_get_mut_id(w, (ecs_entity_t)owner_.id(), g_comp.audio_source);
     if (!asd) return;
     
     asd->source.playing = false;
@@ -66,7 +67,7 @@ void AudioSource::volume(float v) {
     ecs_world_t* w = owner_.scene()->world();
     ensure_components_registered(w);
     
-    AudioSourceData* asd = (AudioSourceData*)ecs_get_id(w, (ecs_entity_t)owner_.id(), g_comp.audio_source);
+    AudioSourceData* asd = (AudioSourceData*)ecs_get_mut_id(w, (ecs_entity_t)owner_.id(), g_comp.audio_source);
     if (!asd) return;
     
     asd->volume = v;
@@ -91,7 +92,7 @@ void AudioSource::pitch(float p) {
     ecs_world_t* w = owner_.scene()->world();
     ensure_components_registered(w);
     
-    AudioSourceData* asd = (AudioSourceData*)ecs_get_id(w, (ecs_entity_t)owner_.id(), g_comp.audio_source);
+    AudioSourceData* asd = (AudioSourceData*)ecs_get_mut_id(w, (ecs_entity_t)owner_.id(), g_comp.audio_source);
     if (!asd) return;
     
     asd->pitch = p;
@@ -116,7 +117,7 @@ void AudioSource::mute(bool m) {
     ecs_world_t* w = owner_.scene()->world();
     ensure_components_registered(w);
     
-    AudioSourceData* asd = (AudioSourceData*)ecs_get_id(w, (ecs_entity_t)owner_.id(), g_comp.audio_source);
+    AudioSourceData* asd = (AudioSourceData*)ecs_get_mut_id(w, (ecs_entity_t)owner_.id(), g_comp.audio_source);
     if (!asd) return;
     
     asd->mute = m;
@@ -141,7 +142,7 @@ void AudioSource::loop(bool l) {
     ecs_world_t* w = owner_.scene()->world();
     ensure_components_registered(w);
     
-    AudioSourceData* asd = (AudioSourceData*)ecs_get_id(w, (ecs_entity_t)owner_.id(), g_comp.audio_source);
+    AudioSourceData* asd = (AudioSourceData*)ecs_get_mut_id(w, (ecs_entity_t)owner_.id(), g_comp.audio_source);
     if (!asd) return;
     
     asd->loop = l;
@@ -169,7 +170,7 @@ void AudioSource::playOnAwake(bool p) {
     ecs_world_t* w = owner_.scene()->world();
     ensure_components_registered(w);
     
-    AudioSourceData* asd = (AudioSourceData*)ecs_get_id(w, (ecs_entity_t)owner_.id(), g_comp.audio_source);
+    AudioSourceData* asd = (AudioSourceData*)ecs_get_mut_id(w, (ecs_entity_t)owner_.id(), g_comp.audio_source);
     if (!asd) return;
     
     asd->play_on_awake = p;
@@ -193,7 +194,7 @@ bool AudioSource::LoadOpusFile(const char* filepath, bool loop_audio) {
     ecs_world_t* w = owner_.scene()->world();
     ensure_components_registered(w);
     
-    AudioSourceData* asd = (AudioSourceData*)ecs_get_id(w, (ecs_entity_t)owner_.id(), g_comp.audio_source);
+    AudioSourceData* asd = (AudioSourceData*)ecs_get_mut_id(w, (ecs_entity_t)owner_.id(), g_comp.audio_source);
     if (!asd) return false;
     
     bool success = ame_audio_source_load_opus_file(&asd->source, filepath, loop_audio);
@@ -210,7 +211,7 @@ void AudioSource::InitSigmoidOsc(float freq_hz, float shape_k, float gain) {
     ecs_world_t* w = owner_.scene()->world();
     ensure_components_registered(w);
     
-    AudioSourceData* asd = (AudioSourceData*)ecs_get_id(w, (ecs_entity_t)owner_.id(), g_comp.audio_source);
+    AudioSourceData* asd = (AudioSourceData*)ecs_get_mut_id(w, (ecs_entity_t)owner_.id(), g_comp.audio_source);
     if (!asd) return;
     
     ame_audio_source_init_sigmoid(&asd->source, freq_hz, shape_k, gain);
@@ -224,7 +225,7 @@ void AudioSource::InitSawWork(float base_freq_hz, float drive, float noise_mix, 
     ecs_world_t* w = owner_.scene()->world();
     ensure_components_registered(w);
     
-    AudioSourceData* asd = (AudioSourceData*)ecs_get_id(w, (ecs_entity_t)owner_.id(), g_comp.audio_source);
+    AudioSourceData* asd = (AudioSourceData*)ecs_get_mut_id(w, (ecs_entity_t)owner_.id(), g_comp.audio_source);
     if (!asd) return;
     
     ame_audio_source_init_saw_work(&asd->source, base_freq_hz, drive, noise_mix, lfo_rate_hz, gain);
@@ -238,7 +239,7 @@ void AudioSource::InitSawCut(float freq_hz, float drive, float noise_mix, float 
     ecs_world_t* w = owner_.scene()->world();
     ensure_components_registered(w);
     
-    AudioSourceData* asd = (AudioSourceData*)ecs_get_id(w, (ecs_entity_t)owner_.id(), g_comp.audio_source);
+    AudioSourceData* asd = (AudioSourceData*)ecs_get_mut_id(w, (ecs_entity_t)owner_.id(), g_comp.audio_source);
     if (!asd) return;
     
     ame_audio_source_init_saw_cut(&asd->source, freq_hz, drive, noise_mix, duration_sec, gain);
@@ -263,7 +264,7 @@ void AudioSource::pan(float p) {
     ecs_world_t* w = owner_.scene()->world();
     ensure_components_registered(w);
     
-    AudioSourceData* asd = (AudioSourceData*)ecs_get_id(w, (ecs_entity_t)owner_.id(), g_comp.audio_source);
+    AudioSourceData* asd = (AudioSourceData*)ecs_get_mut_id(w, (ecs_entity_t)owner_.id(), g_comp.audio_source);
     if (!asd) return;
     
     asd->source.pan = p;
@@ -288,7 +289,7 @@ void AudioSource::spatialAudio(bool spatial) {
     ecs_world_t* w = owner_.scene()->world();
     ensure_components_registered(w);
     
-    AudioSourceData* asd = (AudioSourceData*)ecs_get_id(w, (ecs_entity_t)owner_.id(), g_comp.audio_source);
+    AudioSourceData* asd = (AudioSourceData*)ecs_get_mut_id(w, (ecs_entity_t)owner_.id(), g_comp.audio_source);
     if (!asd) return;
     
     asd->spatial_audio = spatial;
@@ -312,7 +313,7 @@ void AudioSource::minDistance(float distance) {
     ecs_world_t* w = owner_.scene()->world();
     ensure_components_registered(w);
     
-    AudioSourceData* asd = (AudioSourceData*)ecs_get_id(w, (ecs_entity_t)owner_.id(), g_comp.audio_source);
+    AudioSourceData* asd = (AudioSourceData*)ecs_get_mut_id(w, (ecs_entity_t)owner_.id(), g_comp.audio_source);
     if (!asd) return;
     
     asd->min_distance = distance > 0.0f ? distance : 0.1f;
@@ -336,7 +337,7 @@ void AudioSource::maxDistance(float distance) {
     ecs_world_t* w = owner_.scene()->world();
     ensure_components_registered(w);
     
-    AudioSourceData* asd = (AudioSourceData*)ecs_get_id(w, (ecs_entity_t)owner_.id(), g_comp.audio_source);
+    AudioSourceData* asd = (AudioSourceData*)ecs_get_mut_id(w, (ecs_entity_t)owner_.id(), g_comp.audio_source);
     if (!asd) return;
     
     asd->max_distance = distance;
@@ -360,7 +361,7 @@ void AudioSource::occlusionDb(float db) {
     ecs_world_t* w = owner_.scene()->world();
     ensure_components_registered(w);
     
-    AudioSourceData* asd = (AudioSourceData*)ecs_get_id(w, (ecs_entity_t)owner_.id(), g_comp.audio_source);
+    AudioSourceData* asd = (AudioSourceData*)ecs_get_mut_id(w, (ecs_entity_t)owner_.id(), g_comp.audio_source);
     if (!asd) return;
     
     asd->occlusion_db = db;
@@ -384,7 +385,7 @@ void AudioSource::airAbsorption(float db_per_meter) {
     ecs_world_t* w = owner_.scene()->world();
     ensure_components_registered(w);
     
-    AudioSourceData* asd = (AudioSourceData*)ecs_get_id(w, (ecs_entity_t)owner_.id(), g_comp.audio_source);
+    AudioSourceData* asd = (AudioSourceData*)ecs_get_mut_id(w, (ecs_entity_t)owner_.id(), g_comp.audio_source);
     if (!asd) return;
     
     asd->air_absorption_db_per_meter = db_per_meter;
@@ -409,7 +410,7 @@ void AudioListener::volume(float v) {
     ecs_world_t* w = owner_.scene()->world();
     ensure_components_registered(w);
     
-    AudioListenerData* ald = (AudioListenerData*)ecs_get_id(w, (ecs_entity_t)owner_.id(), g_comp.audio_listener);
+    AudioListenerData* ald = (AudioListenerData*)ecs_get_mut_id(w, (ecs_entity_t)owner_.id(), g_comp.audio_listener);
     if (!ald) return;
     
     ald->volume = v;
@@ -432,7 +433,7 @@ void AudioListener::mute(bool m) {
     ecs_world_t* w = owner_.scene()->world();
     ensure_components_registered(w);
     
-    AudioListenerData* ald = (AudioListenerData*)ecs_get_id(w, (ecs_entity_t)owner_.id(), g_comp.audio_listener);
+    AudioListenerData* ald = (AudioListenerData*)ecs_get_mut_id(w, (ecs_entity_t)owner_.id(), g_comp.audio_listener);
     if (!ald) return;
     
     ald->mute = m;

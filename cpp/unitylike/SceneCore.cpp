@@ -124,11 +124,12 @@ static void AudioSyncSystem(ecs_iter_t* it) {
     // Sync all audio sources with the mixer
     static int sync_counter = 0;
     if (++sync_counter % 60 == 0) {
-        SDL_Log("[AudioSync] Syncing %zu audio sources, has_listener=%d, listener_pos=(%.1f, %.1f)", 
-                refs.size(), has_listener, listener_pos.x, listener_pos.y);
-        if (!refs.empty()) {
-            SDL_Log("[AudioSync] First source: gain=%.2f, pan=%.2f, playing=%d", 
-                    refs[0].src->gain, refs[0].src->pan, refs[0].src->playing);
+        SDL_Log("[AudioSync] Syncing %zu audio sources, has_listener=%d, listener_pos=(%.1f, %.1f), listener_mute=%d", 
+                refs.size(), has_listener, listener_pos.x, listener_pos.y, listener_mute);
+        if (it->count > 0) {
+            AudioSourceData* first = &sources[0];
+            SDL_Log("[AudioSync] First source: is_playing=%d, mute=%d, final playing=%d, gain=%.2f, type=%d",
+                    first->is_playing, first->mute, first->source.playing, first->source.gain, first->source.type);
         }
     }
     
@@ -497,10 +498,8 @@ void GameObject::name(const std::string& n) {
     ecs_set_name(scene_->world(), (ecs_entity_t)e_, n.c_str());
 }
 
-Transform& GameObject::transform() {
-    static thread_local Transform t{ GameObject() };
-    t = Transform{*this};
-    return t;
+Transform GameObject::transform() {
+    return Transform{*this};
 }
 
 bool GameObject::IsValid() const {

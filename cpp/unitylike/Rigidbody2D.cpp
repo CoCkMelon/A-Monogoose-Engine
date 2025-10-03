@@ -1,7 +1,67 @@
 #include "Scene.h"
 #include <box2d/box2d.h>
+#include <SDL3/SDL.h>
 
 namespace unitylike {
+
+void Rigidbody2D::EnsurePhysicsBody() {
+    ecs_world_t* w = owner_.scene()->world(); 
+    ensure_components_registered(w);
+    
+    AmePhysicsBody* pb = (AmePhysicsBody*)ecs_get_id(w, (ecs_entity_t)owner_.id(), g_comp.body);
+    if (!pb || !pb->body) {
+        // Need to create physics body
+        AmePhysicsWorld* physicsWorld = Physics2D::GetWorld();
+        if (!physicsWorld) {
+            SDL_Log("[Rigidbody2D] Cannot create physics body - Physics2D world not set");
+            return;
+        }
+        
+        // Get transform for initial position
+        AmeTransform2D* tr = (AmeTransform2D*)ecs_get_id(w, (ecs_entity_t)owner_.id(), g_comp.transform);
+        float x = tr ? tr->x : 0.0f;
+        float y = tr ? tr->y : 0.0f;
+        
+        // Get collider size if available, otherwise use default
+        float width = 1.0f;
+        float height = 1.0f;
+        bool isSensor = false;
+        
+        Col2D* col = (Col2D*)ecs_get_id(w, (ecs_entity_t)owner_.id(), g_comp.collider2d);
+        if (col) {
+            if (col->type == 0) {  // Box
+                width = col->w;
+                height = col->h;
+            } else {  // Circle
+                width = height = col->radius * 2.0f;
+            }
+            isSensor = col->isTrigger != 0;
+        }
+        
+        // Create the Box2D body
+        b2Body* body = ame_physics_create_body(
+            physicsWorld,
+            x, y,
+            width, height,
+            AME_BODY_DYNAMIC,
+            isSensor,
+            (void*)(uintptr_t)owner_.id()  // Store entity ID as user data
+        );
+        
+        if (body) {
+            // Store in component
+            AmePhysicsBody bodyComp = {0};
+            bodyComp.body = body;
+            bodyComp.width = width;
+            bodyComp.height = height;
+            bodyComp.is_sensor = isSensor;
+            ecs_set_id(w, (ecs_entity_t)owner_.id(), g_comp.body, sizeof(AmePhysicsBody), &bodyComp);
+            
+            SDL_Log("[Rigidbody2D] Created physics body for entity %llu at (%.1f, %.1f)",
+                   (unsigned long long)owner_.id(), x, y);
+        }
+    }
+}
 
 glm::vec2 Rigidbody2D::velocity() const {
     ecs_world_t* w = owner_.scene()->world(); ensure_components_registered(w);

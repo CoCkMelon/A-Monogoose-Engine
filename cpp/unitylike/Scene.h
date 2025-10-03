@@ -10,6 +10,7 @@
 #include <type_traits>
 #include <unordered_map>
 #include <typeinfo>
+#include <optional>
 #include <glm/vec2.hpp>
 #include <glm/vec3.hpp>
 #include <glm/vec4.hpp>
@@ -36,6 +37,7 @@ class Rigidbody2D;
 class Collider2D;
 class AudioSource;
 class AudioListener;
+class Scene;
 
 // Script component template - each script type gets its own component
 // This allows Flecs to handle lifecycle properly
@@ -196,6 +198,11 @@ struct AudioListenerData { float volume; bool mute; };
 // Internal registration helper (defined in Components.cpp)
 void ensure_components_registered(ecs_world_t* w);
 
+// Physics system registration (defined in PhysicsSync.cpp and PhysicsCallbacks.cpp)
+void RegisterPhysicsSyncSystems(ecs_world_t* w);
+void InitPhysicsCallbacks(AmePhysicsWorld* physicsWorld, Scene* scene);
+void CleanupPhysicsCallbacks();
+
 class Scene {
 public:
     // Create a façade Scene over an existing Flecs world (owned by C core)
@@ -239,17 +246,17 @@ public:
 
     // Component helpers
     template<typename T, typename... Args>
-    T& AddComponent(Args&&...);
+    T AddComponent(Args&&...);
     template<typename T>
-    T* TryGetComponent();
+    std::optional<T> TryGetComponent();
     template<typename T>
-    T& GetComponent();
+    T GetComponent();
     template<typename T>
     bool HasComponent() const;
     template<typename T>
     void RemoveComponent();
     template<typename T, typename... Args>
-    T& GetOrAddComponent(Args&&... args);
+    T GetOrAddComponent(Args&&... args);
 
     // Script helpers
     template<typename T, typename... Args>
@@ -261,7 +268,7 @@ public:
     template<typename T>
     void RemoveScript();
 
-    Transform& transform();
+    Transform transform();
 
     Entity id() const { return e_; }
     Scene* scene() const { return scene_; }
@@ -316,14 +323,16 @@ private:
     GameObject owner_;
 };
 
-// Forward declare collision structs
-struct Collision2D {
-    GameObject gameObject;
-    Rigidbody2D* rigidbody;
-    Collider2D* collider;
-    glm::vec2 relativeVelocity;
-    // Contacts omitted for MVP
+// Contact point information for 2D collisions
+struct ContactPoint2D {
+    glm::vec2 point;           // Contact point in world space
+    glm::vec2 normal;          // Surface normal at contact point
+    glm::vec2 relativeVelocity; // Relative velocity of the two colliding objects
+    float separation;          // Penetration depth (negative means overlap)
 };
+
+// Forward declare collision struct (defined later after component classes)
+struct Collision2D;
 
 class MongooseBehaviour {
 public:
@@ -341,9 +350,9 @@ public:
     virtual void OnCollisionExit2D(const Collision2D& collision) {}
     
     // Trigger callbacks (2D physics)
-    virtual void OnTriggerEnter2D(Collider2D* other) {}
-    virtual void OnTriggerStay2D(Collider2D* other) {}
-    virtual void OnTriggerExit2D(Collider2D* other) {}
+    virtual void OnTriggerEnter2D(const std::optional<Collider2D>& other) {}
+    virtual void OnTriggerStay2D(const std::optional<Collider2D>& other) {}
+    virtual void OnTriggerExit2D(const std::optional<Collider2D>& other) {}
 
     GameObject& gameObject() { return owner_; }
     Transform& transform();
@@ -361,11 +370,49 @@ namespace Time {
     float timeSinceLevelLoad();
 }
 
+// Forward declare for Physics2D
+struct RaycastHit2D;
+
+// Physics2D utility class for raycasts and spatial queries
+class Physics2D {
+public:
+    // Raycast from origin in direction for maxDistance
+    // Returns the first hit
+    static RaycastHit2D Raycast(const glm::vec2& origin, const glm::vec2& direction, float maxDistance = INFINITY);
+    
+    // Raycast and return all hits along the ray
+    static std::vector<RaycastHit2D> RaycastAll(const glm::vec2& origin, const glm::vec2& direction, float maxDistance = INFINITY, int maxHits = 16);
+    
+    // Check if a point overlaps any collider
+    static bool OverlapPoint(const glm::vec2& point);
+    
+    // Find all colliders overlapping a circle
+    static std::vector<GameObject> OverlapCircle(const glm::vec2& center, float radius);
+    
+    // Find all colliders overlapping a box
+    static std::vector<GameObject> OverlapBox(const glm::vec2& center, const glm::vec2& size, float angle = 0.0f);
+    
+    // Get/set global physics world (set by Scene or PhysicsManager)
+    static AmePhysicsWorld* GetWorld();
+    static void SetWorld(AmePhysicsWorld* world);
+    
+    // Get/set global scene (needed for GameObject lookups)
+    static Scene* GetScene();
+    static void SetScene(Scene* scene);
+    
+private:
+    static AmePhysicsWorld* world_;
+    static Scene* scene_;
+};
+
 class Rigidbody2D {
 public:
     enum class BodyType { Dynamic = 0, Kinematic = 1, Static = 2 };
     
     explicit Rigidbody2D(GameObject owner) : owner_(owner) {}
+    
+    // Automatically create physics body if it doesn't exist
+    void EnsurePhysicsBody();
     
     // Velocity
     glm::vec2 velocity() const;
@@ -410,6 +457,16 @@ public:
     
 private:
     GameObject owner_;
+};
+
+// Raycast hit result for 2D physics (defined after Rigidbody2D for complete type)
+struct RaycastHit2D {
+    bool hasHit = false;
+    glm::vec2 point = {0, 0};        // Hit point in world space
+    glm::vec2 normal = {0, 0};       // Surface normal at hit point
+    float distance = 0.0f;           // Distance from ray origin to hit point
+    GameObject collider;             // GameObject that was hit
+    std::optional<Rigidbody2D> rigidbody; // Rigidbody attached to the hit object (if any)
 };
 
 // Simple material with a tint color (RGBA)
@@ -597,6 +654,15 @@ private:
     static AudioListener* main_listener_;
 };
 
+// Collision2D struct (defined after all component classes for complete types)
+struct Collision2D {
+    GameObject gameObject;
+    std::optional<Rigidbody2D> rigidbody;
+    std::optional<Collider2D> collider;
+    glm::vec2 relativeVelocity;
+    std::vector<ContactPoint2D> contacts;
+};
+
 // Template implementations
 
 // Note: The façade only supports a small set of component types in the MVP.
@@ -604,7 +670,7 @@ private:
 // for Transform and Rigidbody2D component views.
 
 template<typename T, typename... Args>
-T& GameObject::AddComponent(Args&&...) {
+T GameObject::AddComponent(Args&&...) {
 static_assert(
         std::is_same_v<T, Transform> || std::is_same_v<T, Rigidbody2D> ||
         std::is_same_v<T, SpriteRenderer> || std::is_same_v<T, Material> ||
@@ -632,9 +698,7 @@ static_assert(
             body = *cur;
         }
         ecs_set_id(w, (ecs_entity_t)e_, g_comp.body, sizeof(AmePhysicsBody), &body);
-        static thread_local Rigidbody2D rb{ GameObject() };
-        rb = Rigidbody2D{ *this };
-        return rb;
+        return Rigidbody2D{ *this };
     } else if constexpr (std::is_same_v<T, SpriteRenderer>) {
         // Use the shared SpriteData definition declared at the top of this header
         SpriteData s{};
@@ -648,17 +712,13 @@ static_assert(
         s.z = 1.0f;
         s.dirty = 1;
         ecs_set_id(w, (ecs_entity_t)e_, g_comp.sprite, sizeof(SpriteData), &s);
-        static thread_local SpriteRenderer sr{ GameObject() };
-        sr = SpriteRenderer{ *this };
-        return sr;
+        return SpriteRenderer{ *this };
     } else if constexpr (std::is_same_v<T, Material>) {
         MaterialData m{};
         m.r = 1.0f; m.g = 1.0f; m.b = 1.0f; m.a = 1.0f;
         m.dirty = 1;
         ecs_set_id(w, (ecs_entity_t)e_, g_comp.material, sizeof(MaterialData), &m);
-        static thread_local Material mat{ GameObject() };
-        mat = Material{ *this };
-        return mat;
+        return Material{ *this };
     } else if constexpr (std::is_same_v<T, TilemapRenderer>) {
         TilemapRefData tr{};
         tr.map = nullptr;
@@ -669,33 +729,23 @@ static_assert(
         tr.tile_w = 0; tr.tile_h = 0;
         tr.firstgid = 0; tr.columns = 0;
         ecs_set_id(w, (ecs_entity_t)e_, g_comp.tilemap, sizeof(TilemapRefData), &tr);
-        static thread_local TilemapRenderer t{ GameObject() };
-        t = TilemapRenderer{ *this };
-        return t;
+        return TilemapRenderer{ *this };
     } else if constexpr (std::is_same_v<T, MeshRenderer>) {
         struct MeshData { const float* pos; const float* uv; const float* col; std::size_t count; } mr{nullptr,nullptr,nullptr,0};
         ecs_set_id(w, (ecs_entity_t)e_, g_comp.mesh, sizeof(mr), &mr);
-        static thread_local MeshRenderer m{ GameObject() };
-        m = MeshRenderer{ *this };
-        return m;
+        return MeshRenderer{ *this };
     } else if constexpr (std::is_same_v<T, Camera>) {
         AmeCamera cam; ame_camera_init(&cam);
         ecs_set_id(w, (ecs_entity_t)e_, g_comp.camera, sizeof(cam), &cam);
-        static thread_local Camera c{ GameObject() };
-        c = Camera{ *this };
-        return c;
+        return Camera{ *this };
     } else if constexpr (std::is_same_v<T, TextRenderer>) {
         struct TextData { const char* text_ptr; std::uint32_t font; float r,g,b,a; float size; int wrap_px; int request_set; char request_buf[256]; } td = { nullptr, 0, 1,1,1,1, 16.0f, 0, 0, {0} };
         ecs_set_id(w, (ecs_entity_t)e_, g_comp.text, sizeof(td), &td);
-        static thread_local TextRenderer tr{ GameObject() };
-        tr = TextRenderer{ *this };
-        return tr;
+        return TextRenderer{ *this };
     } else if constexpr (std::is_same_v<T, Collider2D>) {
         struct Col2D { int type; float w,h; float radius; int isTrigger; } cd = {0, 1,1, 0.5f, 0};
         ecs_set_id(w, (ecs_entity_t)e_, g_comp.collider2d, sizeof(cd), &cd);
-        static thread_local Collider2D c2{ GameObject() };
-        c2 = Collider2D{ *this };
-        return c2;
+        return Collider2D{ *this };
     } else if constexpr (std::is_same_v<T, AudioSource>) {
         AudioSourceData asd = {};
         memset(&asd, 0, sizeof(asd));
@@ -712,22 +762,18 @@ static_assert(
         asd.air_absorption_db_per_meter = 0.02f;
         asd.dirty = 1;
         ecs_set_id(w, (ecs_entity_t)e_, g_comp.audio_source, sizeof(AudioSourceData), &asd);
-        static thread_local AudioSource as{ GameObject() };
-        as = AudioSource{ *this };
-        return as;
+        return AudioSource{ *this };
     } else if constexpr (std::is_same_v<T, AudioListener>) {
         AudioListenerData ald = {0};
         ald.volume = 1.0f;
         ald.mute = false;
         ecs_set_id(w, (ecs_entity_t)e_, g_comp.audio_listener, sizeof(AudioListenerData), &ald);
-        static thread_local AudioListener al{ GameObject() };
-        al = AudioListener{ *this };
-        return al;
+        return AudioListener{ *this };
     }
 }
 
 template<typename T>
-T* GameObject::TryGetComponent() {
+std::optional<T> GameObject::TryGetComponent() {
 static_assert(
         std::is_same_v<T, Transform> || std::is_same_v<T, Rigidbody2D> ||
         std::is_same_v<T, SpriteRenderer> || std::is_same_v<T, Material> ||
@@ -742,99 +788,78 @@ static_assert(
 
     if constexpr (std::is_same_v<T, Transform>) {
         if (ecs_get_id(w, (ecs_entity_t)e_, g_comp.transform)) {
-            static thread_local Transform t{ GameObject() };
-            t = Transform{ *this };
-            return &t;
+            return Transform{ *this };
         }
-        return nullptr;
+        return std::nullopt;
     } else if constexpr (std::is_same_v<T, Rigidbody2D>) {
         if (ecs_get_id(w, (ecs_entity_t)e_, g_comp.body)) {
-            static thread_local Rigidbody2D rb{ GameObject() };
-            rb = Rigidbody2D{ *this };
-            return &rb;
+            return Rigidbody2D{ *this };
         }
-        return nullptr;
+        return std::nullopt;
     } else if constexpr (std::is_same_v<T, SpriteRenderer>) {
         if (ecs_get_id(w, (ecs_entity_t)e_, g_comp.sprite)) {
-            static thread_local SpriteRenderer sr{ GameObject() };
-            sr = SpriteRenderer{ *this };
-            return &sr;
+            return SpriteRenderer{ *this };
         }
-        return nullptr;
+        return std::nullopt;
     } else if constexpr (std::is_same_v<T, Material>) {
         if (ecs_get_id(w, (ecs_entity_t)e_, g_comp.material)) {
-            static thread_local Material m{ GameObject() };
-            m = Material{ *this };
-            return &m;
+            return Material{ *this };
         }
-        return nullptr;
+        return std::nullopt;
     } else if constexpr (std::is_same_v<T, TilemapRenderer>) {
         if (ecs_get_id(w, (ecs_entity_t)e_, g_comp.tilemap)) {
-            static thread_local TilemapRenderer t{ GameObject() };
-            t = TilemapRenderer{ *this };
-            return &t;
+            return TilemapRenderer{ *this };
         }
-        return nullptr;
+        return std::nullopt;
     } else if constexpr (std::is_same_v<T, MeshRenderer>) {
         if (ecs_get_id(w, (ecs_entity_t)e_, g_comp.mesh)) {
-            static thread_local MeshRenderer mr{ GameObject() };
-            mr = MeshRenderer{ *this };
-            return &mr;
+            return MeshRenderer{ *this };
         }
-        return nullptr;
+        return std::nullopt;
     } else if constexpr (std::is_same_v<T, Camera>) {
         if (ecs_get_id(w, (ecs_entity_t)e_, g_comp.camera)) {
-            static thread_local Camera c{ GameObject() };
-            c = Camera{ *this };
-            return &c;
+            return Camera{ *this };
         }
-        return nullptr;
+        return std::nullopt;
     } else if constexpr (std::is_same_v<T, TextRenderer>) {
         if (ecs_get_id(w, (ecs_entity_t)e_, g_comp.text)) {
-            static thread_local TextRenderer tr{ GameObject() };
-            tr = TextRenderer{ *this };
-            return &tr;
+            return TextRenderer{ *this };
         }
-        return nullptr;
+        return std::nullopt;
     } else if constexpr (std::is_same_v<T, Collider2D>) {
         if (ecs_get_id(w, (ecs_entity_t)e_, g_comp.collider2d)) {
-            static thread_local Collider2D c2{ GameObject() };
-            c2 = Collider2D{ *this };
-            return &c2;
+            return Collider2D{ *this };
         }
-        return nullptr;
+        return std::nullopt;
     } else if constexpr (std::is_same_v<T, AudioSource>) {
         if (ecs_get_id(w, (ecs_entity_t)e_, g_comp.audio_source)) {
-            static thread_local AudioSource as{ GameObject() };
-            as = AudioSource{ *this };
-            return &as;
+            return AudioSource{ *this };
         }
-        return nullptr;
+        return std::nullopt;
     } else if constexpr (std::is_same_v<T, AudioListener>) {
         if (ecs_get_id(w, (ecs_entity_t)e_, g_comp.audio_listener)) {
-            static thread_local AudioListener al{ GameObject() };
-            al = AudioListener{ *this };
-            return &al;
+            return AudioListener{ *this };
         }
-        return nullptr;
+        return std::nullopt;
     }
+    return std::nullopt;
 }
 
 template<typename T>
-T& GameObject::GetComponent() {
-    T* p = TryGetComponent<T>();
+T GameObject::GetComponent() {
+    auto opt = TryGetComponent<T>();
     // For MVP, auto-add Transform if requested but missing; Rigidbody2D must be added explicitly
-    if (!p) {
+    if (!opt.has_value()) {
         if constexpr (std::is_same_v<T, Transform>) {
             return AddComponent<Transform>();
         }
     }
-    // If still null, this is a logic error for the caller
-    // Using a simple fallback to AddComponent for Rigidbody2D as well for now
-    if (!p) {
+    // If still no value, this is a logic error for the caller
+    // Using a simple fallback to AddComponent for other types as well for now
+    if (!opt.has_value()) {
         return AddComponent<T>();
     }
-    return *p;
+    return opt.value();
 }
 
 template<typename T>
@@ -890,8 +915,8 @@ void GameObject::RemoveComponent() {
 }
 
 template<typename T, typename... Args>
-T& GameObject::GetOrAddComponent(Args&&... args) {
-    if (auto* p = TryGetComponent<T>()) return *p;
+T GameObject::GetOrAddComponent(Args&&... args) {
+    if (auto opt = TryGetComponent<T>()) return opt.value();
     return AddComponent<T>(std::forward<Args>(args)...);
 }
 
