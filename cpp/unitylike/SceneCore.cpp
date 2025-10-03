@@ -4,6 +4,7 @@
 #include <cassert>
 #include <unordered_map>
 #include <typeinfo>
+#include <queue>
 #include <SDL3/SDL.h>
 
 extern "C" {
@@ -20,6 +21,13 @@ std::unordered_map<const std::type_info*, ecs_entity_t> g_script_component_regis
 static bool g_systems_registered = false;
 static float g_current_dt = 0.0f;
 static float g_fixed_dt = 1.0f/60.0f;
+
+// Queue for scripts that need Awake/Start processing outside of ECS iteration
+struct ScriptLifecycleInfo {
+    ecs_entity_t entity;
+    ecs_entity_t script_comp_id;
+};
+static std::queue<ScriptLifecycleInfo> g_new_scripts_queue;
 
 // Audio sync system - syncs AudioSource components with the audio mixer
 static void AudioSyncSystem(ecs_iter_t* it) {
@@ -139,20 +147,20 @@ static void AudioSyncSystem(ecs_iter_t* it) {
 }
 
 
-// Observer that runs when script components are added - handles Awake automatically
+// Observer that runs when script components are added - queues for Awake/Start processing
 static void ScriptOnAddObserver(ecs_iter_t* it) {
-    // This runs for each component type that triggers it
-    size_t comp_size = ecs_field_size(it, 0);
-    void* components = ecs_field_w_size(it, comp_size, 0);
+    // Queue the script for lifecycle processing outside ECS iteration
+    // This avoids readonly/deferred mode issues when components are added in Awake/Start
+    ecs_id_t comp_id = ecs_field_id(it, 0);
     
     for (int i = 0; i < it->count; i++) {
-        struct BaseScriptComponent { void* script; bool awoken; bool started; };
-        BaseScriptComponent* base = (BaseScriptComponent*)((char*)components + i * comp_size);
-        
-        if (base->script && !base->awoken) {
-            ((MongooseBehaviour*)base->script)->Awake();
-            base->awoken = true;
-        }
+        ecs_entity_t e = it->entities[i];
+        ScriptLifecycleInfo info;
+        info.entity = e;
+        info.script_comp_id = comp_id;
+        g_new_scripts_queue.push(info);
+        SDL_Log("[ScriptOnAddObserver] Queued entity %lu with comp_id %lu for lifecycle processing", 
+                (unsigned long)e, (unsigned long)comp_id);
     }
 }
 
@@ -172,38 +180,43 @@ static void ScriptOnRemoveObserver(ecs_iter_t* it) {
     }
 }
 
-// Update system - handles Start and Update
+// Update system - handles Update only (Start is handled outside ECS iteration)
 static void ScriptUpdateSystem(ecs_iter_t* it) {
-    // Important: adding/removing components inside Start/Update can relocate the entity's table.
-    // Do NOT keep pointers from ecs_field_w_size across such modifications. Reacquire per-entity.
+    static int invocation_counter = 0;
+    invocation_counter++;
+    
     ecs_world_t* world = it->world;
     ecs_id_t comp_id = ecs_field_id(it, 0);
+    
+    static int update_log_counter = 0;
+    bool should_log = (++update_log_counter % 60 == 0) || (invocation_counter <= 10);
+    
+    if (should_log) {
+        SDL_Log("[ScriptUpdateSystem] Called for comp_id=%lu with count=%d", (unsigned long)comp_id, it->count);
+        // Also count how many entities SHOULD match this query
+        int total_count = 0;
+        ecs_iter_t count_it = ecs_each_id(world, comp_id);
+        while (ecs_each_next(&count_it)) {
+            total_count += count_it.count;
+        }
+        SDL_Log("[ScriptUpdateSystem] Total entities with comp_id=%lu: %d", (unsigned long)comp_id, total_count);
+    }
 
     for (int i = 0; i < it->count; i++) {
         struct BaseScriptComponent { void* script; bool awoken; bool started; };
         ecs_entity_t e = it->entities[i];
 
         // Read current component state
-        const BaseScriptComponent* base_ro = (const BaseScriptComponent*)ecs_get_id(world, e, comp_id);
-        if (!base_ro || !base_ro->script || !base_ro->awoken) {
-            continue;
+        const BaseScriptComponent* base = (const BaseScriptComponent*)ecs_get_id(world, e, comp_id);
+        if (should_log) {
+            SDL_Log("[ScriptUpdateSystem] entity=%lu comp_id=%lu base=%p script=%p awoken=%d started=%d",
+                    (unsigned long)e, (unsigned long)comp_id, base, 
+                    base ? base->script : nullptr,
+                    base ? base->awoken : 0,
+                    base ? base->started : 0);
         }
-
-        // If Start hasn't run yet, run it now. This may modify the world (and relocate the entity).
-        if (!base_ro->started) {
-            ((MongooseBehaviour*)base_ro->script)->Start();
-            // Reacquire a mutable pointer and mark as modified
-            BaseScriptComponent* base_rw = (BaseScriptComponent*)ecs_get_mut_id(world, e, comp_id);
-            if (base_rw) {
-                base_rw->started = true;
-                ecs_modified_id(world, e, comp_id);
-            }
-        }
-
-        // Reacquire after potential modifications and call Update safely
-        const BaseScriptComponent* base_now = (const BaseScriptComponent*)ecs_get_id(world, e, comp_id);
-        if (base_now && base_now->script) {
-            ((MongooseBehaviour*)base_now->script)->Update(g_current_dt);
+        if (base && base->script && base->awoken && base->started) {
+            ((MongooseBehaviour*)base->script)->Update(g_current_dt);
         }
     }
 }
@@ -246,12 +259,14 @@ static void register_script_observers_and_systems(ecs_world_t* world, ecs_entity
     // Avoid registering empty comp_id
     if (!comp_id) return;
     
-    SDL_Log("[UnityLike] Registering observers/systems for script component %lu", (unsigned long)comp_id);
+    static int call_counter = 0;
+    SDL_Log("[UnityLike][%d] Registering observers/systems for script component %lu", ++call_counter, (unsigned long)comp_id);
     
-    // OnAdd observer for Awake
+    // OnAdd observer - queues scripts for Awake/Start processing
     ecs_observer_desc_t on_add_desc = {0};
+    // Note: We pass NULL for name since we're creating unique observers per component type
+    // and the entity ID itself provides uniqueness
     ecs_entity_desc_t on_add_entity_desc = {0};
-    on_add_entity_desc.name = "ScriptOnAdd";
     on_add_desc.entity = ecs_entity_init(world, &on_add_entity_desc);
     on_add_desc.query.terms[0].id = comp_id;
     on_add_desc.events[0] = EcsOnAdd;
@@ -262,7 +277,6 @@ static void register_script_observers_and_systems(ecs_world_t* world, ecs_entity
     // OnRemove observer for OnDestroy
     ecs_observer_desc_t on_remove_desc = {0};
     ecs_entity_desc_t on_remove_entity_desc = {0};
-    on_remove_entity_desc.name = "ScriptOnRemove";
     on_remove_desc.entity = ecs_entity_init(world, &on_remove_entity_desc);
     on_remove_desc.query.terms[0].id = comp_id;
     on_remove_desc.events[0] = EcsOnRemove;
@@ -270,21 +284,40 @@ static void register_script_observers_and_systems(ecs_world_t* world, ecs_entity
     ecs_entity_t observer2 = ecs_observer_init(world, &on_remove_desc);
     SDL_Log("[UnityLike] Registered OnRemove observer: %lu", (unsigned long)observer2);
     
-    // Update system
+    // Update system - only handles Update, not Start
     ecs_system_desc_t update_desc = {0};
+    ecs_id_t update_add_ids[3] = {
+        ecs_pair(EcsDependsOn, EcsOnUpdate),
+        EcsOnUpdate,
+        0
+    };
     ecs_entity_desc_t update_entity_desc = {0};
-    update_entity_desc.name = "ScriptUpdate";
+    update_entity_desc.add = update_add_ids;
     update_desc.entity = ecs_entity_init(world, &update_entity_desc);
     update_desc.query.terms[0].id = comp_id;
     update_desc.callback = ScriptUpdateSystem;
     update_desc.multi_threaded = true;
     ecs_entity_t system1 = ecs_system_init(world, &update_desc);
-    SDL_Log("[UnityLike] Registered Update system: %lu", (unsigned long)system1);
+    
+    // Count entities with this component for debugging
+    int entity_count = 0;
+    ecs_iter_t count_it = ecs_each_id(world, comp_id);
+    while (ecs_each_next(&count_it)) {
+        entity_count += count_it.count;
+    }
+    
+    SDL_Log("[UnityLike] Registered Update system: %lu for comp_id %lu, enabled=%d, entity_count=%d", 
+            (unsigned long)system1, (unsigned long)comp_id, !ecs_has_id(world, system1, EcsDisabled), entity_count);
     
     // LateUpdate system
     ecs_system_desc_t late_update_desc = {0};
+    ecs_id_t late_add_ids[3] = {
+        ecs_pair(EcsDependsOn, EcsPostUpdate),
+        EcsPostUpdate,
+        0
+    };
     ecs_entity_desc_t late_update_entity_desc = {0};
-    late_update_entity_desc.name = "ScriptLateUpdate";
+    late_update_entity_desc.add = late_add_ids;
     late_update_desc.entity = ecs_entity_init(world, &late_update_entity_desc);
     late_update_desc.query.terms[0].id = comp_id;
     late_update_desc.callback = ScriptLateUpdateSystem;
@@ -294,8 +327,13 @@ static void register_script_observers_and_systems(ecs_world_t* world, ecs_entity
     
     // FixedUpdate system
     ecs_system_desc_t fixed_update_desc = {0};
+    ecs_id_t fixed_add_ids[3] = {
+        ecs_pair(EcsDependsOn, EcsOnUpdate),
+        EcsOnUpdate,  // FixedUpdate runs in same phase as Update for now
+        0
+    };
     ecs_entity_desc_t fixed_update_entity_desc = {0};
-    fixed_update_entity_desc.name = "ScriptFixedUpdate";
+    fixed_update_entity_desc.add = fixed_add_ids;
     fixed_update_desc.entity = ecs_entity_init(world, &fixed_update_entity_desc);
     fixed_update_desc.query.terms[0].id = comp_id;
     fixed_update_desc.callback = ScriptFixedUpdateSystem;
@@ -306,8 +344,85 @@ static void register_script_observers_and_systems(ecs_world_t* world, ecs_entity
 
 // Expose registration for template to call
 void __register_script_handlers(ecs_world_t* world, ecs_entity_t comp_id) {
-    // Use simplified system registration
-    register_script_update_systems(world, comp_id);
+    // Register observers and systems
+    register_script_observers_and_systems(world, comp_id);
+}
+
+// Process queued scripts for Awake/Start outside of ECS iteration
+// This runs when the world is NOT readonly, so component additions work properly
+static void process_script_lifecycle_queue(ecs_world_t* world) {
+    struct BaseScriptComponent { void* script; bool awoken; bool started; };
+    
+    int processed = 0;
+    while (!g_new_scripts_queue.empty()) {
+        ScriptLifecycleInfo info = g_new_scripts_queue.front();
+        g_new_scripts_queue.pop();
+        processed++;
+        
+        SDL_Log("[process_script_lifecycle_queue] Processing entity %lu (comp_id %lu), queue size=%zu", 
+                (unsigned long)info.entity, (unsigned long)info.script_comp_id, g_new_scripts_queue.size());
+        
+        // Check if entity still exists
+        if (!ecs_is_alive(world, info.entity)) {
+            SDL_Log("[process_script_lifecycle_queue] Entity %lu is not alive, skipping", (unsigned long)info.entity);
+            continue;
+        }
+        
+        // Get the script component
+        BaseScriptComponent* base = (BaseScriptComponent*)ecs_get_mut_id(world, info.entity, info.script_comp_id);
+        if (!base || !base->script) {
+            SDL_Log("[process_script_lifecycle_queue] Entity %lu: base=%p script=%p, skipping", 
+                    (unsigned long)info.entity, base, base ? base->script : nullptr);
+            continue;
+        }
+        
+        SDL_Log("[process_script_lifecycle_queue] Entity %lu: awoken=%d started=%d", 
+                (unsigned long)info.entity, base->awoken, base->started);
+        
+        // Call Awake if not already awoken
+        if (!base->awoken) {
+            SDL_Log("[ScriptLifecycle] Calling Awake for entity %lu", (unsigned long)info.entity);
+            ((MongooseBehaviour*)base->script)->Awake();
+            base->awoken = true;
+            ecs_modified_id(world, info.entity, info.script_comp_id);
+            
+            // Refetch the pointer after modification in case it moved
+            base = (BaseScriptComponent*)ecs_get_mut_id(world, info.entity, info.script_comp_id);
+            if (!base || !base->script) {
+                SDL_Log("[process_script_lifecycle_queue] Entity %lu: pointer invalidated after Awake", 
+                        (unsigned long)info.entity);
+                continue;
+            }
+        }
+        
+        // Call Start if not already started (check again after refetch)
+        if (!base->started) {
+            SDL_Log("[ScriptLifecycle] Calling Start for entity %lu", (unsigned long)info.entity);
+            ((MongooseBehaviour*)base->script)->Start();
+            
+            // CRITICAL: Refetch the pointer after Start() because Start() might have added components,
+            // which could cause Flecs to move the entity to a different table, invaliding our pointer!
+            base = (BaseScriptComponent*)ecs_get_mut_id(world, info.entity, info.script_comp_id);
+            if (!base || !base->script) {
+                SDL_Log("[process_script_lifecycle_queue] Entity %lu: pointer invalidated after Start()", 
+                        (unsigned long)info.entity);
+                continue;
+            }
+            
+            // Now set the started flag on the fresh pointer
+            base->started = true;
+            ecs_modified_id(world, info.entity, info.script_comp_id);
+            
+            // Verify
+            const BaseScriptComponent* verify = (const BaseScriptComponent*)ecs_get_id(world, info.entity, info.script_comp_id);
+            if (verify) {
+                SDL_Log("[process_script_lifecycle_queue] Entity %lu: After Start: awoken=%d started=%d",
+                        (unsigned long)info.entity, verify->awoken, verify->started);
+            }
+        }
+    }
+    
+    SDL_Log("[process_script_lifecycle_queue] Processed %d entities", processed);
 }
 
 // Simple system registration without observers - just systems to handle Update loops
@@ -455,6 +570,50 @@ void Scene::Step(float dt) {
     ensure_components_registered(world_);
     unitylike_begin_update(dt);
     g_current_dt = dt;
+    
+    // Process script lifecycle queue BEFORE ecs_progress so world is not readonly
+    // This allows Awake/Start to add components without deferred mode issues
+    process_script_lifecycle_queue(world_);
+    
+    // Debug: manually run queries to see if they match
+    static bool logged_once = false;
+    if (!logged_once) {
+        for (ecs_entity_t comp_id : {556, 562, 571}) {
+            // Count all entities with this component
+            int total_count = 0;
+            ecs_iter_t count_it = ecs_each_id(world_, comp_id);
+            while (ecs_each_next(&count_it)) {
+                total_count += count_it.count;
+            }
+            
+            // Try to manually create and run a query like the system would
+            ecs_query_desc_t query_desc = {0};
+            query_desc.terms[0].id = comp_id;
+            ecs_query_t* query = ecs_query_init(world_, &query_desc);
+            
+            int query_match_count = 0;
+            ecs_iter_t query_it = ecs_query_iter(world_, query);
+            while (ecs_query_next(&query_it)) {
+                query_match_count += query_it.count;
+            }
+            
+            SDL_Log("[Scene::Step] comp_id %lu: total entities=%d, query matches=%d", 
+                    (unsigned long)comp_id, total_count, query_match_count);
+            
+            ecs_query_fini(query);
+        }
+        
+        // Also check the actual registered systems
+        for (ecs_entity_t sys_id : {559, 565, 574}) {
+            bool is_disabled = ecs_has_id(world_, sys_id, EcsDisabled);
+            bool has_on_update = ecs_has_id(world_, sys_id, EcsOnUpdate);
+            bool has_system = ecs_has_id(world_, sys_id, EcsSystem);
+            SDL_Log("[Scene::Step] System %lu: disabled=%d, has_OnUpdate=%d, has_System=%d",
+                    (unsigned long)sys_id, is_disabled, has_on_update, has_system);
+        }
+        
+        logged_once = true;
+    }
     
     // Let Flecs run all registered systems - they will handle script execution
     // The systems are properly registered with multithreading support

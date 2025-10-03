@@ -57,17 +57,6 @@ struct ScriptComponent {
         }
     }
     
-    // On-set hook - called when component data is set
-    static void on_set(ecs_iter_t* it) {
-        for (int i = 0; i < it->count; i++) {
-            ScriptComponent<T>* comp = ecs_field(it, ScriptComponent<T>, 0) + i;
-            if (comp->script && !comp->awoken) {
-                comp->script->Awake();
-                comp->awoken = true;
-            }
-        }
-    }
-    
     // Destructor hook - called when component is removed
     static void dtor(void* ptr, int32_t count, const ecs_type_info_t* ti) {
         for (int i = 0; i < count; i++) {
@@ -126,7 +115,6 @@ ecs_entity_t __get_script_component_id(ecs_world_t* w) {
     // Set up lifecycle hooks
     desc.type.hooks.ctor = ScriptComponent<T>::ctor;
     desc.type.hooks.dtor = ScriptComponent<T>::dtor;
-    desc.type.hooks.on_set = ScriptComponent<T>::on_set;
     desc.type.hooks.move = ScriptComponent<T>::move;
     
     ecs_entity_t comp_id = ecs_component_init(w, &desc);
@@ -764,7 +752,7 @@ static_assert(
         asd.occlusion_db = 6.0f;
         asd.air_absorption_db_per_meter = 0.02f;
         asd.dirty = 1;
-        // Set the initial component data
+        // Set the initial component data (will be deferred if in system iteration)
         ecs_set_id(w, (ecs_entity_t)e_, g_comp.audio_source, sizeof(AudioSourceData), &asd);
         return AudioSource{ *this };
     } else if constexpr (std::is_same_v<T, AudioListener>) {

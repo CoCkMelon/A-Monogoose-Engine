@@ -16,13 +16,20 @@ AudioListener* AudioListener::main_listener_ = nullptr;
 
 // AudioSource implementation
 void AudioSource::Play() {
-    if (!owner_.scene() || !owner_.id()) return;
+    if (!owner_.scene() || !owner_.id()) {
+        SDL_Log("[AudioSource::Play] ERROR: owner invalid");
+        return;
+    }
     ecs_world_t* w = owner_.scene()->world();
     ensure_components_registered(w);
     
     AudioSourceData* asd = (AudioSourceData*)ecs_get_mut_id(w, (ecs_entity_t)owner_.id(), g_comp.audio_source);
-    if (!asd) return;
+    if (!asd) {
+        SDL_Log("[AudioSource::Play] ERROR: Could not get AudioSourceData for entity %lu", (unsigned long)owner_.id());
+        return;
+    }
     
+    SDL_Log("[AudioSource::Play] Setting playing=true for entity %lu, type=%d", (unsigned long)owner_.id(), asd->source.type);
     asd->source.playing = true;
     asd->is_playing = true;
     asd->dirty = 1;
@@ -225,40 +232,13 @@ void AudioSource::InitSawWork(float base_freq_hz, float drive, float noise_mix, 
     ecs_world_t* w = owner_.scene()->world();
     ensure_components_registered(w);
     
-    // Check if world is readonly
-    bool is_readonly = ecs_stage_is_readonly(w);
-    SDL_Log("[InitSawWork] World is_readonly=%d, entity=%lu, comp_id=%lu", 
-            is_readonly, (unsigned long)owner_.id(), (unsigned long)g_comp.audio_source);
-    
-    // Check if component exists first
-    const AudioSourceData* check = (const AudioSourceData*)ecs_get_id(w, (ecs_entity_t)owner_.id(), g_comp.audio_source);
-    SDL_Log("[InitSawWork] ecs_get_id (read-only) returned: %p", (void*)check);
-    
     AudioSourceData* asd = (AudioSourceData*)ecs_get_mut_id(w, (ecs_entity_t)owner_.id(), g_comp.audio_source);
-    if (!asd) {
-        SDL_Log("[InitSawWork] ERROR: ecs_get_mut_id returned NULL for entity %lu, comp_id=%lu", 
-                (unsigned long)owner_.id(), (unsigned long)g_comp.audio_source);
-        return;
-    }
-    
-    SDL_Log("[InitSawWork] BEFORE: entity=%lu, type=%d, gain=%.2f", 
-            (unsigned long)owner_.id(), asd->source.type, asd->source.gain);
+    if (!asd) return;
     
     ame_audio_source_init_saw_work(&asd->source, base_freq_hz, drive, noise_mix, lfo_rate_hz, gain);
     asd->volume = gain;
     asd->dirty = 1;
-    
-    SDL_Log("[InitSawWork] AFTER: entity=%lu, type=%d, gain=%.2f", 
-            (unsigned long)owner_.id(), asd->source.type, asd->source.gain);
-    
     ecs_modified_id(w, (ecs_entity_t)owner_.id(), g_comp.audio_source);
-    
-    // Verify the data was written
-    const AudioSourceData* verify = (const AudioSourceData*)ecs_get_id(w, (ecs_entity_t)owner_.id(), g_comp.audio_source);
-    if (verify) {
-        SDL_Log("[InitSawWork] VERIFY: entity=%lu, type=%d, gain=%.2f", 
-                (unsigned long)owner_.id(), verify->source.type, verify->source.gain);
-    }
 }
 
 void AudioSource::InitSawCut(float freq_hz, float drive, float noise_mix, float duration_sec, float gain) {
