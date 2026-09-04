@@ -16,7 +16,8 @@
 /* SDL3 app-callback entry: SDL_main.h generates main() for this TU and runs
  * the SDL_AppInit/Event/Iterate/Quit loop below (loop.txt rule 1). */
 #define SDL_MAIN_USE_CALLBACKS
-#include <SDL3/SDL_main.h> /* generates main() -> SDL_App* callbacks */
+#include <SDL3/SDL_main.h>
+#include <stdlib.h> /* generates main() -> SDL_App* callbacks */
 
 #include <ame/app.h>
 #include <ame/audio.h>
@@ -76,7 +77,14 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char **argv) {
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
     SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
     SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE, 24);
-    g_window = SDL_CreateWindow("ame-next", 1280, 720,
+    int win_w = 1280, win_h = 720;
+    const char *ew = SDL_getenv("AME_WINDOW_W");
+    const char *eh = SDL_getenv("AME_WINDOW_H");
+    if (ew && eh) {
+        int w = atoi(ew), h = atoi(eh);
+        if (w > 0 && h > 0) { win_w = w; win_h = h; }
+    }
+    g_window = SDL_CreateWindow("ame-next", win_w, win_h,
                                 SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE);
     if (!g_window) {
         SDL_Log("ame: window failed: %s", SDL_GetError());
@@ -105,6 +113,18 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char **argv) {
         return SDL_APP_FAILURE;
     }
 
+    /* The game sets up for a DEFAULT size; sync it to the window's REAL
+     * pixel size now (WM may have opened it larger/smaller or scaled it),
+     * so the aspect is correct from the FIRST frame, not after a resize. */
+    {
+        int pw = 0, ph = 0;
+        if (SDL_GetWindowSizeInPixels(g_window, &pw, &ph) && pw > 0 && ph > 0
+            && (pw != 1280 || ph != 720)) {
+            rp_viewport(pw, ph);
+            app_resize(pw, ph);
+        }
+    }
+
     atomic_store(&g_run, 1);
     atomic_store(&g_exit_code, 0);
     g_logic = SDL_CreateThread(logic_thread, "ame-logic", NULL);
@@ -122,10 +142,16 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
         return SDL_APP_SUCCESS;
     case SDL_EVENT_WINDOW_RESIZED:
     case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED: {
-        int w = (int)event->window.data1, h = (int)event->window.data2;
-        if (w > 0 && h > 0) {
-            rp_viewport(w, h);
-            app_resize(w, h);
+        /* data1/data2 can be POINTS (scaled Wayland/macOS); the GL drawable
+         * only ever matches PIXELS. Always re-query. */
+        int pw = 0, ph = 0;
+        static int last_w, last_h;
+        if (SDL_GetWindowSizeInPixels(g_window, &pw, &ph) && pw > 0 && ph > 0
+            && (pw != last_w || ph != last_h)) {
+            last_w = pw;
+            last_h = ph;
+            rp_viewport(pw, ph);
+            app_resize(pw, ph);
         }
         return SDL_APP_CONTINUE;
     }

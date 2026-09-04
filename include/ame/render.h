@@ -71,6 +71,11 @@ int  rp_load_texture(const uint8_t *pixels, int w, int h, int comps,
 void rp_free_texture(int id);
 int  rp_white_texture(void); /* 1x1 white, always id 0 */
 
+/* top-left of the current view in WORLD px (ortho pixel camera only).
+ * Screen-anchored drawing (UI text) adds this so (0,0) means the window
+ * corner, no matter where the camera center sits. */
+void rp_screen_origin(float *ox, float *oy);
+
 /* screenshot for golden tests: RGBA8 bottom-up rows flipped to top-down */
 bool rp_read_pixels(uint8_t *rgba_out, int w, int h);
 

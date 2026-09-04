@@ -290,9 +290,14 @@ void text_draw_screen(const ame_text_layout *l, float x, float y,
                       const float tint[4], float layer) {
     if (!l)
         return;
+    /* x,y are WINDOW px: translate into world px by the view's top-left
+     * (the ortho camera centers itself on pos, so world 0,0 is the screen
+     * CENTER otherwise). */
+    float ox, oy;
+    rp_screen_origin(&ox, &oy);
     float sc = l->scale > 0.0f ? l->scale : 1.0f;
     for (int i = 0; i < l->count; i++)
-        draw_glyph(&l->el[i], x, y, sc, tint, layer);
+        draw_glyph(&l->el[i], x + ox, y + oy, sc, tint, layer);
 }
 
 void text_draw_world(const ame_text_layout *l, const float pose[16],

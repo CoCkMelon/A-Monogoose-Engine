@@ -46,6 +46,21 @@ SESSION 2 FIXES (user-reported, all verified headless)
 - text_draw_screen hardcoded glyph scale 1 ignoring the layout scale -
   layout now carries its scale and draw honors it (test caught it).
 
+SESSION 3 (resize + orientation hardening)
+- Engine now syncs the game to the window's REAL pixel size at startup
+  (SDL_GetWindowSizeInPixels after app_init; app_resize hook) - WM may open
+  windows at non-default sizes/scales; resize events also re-query pixels
+  because RESIZED can carry POINTS under Wayland/mac scaling.
+- AME_WINDOW_W/AME_WINDOW_H env override the initial window (testing/CI).
+- rp_screen_origin(): the 2D ortho camera centers world (0,0) at screen
+  CENTER (pos = view center). Screen-anchored UI text adds the origin.
+- Orientation now PROVEN on all three text paths (screen / world identity /
+  billboard pattern) by atlas-correlation SSD (direct ~1.4-21 vs flipped
+  ~62-79). Sampler needs the EXACT cell origin (line origin + xoff/ascent
+  offsets) and PER-GLLYPH-PIXEL step, not bbox inference.
+- NDC->px mapping: px = (ndc*0.5+0.5)*vw, y flipped; forgetting the +center
+  offset breaks edge/position assertions silently (ratios still pass).
+
 PITFALLS HIT THIS SESSION (do not rediscover)
 - SDL_main.h: Debian SDL3's SDL.h does NOT pull SDL_main.h; the bootstrap
   defines SDL_MAIN_USE_CALLBACKS + includes <SDL3/SDL_main.h> explicitly in

@@ -26,6 +26,60 @@
 #define W 256
 #define H 160
 
+static uint8_t px[W * H * 4]; /* readback buffer (shared by the cases) */
+
+/* find the bbox of bright pixels; returns false if none */
+static bool bright_bbox(int *minx, int *maxx, int *miny, int *maxy) {
+    *minx = W; *maxx = -1; *miny = H; *maxy = -1;
+    for (int y = 0; y < H; y++)
+        for (int x = 0; x < W; x++)
+            if (px[(y * W + x) * 4] > 120) {
+                if (x < *minx) *minx = x; if (x > *maxx) *maxx = x;
+                if (y < *miny) *miny = y; if (y > *maxy) *maxy = y;
+            }
+    return *maxx >= *minx && *maxy >= *miny;
+}
+
+static const ame_font_glyph *find_glyph(uint32_t cp) {
+    for (int i = 0; i < ame_font_glyph_count; i++)
+        if (ame_font_glyphs[i].cp == cp)
+            return &ame_font_glyphs[i];
+    return NULL;
+}
+
+/* SSD of the RENDERED glyph vs the atlas bitmap, direct and h-flipped.
+ * ox,oy = expected cell origin in screen px; sx,sy = px per glyph-cell
+ * pixel (computed EXACTLY per draw path - bbox inference drifts). */
+static void f_ssd(const ame_font_glyph *g, float ox, float oy, float sx,
+                  float sy, double *direct, double *flip) {
+    double sd = 0, sf = 0;
+    for (int yy = 0; yy < g->ah; yy++)
+        for (int xx = 0; xx < g->aw; xx++) {
+            float cov = ame_font_atlas_a8[(g->ay + yy) * AME_FONT_ATLAS_WIDTH
+                                          + g->ax + xx] / 255.0f;
+            int ry  = (int)(oy + yy * sy);
+            int rxd = (int)(ox + xx * sx);
+            int rxf = (int)(ox + (g->aw - 1 - xx) * sx);
+            if (ry < 0 || ry >= H || rxd >= W || rxf < 0 || rxf >= W)
+                continue;
+            float rd = px[(ry * W + rxd) * 4] / 255.0f;
+            float rf = px[(ry * W + rxf) * 4] / 255.0f;
+            sd += (rd - cov) * (rd - cov);
+            sf += (rf - cov) * (rf - cov);
+        }
+    *direct = sd;
+    *flip = sf;
+}
+
+/* project a world point through a camera into screen px (y down) */
+static void proj3(const ame_camera *c, ame_v3 p, float *sx, float *sy) {
+    float x = c->vp.m[0]*p.x + c->vp.m[4]*p.y + c->vp.m[8]*p.z + c->vp.m[12];
+    float y = c->vp.m[1]*p.x + c->vp.m[5]*p.y + c->vp.m[9]*p.z + c->vp.m[13];
+    float w = c->vp.m[3]*p.x + c->vp.m[7]*p.y + c->vp.m[11]*p.z + c->vp.m[15];
+    *sx = (x / w * 0.5f + 0.5f) * (float)c->vw;
+    *sy = (1.0f - (y / w * 0.5f + 0.5f)) * (float)c->vh;
+}
+
 /* FBO: EGL surfaceless has NO default framebuffer - render into a texture */
 static PFNGLGENFRAMEBUFFERSPROC glGenFramebuffers_;
 static PFNGLBINDFRAMEBUFFERPROC glBindFramebuffer_;
@@ -174,7 +228,6 @@ int main(void) {
     UT_ASSERT(h1 == h2);
 
     UT_CASE("output not the clear color (something drew)");
-    static uint8_t px[W * H * 4];
     rp_read_pixels(px, W, H);
     /* project the red card CENTER through the camera to find its pixel */
     ame_v4 c = { 0 };
@@ -205,51 +258,165 @@ int main(void) {
      * Render glyph 'F' (strongly asymmetric) big on an ortho screen and
      * correlate the pixels with the atlas bitmap: direct must beat the
      * horizontally-flipped hypothesis. Catches any L-R mirroring. */
-    UT_CASE("text orientation matches atlas (not mirrored)");
-    ame_camera cam2;
-    camera_viewport(camera_ortho2d(camera_desc(&cam2)), W, H);
-    camera_build(&cam2);
-    rp_set_camera(&cam2);
-    ame_text_layout f;
-    const float SCALE = 4.0f;
-    text_layout("F", 0, AME_TEXT_ALIGN_L, SCALE, &f);
-    rp_begin_frame();
-    text_draw_screen(&f, 40, 40, (float[4]){ 1, 1, 1, 1 }, 10);
-    rp_end_frame();
-    rp_read_pixels(px, W, H);
-    /* find the glyph bbox (bright on dark bg) */
-    int minx = W, maxx = 0, miny = H, maxy = 0;
-    for (int y = 0; y < H; y++)
-        for (int x = 0; x < W; x++)
-            if (px[(y * W + x) * 4] > 120) {
-                if (x < minx) minx = x; if (x > maxx) maxx = x;
-                if (y < miny) miny = y; if (y > maxy) maxy = y;
-            }
-    UT_ASSERTF(maxx > minx && maxy > miny, "glyph F not visible");
-    const ame_font_glyph *fg = NULL;
-    for (int i = 0; i < ame_font_glyph_count; i++)
-        if (ame_font_glyphs[i].cp == 'F') fg = &ame_font_glyphs[i];
-    UT_ASSERTF(fg, "glyph F missing from atlas");
-    double ssd_direct = 0, ssd_flip = 0;
-    for (int yy = 0; yy < fg->ah; yy++)
-        for (int xx = 0; xx < fg->aw; xx++) {
-            float cov = ame_font_atlas_a8[(fg->ay + yy) * AME_FONT_ATLAS_WIDTH
-                                          + fg->ax + xx] / 255.0f;
-            int rx_d = minx + (int)(xx * SCALE);
-            int rx_f = minx + (int)((fg->aw - 1 - xx) * SCALE);
-            int ry = miny + (int)(yy * SCALE);
-            if (rx_d >= W || rx_f >= W || ry >= H) continue;
-            float rd = px[(ry * W + rx_d) * 4] / 255.0f;
-            float rf = px[(ry * W + rx_f) * 4] / 255.0f;
-            ssd_direct += (rd - cov) * (rd - cov);
-            ssd_flip   += (rf - cov) * (rf - cov);
-        }
-    printf("    F ssd direct=%.1f flipped=%.1f bbox %d..%d x %d..%d\n",
-           ssd_direct, ssd_flip, minx, maxx, miny, maxy);
-    UT_ASSERTF(ssd_direct < ssd_flip * 0.6,
-               "text looks MIRRORED (direct %.1f vs flip %.1f)",
-               ssd_direct, ssd_flip);
+    UT_CASE("text orientation matches atlas (SCREEN path)");
+    {
+        ame_camera cam2;
+        camera_viewport(camera_ortho2d(camera_desc(&cam2)), W, H);
+        camera_build(&cam2);
+        rp_set_camera(&cam2);
+        ame_text_layout f;
+        text_layout("F", 0, AME_TEXT_ALIGN_L, 4.0f, &f);
+        rp_begin_frame();
+        text_draw_screen(&f, 40, 40, (float[4]){ 1, 1, 1, 1 }, 10);
+        rp_end_frame();
+        rp_read_pixels(px, W, H);
+        const ame_font_glyph *fg = find_glyph('F');
+        UT_ASSERT(fg != NULL);
+        double sd, sf;
+        f_ssd(fg, 40.0f + fg->xoff * 4.0f,
+              40.0f + (AME_FONT_ASCENT + fg->yoff) * 4.0f, 4.0f, 4.0f, &sd, &sf);
+        printf("    F screen  ssd direct=%.1f flipped=%.1f\n", sd, sf);
+        UT_ASSERTF(sd < sf * 0.6, "SCREEN text mirrored (%.1f vs %.1f)", sd, sf);
+    }
 
+    UT_CASE("text orientation matches atlas (WORLD path, identity pose)");
+    {
+        ame_camera cam2;
+        camera_viewport(camera_ortho2d(camera_desc(&cam2)), W, H);
+        camera_build(&cam2);
+        rp_set_camera(&cam2);
+        ame_text_layout f;
+        text_layout("F", 0, AME_TEXT_ALIGN_L, 1.0f, &f);
+        /* raw glyph px x4 via the pose; the ortho camera centers world 0,0,
+         * so anchor at the view's top-left (rp_screen_origin) to land at
+         * true screen (40,40) */
+        float oxx, oyy;
+        rp_screen_origin(&oxx, &oyy);
+        float pose[16] = { 4,0,0,0,  0,4,0,0,  0,0,4,0,
+                           40 + oxx, 40 + oyy, 0, 1 };
+        rp_begin_frame();
+        text_draw_world(&f, pose, (float[4]){ 1, 1, 1, 1 }, 10);
+        rp_end_frame();
+        rp_read_pixels(px, W, H);
+        const ame_font_glyph *fg = find_glyph('F');
+        double sd, sf;
+        f_ssd(fg, 40.0f + fg->xoff * 4.0f,
+              40.0f + (AME_FONT_ASCENT + fg->yoff) * 4.0f, 4.0f, 4.0f, &sd, &sf);
+        printf("    F world   ssd direct=%.1f flipped=%.1f\n", sd, sf);
+        UT_ASSERTF(sd < sf * 0.6, "WORLD text mirrored (%.1f vs %.1f)", sd, sf);
+    }
+
+    UT_CASE("text orientation matches atlas (BILLBOARD pose, 3D camera)");
+    {
+        /* the exact pose construction the game's scoreboard uses:
+         * col0 = camera right, col1 = -camera up (layout y-down) */
+        ame_camera camF;
+        camera_viewport(camera_pos(camera_persp3d(camera_desc(&camF)),
+                                   0, 0, 5), W, H);
+        camera_look(&camF, 0, 0, 0);
+        camera_fov_deg(&camF, 50.0f);
+        camera_depth_range(&camF, 0.1f, 100.0f);
+        camera_build(&camF);
+        rp_set_camera(&camF);
+        ame_v3 fw = ame_v3_norm(ame_v3_sub(camF.look, camF.pos));
+        ame_v3 r  = ame_v3_norm(ame_v3_cross(fw, camF.up));
+        ame_v3 u  = ame_v3_cross(r, fw);
+        const float s = 0.10f;
+        ame_v3 t = ame_v3_(-1.1f, 0.8f, 0); /* top-left anchor, world */
+        float pose[16] = {
+            r.x * s,  r.y * s,  r.z * s,  0,
+           -u.x * s, -u.y * s, -u.z * s,  0,
+            0, 0, 0, 0,
+            t.x, t.y, t.z, 1,
+        };
+        ame_text_layout f;
+        text_layout("F", 0, AME_TEXT_ALIGN_L, 1.0f, &f);
+        rp_begin_frame();
+        text_draw_world(&f, pose, (float[4]){ 1, 1, 1, 1 }, 10);
+        rp_end_frame();
+        rp_read_pixels(px, W, H);
+        const ame_font_glyph *fg = find_glyph('F');
+        float o_x, o_y, e_x, e_y;
+        /* cell origin = line origin + xoff right - (ascent+yoff) down */
+        ame_v3 cell_t = ame_v3_add(
+            ame_v3_add(t, ame_v3_scale(r, s * fg->xoff)),
+            ame_v3_scale(u, -s * (AME_FONT_ASCENT + fg->yoff)));
+        proj3(&camF, cell_t, &o_x, &o_y);
+        proj3(&camF, ame_v3_add(t, ame_v3_scale(r, s * fg->aw)), &e_x, &e_y);
+        proj3(&camF, ame_v3_add(cell_t, ame_v3_scale(r, s * fg->aw)), &e_x, &e_y);
+        float px_sx = e_x - o_x;
+        proj3(&camF, ame_v3_sub(cell_t, ame_v3_scale(u, s * fg->ah)), &e_x, &e_y);
+        float px_sy = e_y - o_y;
+        double sd, sf;
+        f_ssd(fg, o_x, o_y, px_sx / fg->aw, px_sy / fg->ah, &sd, &sf);
+        int bbx0, bbx1, bby0, bby1;
+        bool has_ink = bright_bbox(&bbx0, &bbx1, &bby0, &bby1);
+        printf("    F billboard ssd direct=%.3f flipped=%.3f (cell %.1fx%.1f px "
+               "origin %.1f,%.1f ink_bbox=%d %d..%d x %d..%d)\n",
+               sd, sf, px_sx, px_sy, o_x, o_y, (int)has_ink, bbx0, bbx1, bby0, bby1);
+        {   /* sample diagnostics: how many samples had ink? */
+            int n_ink_cov = 0, n_ink_rd = 0;
+            for (int yy = 0; yy < fg->ah; yy++)
+                for (int xx = 0; xx < fg->aw; xx++) {
+                    float cov = ame_font_atlas_a8[(fg->ay + yy) * AME_FONT_ATLAS_WIDTH
+                                                  + fg->ax + xx] / 255.0f;
+                    int ry = (int)(o_y + yy * (px_sy / fg->ah));
+                    int rx = (int)(o_x + xx * (px_sx / fg->aw));
+                    if (cov > 0.3f) n_ink_cov++;
+                    if (ry >= 0 && ry < H && rx >= 0 && rx < W
+                        && px[(ry * W + rx) * 4] > 90) n_ink_rd++;
+                }
+            printf("      diag: atlas ink cells=%d rendered ink samples=%d\n",
+                   n_ink_cov, n_ink_rd);
+        }
+        UT_ASSERTF(sd < sf * 0.6, "BILLBOARD text mirrored (%.1f vs %.1f)",
+                   sd, sf);
+    }
+
+    UT_CASE("camera aspect: square stays square after viewport change");
+    {
+        /* project a 2x2 world square at z=0 through c->vp into SCREEN px */
+        #define PROJ_PX(c, X, Y, ox, oy) do { \
+            ame_v3 w_ = ame_v3_(X, Y, 0); \
+            float cx_ = (c)->vp.m[0]*w_.x + (c)->vp.m[4]*w_.y + (c)->vp.m[8]*w_.z + (c)->vp.m[12]; \
+            float cy_ = (c)->vp.m[1]*w_.x + (c)->vp.m[5]*w_.y + (c)->vp.m[9]*w_.z + (c)->vp.m[13]; \
+            float cw_ = (c)->vp.m[3]*w_.x + (c)->vp.m[7]*w_.y + (c)->vp.m[11]*w_.z + (c)->vp.m[15]; \
+            *(ox) = (cx_ / cw_ * 0.5f + 0.5f) * (c)->vw; \
+            *(oy) = (0.5f - cy_ / cw_ * 0.5f) * (c)->vh; \
+        } while (0)
+        ame_camera c;
+        camera_viewport(camera_persp3d(camera_desc(&c)), 800, 600);
+        camera_pos(&c, 0, 0, 5);
+        camera_look(&c, 0, 0, 0);
+        camera_fov_deg(&c, 50.0f);
+        camera_depth_range(&c, 0.1f, 100.0f);
+        camera_build(&c);
+        float x0, y0, x1, y1;
+        PROJ_PX(&c, -1, -1, &x0, &y0);
+        PROJ_PX(&c,  1,  1, &x1, &y1);
+        float w1 = fabsf(x1 - x0), h1 = fabsf(y1 - y0);
+        UT_ASSERTF(fabsf(w1 / h1 - 1.0f) < 0.05f,
+                   "square not square at 800x600 (ratio %.3f)", w1 / h1);
+        /* edge point: off-right at 4:3 ... */
+        float ex, ey;
+        PROJ_PX(&c, 3.2f, 0, &ex, &ey);
+        UT_ASSERTF(ex > 800.0f, "point should be off-right at 800x600 (%.0f)", ex);
+        camera_viewport(&c, 1600, 600); /* 8:3 viewport, aspect must follow */
+        camera_build(&c);
+        PROJ_PX(&c, -1, -1, &x0, &y0);
+        PROJ_PX(&c,  1,  1, &x1, &y1);
+        float w2 = fabsf(x1 - x0), h2 = fabsf(y1 - y0);
+        UT_ASSERTF(fabsf(w2 / h2 - 1.0f) < 0.05f,
+                   "square stretched at 1600x600 (ratio %.3f) - stale aspect",
+                   w2 / h2);
+        UT_ASSERTF(fabsf(w2 - w1) < w1 * 0.05f && fabsf(h2 - h1) < h1 * 0.05f,
+                   "px size should be height-driven, unchanged (%.0f->%.0f)",
+                   w1, w2);
+        /* ... but on-screen at 8:3 (field widened, not the square stretched) */
+        PROJ_PX(&c, 3.2f, 0, &ex, &ey);
+        UT_ASSERTF(ex < 1600.0f, "point should be visible at 1600x600 (%.0f)", ex);
+        #undef PROJ_PX
+    }
     rp_shutdown();
     eglMakeCurrent(dpy, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
     eglDestroyContext(dpy, ctx);

@@ -5,6 +5,7 @@
 #include <ame/render.h>
 
 #include <GL/glcorearb.h> /* Khronos core typedefs+enums; fns via loader */
+#include <math.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -505,6 +506,15 @@ void rp_end_frame(void) {
         i = j;
     }
     S.quads = n;
+}
+
+void rp_screen_origin(float *ox, float *oy) {
+    float w = (float)(S.cam.vw / S.cam.zoom);
+    float h = (float)(S.cam.vh / S.cam.zoom);
+    float cx = S.cam.snap ? floorf(S.cam.pos.x) : S.cam.pos.x;
+    float cy = S.cam.snap ? floorf(S.cam.pos.y) : S.cam.pos.y;
+    if (ox) *ox = cx - w * 0.5f;
+    if (oy) *oy = cy - h * 0.5f;
 }
 
 bool rp_read_pixels(uint8_t *rgba_out, int w, int h) {
