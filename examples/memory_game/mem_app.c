@@ -117,7 +117,7 @@ int app_init(void) {
             &CAM, 1280, 720);
 
     if (text_init(true) >= 0) {
-        char buf[8];
+        char buf[16];
         pair_layout_count = (GRID_COLS * GRID_ROWS) / 2;
         if (pair_layout_count > 32)
             pair_layout_count = 32;

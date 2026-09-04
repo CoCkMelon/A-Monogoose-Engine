@@ -142,7 +142,6 @@ int text_layout(const char *utf8, float box_w, int align, float scale,
         return 0;
 
     uint32_t color = 0xFFFFFFu;
-    float cursor[256];   /* x offset of each element on the current line */
     int line_first[64];  /* first element index per line */
     int line_count = 0;
     int line_start_el = 0;
@@ -206,10 +205,7 @@ int text_layout(const char *utf8, float box_w, int align, float scale,
             e->y = pen_y;
             e->color = color;
             e->glyph = glyph;
-            cursor[out->count] = pen_x;
             out->count++;
-        } else if (!out && total < 256) {
-            cursor[total] = pen_x;
         }
         total++;
         pen_x += adv;
@@ -332,7 +328,11 @@ void text_draw_world(const ame_text_layout *l, const float pose[16],
         ame_v3 c1 = ame_m4_xform_point(m, ame_v3_(x0 + w, y0, 0));
         ame_v3 c2 = ame_m4_xform_point(m, ame_v3_(x0 + w, y0 + h, 0));
         ame_v3 c3 = ame_m4_xform_point(m, ame_v3_(x0, y0 + h, 0));
+        float q0[3] = { c0.x, c0.y, c0.z };
+        float q1[3] = { c1.x, c1.y, c1.z };
+        float q2[3] = { c2.x, c2.y, c2.z };
+        float q3[3] = { c3.x, c3.y, c3.z };
         rp_push_quad(g_atlas_tex >= 0 ? g_atlas_tex : rp_white_texture(),
-                     &c0.x, &c1.x, &c2.x, &c3.x, u0, v0, u1, v1, col, layer);
+                     q0, q1, q2, q3, u0, v0, u1, v1, col, layer);
     }
 }
