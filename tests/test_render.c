@@ -12,6 +12,7 @@
 #include <ame/math.h>
 #include <ame/render.h>
 #include <ame/text.h>
+#include "font_atlas.h" /* generated: ground truth for orientation test */
 
 #include <EGL/egl.h>
 #include <GL/glcorearb.h>
@@ -199,6 +200,55 @@ int main(void) {
 
     stbi_write_png("render_golden.png", W, H, 4, px, W * 4);
     printf("    wrote render_golden.png\n");
+
+    /* --- ground-truth ORIENTATION check ---------------------------------
+     * Render glyph 'F' (strongly asymmetric) big on an ortho screen and
+     * correlate the pixels with the atlas bitmap: direct must beat the
+     * horizontally-flipped hypothesis. Catches any L-R mirroring. */
+    UT_CASE("text orientation matches atlas (not mirrored)");
+    ame_camera cam2;
+    camera_viewport(camera_ortho2d(camera_desc(&cam2)), W, H);
+    camera_build(&cam2);
+    rp_set_camera(&cam2);
+    ame_text_layout f;
+    const float SCALE = 4.0f;
+    text_layout("F", 0, AME_TEXT_ALIGN_L, SCALE, &f);
+    rp_begin_frame();
+    text_draw_screen(&f, 40, 40, (float[4]){ 1, 1, 1, 1 }, 10);
+    rp_end_frame();
+    rp_read_pixels(px, W, H);
+    /* find the glyph bbox (bright on dark bg) */
+    int minx = W, maxx = 0, miny = H, maxy = 0;
+    for (int y = 0; y < H; y++)
+        for (int x = 0; x < W; x++)
+            if (px[(y * W + x) * 4] > 120) {
+                if (x < minx) minx = x; if (x > maxx) maxx = x;
+                if (y < miny) miny = y; if (y > maxy) maxy = y;
+            }
+    UT_ASSERTF(maxx > minx && maxy > miny, "glyph F not visible");
+    const ame_font_glyph *fg = NULL;
+    for (int i = 0; i < ame_font_glyph_count; i++)
+        if (ame_font_glyphs[i].cp == 'F') fg = &ame_font_glyphs[i];
+    UT_ASSERTF(fg, "glyph F missing from atlas");
+    double ssd_direct = 0, ssd_flip = 0;
+    for (int yy = 0; yy < fg->ah; yy++)
+        for (int xx = 0; xx < fg->aw; xx++) {
+            float cov = ame_font_atlas_a8[(fg->ay + yy) * AME_FONT_ATLAS_WIDTH
+                                          + fg->ax + xx] / 255.0f;
+            int rx_d = minx + (int)(xx * SCALE);
+            int rx_f = minx + (int)((fg->aw - 1 - xx) * SCALE);
+            int ry = miny + (int)(yy * SCALE);
+            if (rx_d >= W || rx_f >= W || ry >= H) continue;
+            float rd = px[(ry * W + rx_d) * 4] / 255.0f;
+            float rf = px[(ry * W + rx_f) * 4] / 255.0f;
+            ssd_direct += (rd - cov) * (rd - cov);
+            ssd_flip   += (rf - cov) * (rf - cov);
+        }
+    printf("    F ssd direct=%.1f flipped=%.1f bbox %d..%d x %d..%d\n",
+           ssd_direct, ssd_flip, minx, maxx, miny, maxy);
+    UT_ASSERTF(ssd_direct < ssd_flip * 0.6,
+               "text looks MIRRORED (direct %.1f vs flip %.1f)",
+               ssd_direct, ssd_flip);
 
     rp_shutdown();
     eglMakeCurrent(dpy, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);

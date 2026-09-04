@@ -137,6 +137,7 @@ int text_layout(const char *utf8, float box_w, int align, float scale,
         out->npause = 0;
         out->w = 0;
         out->h = 0;
+        out->scale = scale;
     }
     if (!utf8)
         return 0;
@@ -289,8 +290,9 @@ void text_draw_screen(const ame_text_layout *l, float x, float y,
                       const float tint[4], float layer) {
     if (!l)
         return;
+    float sc = l->scale > 0.0f ? l->scale : 1.0f;
     for (int i = 0; i < l->count; i++)
-        draw_glyph(&l->el[i], x, y, 1.0f, tint, layer);
+        draw_glyph(&l->el[i], x, y, sc, tint, layer);
 }
 
 void text_draw_world(const ame_text_layout *l, const float pose[16],

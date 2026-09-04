@@ -27,6 +27,9 @@ int  app_event(const void *sdl_event);
  * in_held/in_pressed. Publish snapshots for the render thread. Non-zero
  * requests app shutdown (error code propagates). */
 int  app_fixed(float dt);
+/* MAIN THREAD: window size changed (engine already did rp_viewport);
+ * rebuild cameras/projections here so content never stretches. */
+void app_resize(int w, int h);
 /* MAIN THREAD: build + submit one frame from the latest snapshot */
 int  app_render(void);
 void app_quit(void);

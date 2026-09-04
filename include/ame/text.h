@@ -38,6 +38,7 @@ typedef struct {
 typedef struct {
     ame_txt_el   el[AME_TXT_MAX_GLYPHS];
     int          count;
+    float        scale;   /* draw scale captured at layout time */
     ame_txt_pause pause[32];
     int          npause;
     float        w, h;     /* measured box */

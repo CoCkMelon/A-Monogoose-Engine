@@ -29,6 +29,23 @@ WHAT EXISTS (all tested)
   smoke, release build) + ASan job
 - docs/: the full spec (copied verbatim from the engine_spec upload)
 
+SESSION 2 FIXES (user-reported, all verified headless)
+- Software cursor: system cursor hidden (SDL_HideCursor), game draws an
+  in-scene camera-facing quad where the mouse ray meets the table
+  (draw_cursor, render thread reads input atomics directly - sub-tick).
+- Hover: logic thread raycasts mouse->card each 1 ms step, eases per-card
+  lift (g_lift, ~50 ms) + highlight, published in the snapshot. Pickable
+  only in PICK1/PICK2 on face-down unmatched cards.
+- Resize stretch: app_resize(w,h) hook (app.h); app_sdl rebuilds nothing
+  itself - game rebuilds camera (viewport+build+rp_set_camera).
+- Text orientation: billboard_pose had layout-down -> world-UP (vertical
+  mirror); now col1 = -u. Card labels: face normal was (0,ca,-sa) i.e.
+  INTO the table when open; correct panel basis is R_x(-a):
+  v=(0,sa,ca), n=(0,-ca,sa). Ground-truth test renders glyph 'F' and
+  correlates pixels vs the atlas bitmap (direct must beat hflip ~4x+).
+- text_draw_screen hardcoded glyph scale 1 ignoring the layout scale -
+  layout now carries its scale and draw honors it (test caught it).
+
 PITFALLS HIT THIS SESSION (do not rediscover)
 - SDL_main.h: Debian SDL3's SDL.h does NOT pull SDL_main.h; the bootstrap
   defines SDL_MAIN_USE_CALLBACKS + includes <SDL3/SDL_main.h> explicitly in

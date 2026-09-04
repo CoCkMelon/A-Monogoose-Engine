@@ -121,8 +121,14 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
         atomic_store_explicit(&g_run, 0, memory_order_relaxed);
         return SDL_APP_SUCCESS;
     case SDL_EVENT_WINDOW_RESIZED:
-        rp_viewport((int)event->window.data1, (int)event->window.data2);
+    case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED: {
+        int w = (int)event->window.data1, h = (int)event->window.data2;
+        if (w > 0 && h > 0) {
+            rp_viewport(w, h);
+            app_resize(w, h);
+        }
         return SDL_APP_CONTINUE;
+    }
     default:
         break;
     }
