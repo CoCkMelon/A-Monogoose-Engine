@@ -1,0 +1,113 @@
+ame-next ENGINE SPEC
+File: render.txt - drawing
+
+GOAL
+Fast drawing in very few GL draw calls for BOTH a 2D mode (batched
+sprites/tiles, pixel-perfect camera) and a 3D mode (meshes under a
+3D camera). One renderer and one shader set serve both. Native and
+web share the GLSL.
+
+FIRST MILESTONE - SINGLE-PASS TEXTURED RENDERER, 2D AND 3D TOGETHER (v0)
+  The v0 renderer is SINGLE-PASS and TEXTURED, and it serves BOTH
+  dimensions from the one C core at the same time - 2D is not done
+  first with 3D deferred. Concretely:
+    - ONE shader program + ONE material.
+    - 2D: textured quads/sprites packed into ONE dynamic batch.
+    - 3D: UNLIT textured meshes drawn in that SAME single pass/batch
+      (a 3D camera + per-object world matrix + depth; no lighting
+      yet - lighting is advanced, later).
+  The aim is as few GL calls as possible (ideally one draw per frame
+  on one atlas for the 2D path; a small number for 3D meshes). No
+  post-processing, no multi-pass, no lighting, no second pass of any
+  kind yet. UI is single-pass too: world, in-scene UI and text are all
+  in this one pass/batch (ui.txt). This is what makes the first game -
+  an online competitive MEMORY game whose cards are real 3D panels
+  that flip open/closed, whose board/scoreboard UI is in-scene
+  billboards (README FIRST GAME) - playable in one pass: the card grid
+  uses the 3D mesh path and the UI sits in the SAME pass.
+  MULTIPASS is a LATER decision: it is deferred until the renderer and
+  the needs are concrete, then decided in light of what the renderer
+  actually is (see the note after rule 5). Do not design for multipass
+  now.
+
+RULES
+1. ONE renderer, ONE shader set.
+   Desktop (POSIX + Windows) = OpenGL core via glad. Web = WebGL2 via
+   Emscripten. Android = OpenGL ES via SDL/EGL. Use shared GLSL
+   (GLSL ES subset) for all three, so the same shaders/VAO/texture
+   path runs on desktop GL, GLES, and WebGL. NO second renderer for
+   any target.
+   The build dimension macro (AME_2D / AME_3D, see principles) picks
+   which camera + vertex path is active, not a separate engine.
+   Both dimension modes are single-pass textured in v0; the first
+   game is 2D, but the renderer is not 2D-only.
+
+2. Batch sprites/tiles into one dynamic vertex buffer.
+   Group by texture page, sort by page then layer.
+   Aim for ONE draw call per frame when everything is on one atlas.
+
+3. Nearest sampling for pixel art. Atlas pages have at least 2px
+   padding so edges do not bleed.
+
+4. Pixel-perfect camera: integer-snapped position, integer zoom
+   steps only, glViewport set on init and on every resize.
+
+5. SINGLE PASS for v0: each frame is clear, then ONE batch submission
+   that draws world + in-scene UI + text together. All drawing goes
+   through the batch/pipeline module. No scattered glDraw calls from
+   random files, and NO separate UI pass - UI is single-pass (ui.txt).
+   Multipass (a separate UI pass, post-processing, offscreen targets)
+   is intentionally deferred; decide later based on what the renderer
+   turns out to be and on a real need. Until then the pipeline stays
+   a single clear + one batch + present.
+
+6. 2D AND 3D MODES share the renderer.
+   - 2D mode: pixel-perfect camera (integer-snapped position,
+     integer zoom steps), sprite/tile batch (rule 2), nearest
+     sampling (rule 3). This is the 2D pixel-art path.
+   - 3D mode: a 3D camera (position + look + projection), a mesh
+     pass with per-object world matrices, depth on, lighting if
+     needed. The engine renders with its OWN GL pipeline (no external
+     render lib such as sokol) so there is one renderer for both.
+   - UI and text are in-scene geometry in both modes (ui.txt,
+     text.txt). Billboards/planar text and the UI layer are pose
+     features of the same mesh path, not a second renderer.
+
+VERTEX FORMAT
+  2D: position x,y / uv u,v / color rgba / layer
+  3D: position x,y,z / normal / uv / color rgba / layer
+  Push functions append to a buffer that is rewritten in place each
+  frame (never reallocated). The batch and pipeline code is shared;
+  only the vertex layout + camera + shader are chosen by dimension.
+
+BUILDERS
+The pipeline/camera setup is a setup-layer builder (see principles).
+The per-frame vertex buffer is hot state: one owned buffer, updated
+in place, not wrapped in per-draw objects.
+
+TEXTURES
+Small integer ids into a static texture registry loaded once.
+No creating textures per frame, no leaks.
+
+EXAMPLE API (render_pipeline.h, extern "C")
+  void rp_init(camera, w, h)
+  void rp_begin_frame()
+  void rp_push_sprite(tex, x, y, w, h, u0,v0,u1,v1, tint[4], layer)
+  void rp_end_frame()       upload verts, draw ranges, present
+  texture rp_load_texture(pixels, w, h, comps, filter)
+
+BANNED
+  - Rebinding programs/buffers per sprite (kills batching).
+  - New vertex buffer each frame; silent overflow (assert or drop).
+  - GL calls scattered across gameplay code.
+  - A second GLSL / renderer for web.
+  - A separate 2D renderer and 3D renderer with no shared layer.
+  - Many independent texture binds when one atlas would do.
+
+CHECK
+  A 2D build renders 1000 sprites in a handful of draw calls with a
+  pixel-perfect camera; resize/camera-follow keep pixels aligned.
+  A 3D build renders a mesh scene under a 3D camera, with in-scene
+  UI and world labels on top, in few draw calls. Both builds use the
+  same renderer core. Native and web look the same. No texture/
+  buffer leaks across many resizes.

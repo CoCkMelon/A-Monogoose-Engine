@@ -1,0 +1,111 @@
+ame-next ENGINE SPEC
+File: physics.txt - geometry at v0; raw Box2D/Box3D later
+
+GOAL
+Keep collision and motion SIMPLE and dependency-free at v0. There is
+NO physics engine / rigid-body solver at v0 - the engine does
+GEOMETRY only. A project that later wants full rigid-body dynamics
+links Box2D (2D) or Box3D (3D) DIRECTLY and calls their RAW API with
+no wrapper. One file, one philosophy: geometry now, physics only when
+a specific project demands it, and then via the stock libs untouched.
+
+DECISION - NO PHYSICS AT V0, JUST GEOMETRY
+  v0 has NO rigid-body solver, no joints, no gravity stepper, no
+  physics engine of any kind. The engine relies on pure geometry:
+    - Intersections: line with shape, shape with shape (AABB, circle/
+      sphere, box/OBB, capsule).
+    - Raycasts (line vs shape/mesh), returns nearest hit.
+    - Overlap / containment tests.
+    - Approximation of an arbitrary mesh by PRIMITIVES as a collision
+      proxy (a mesh is queried as its bounding primitive(s) for cheap
+      tests) - this is still geometry, not physics.
+  Actors move themselves (their own velocity/position code in the
+  fixed step); the game checks collisions against static world
+  geometry with the query module and reacts (stop, hurt, push back)
+  in its own code. There is no solver resolving contacts for you.
+  This is intentional: it removes an entire dependency + integration
+  surface at v0, keeps the sim fully under our control and
+  deterministic. The first game (a Memory game) uses the geometry
+  module only lightly (it is turn logic + 3D card animation); the
+  query module is still built and tested at v0 as the engine's shared
+  collision/raycasting layer for whichever game needs it.
+
+WHAT "GEOMETRY" INCLUDES / EXCLUDES
+  INCLUDED at v0 (a reusable collision-query module):
+    - line/shape and shape/shape intersection predicates (2D + 3D),
+    - raycasts against static shapes and mesh proxies,
+    - AABB/sphere overlap, distance, containment,
+    - mesh -> primitive approximation (broad or per-part) for queries,
+    - a broad-phase (BVH/uniform grid) that also serves as the
+      geometry query structure for the later ray-tracing stage.
+    This is pure math; no stateful bodies, no solver, no inertia.
+  EXCLUDED at v0 (deferred, NOT custom-built):
+    - rigid-body dynamics (gravity integration, impulses, constraints,
+      joints, ragdolls, stacked bodies) - not needed by the first
+      game (Memory) and not an engine feature at v0.
+
+LATER - RAW Box2D / Box3D, OPT-IN, NO ABSTRACTION
+  When a LATER project genuinely needs full dynamics, it uses the
+  stock libs UNTOUCHED:
+    - Box2D for 2D, Box3D for 3D (both C by Erin Catto).
+    - Call their RAW public API directly. There is NO thin C bridge,
+      no wrapper, no facade, no engine abstraction layer over them.
+      (principles rule 2: the plain API IS the engine.)
+  This is NOT a scheduled engine stage and NOT part of the v0 core.
+  It is OPT-IN per project: a game that needs physics adds the lib to
+  its own build and uses it. v0 (the Memory game) and the engine core
+  never link it.
+  Determinism note: if a later project uses Box2D/Box3D in netcode,
+  the raw lib's own determinism conventions apply (per-binary replay;
+  the game remains server-authoritative, principles.txt).
+
+DIMENSIONS
+The shared geometry core is written once; only the math varies by
+build macro (AME_2D: x,y; AME_3D: x,y,z). The query module exposes the
+same functions for 2D and 3D; the number of coordinates changes.
+
+API LAYOUT (v0 geometry module, geometry.h, extern "C")
+  Static world geometry is built once at level load from primitives or
+  mesh->primitive proxies and never changes. Dynamic actors are NOT
+  physics bodies - they are ordinary pooled entities (data.txt) whose
+  positions the game steps, and which the game tests against static
+  geometry.
+
+Example API (geometry.h, extern "C")
+  geo_init()
+  geo_add_static_box(center[..], half_extents[..])       // or circle/...
+  geo_add_static_mesh_proxy(vertices[], count)           // approx. by primitive
+  geo_rebuild_broadphase()
+
+  geo_raycast(origin[..], dir[..], max_dist)  // nearest hit or none
+  geo_line_intersects_segment(a0, a1, b0, b1) // returns bool + point
+  geo_overlap(shape_a, shape_b)               // box/circle/... overlap
+  geo_point_in_shape(p[..], shape)
+  geo_distance(a, b)
+
+  Contact/overlap outcomes are computed by the GAME each step (e.g.
+  "if geo_overlap(player_circle, hazard_box) then hurt"). There is no
+  solver and no automatic contact callback.
+
+BODY-TO-ENTITY MAP / EVENTS
+  Since there are no physics bodies at v0, gameplay maps positions
+  directly to pooled entities. Discrete "something happened" outcomes
+  (landed, hit a hazard, entered a trigger) are detected by the game
+  from these geometry tests each fixed step and pushed as events if
+  a shared library is wanted (events.txt). No physics adapter exists.
+
+BANNED
+  - A rigid-body physics engine or solver at v0.
+  - A custom in-house physics engine, ever (use raw Box2D/Box3D when
+    physics is needed).
+  - A thin bridge / wrapper / facade abstraction over Box2D/Box3D.
+  - Stepping motion with variable/unbounded dt per render frame.
+  - A physics lib linked into v0 or the engine core.
+
+CHECK
+  A demo character is moved by its own code and stopped/collided by
+  geometry queries (walls, ground, hazards) in both a 2D and a 3D
+  build. Raycasts hit correctly; mesh proxies query correctly. No
+  rigid-body solver, joint, or gravity stepper appears anywhere in the
+  v0 build. A pure C file including geometry.h compiles in both
+  dimensions. No Box2D/Box3D dependency is present in v0.

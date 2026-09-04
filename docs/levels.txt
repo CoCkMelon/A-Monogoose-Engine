@@ -1,0 +1,83 @@
+ame-next ENGINE SPEC
+File: levels.txt - levels and content
+
+GOAL
+Author and load levels and content in a way that is data-oriented,
+easy to edit, and small. No runtime scene graph, no kitchen-sink
+scene YAML, no duplicated logic.
+
+RULES
+1. A level is:
+     static geometry
+     + markers / spawn points
+     + code that places dynamic actors
+   It is NOT a runtime object/scene graph.
+
+2. NO runtime parsing of a fancy YAML scene format with embedded
+   rules or systems. That exact half-built schema is banned.
+
+3. Model geometry is imported with ASSIMP (see STATIC GEOMETRY). The
+   point is to NOT hand-roll a runtime .obj parser. Imported/cooked
+   model files are then LOADED by the game at startup, either from an
+   assets folder or embedded content (distribution is deploy.txt;
+   shipping
+   source/cooked asset files is fine, embedding is the easy option).
+
+4. Loading a level builds ONE immutable static GEOMETRY world (for the
+   geometry/collision-query module, physics.txt) and ONE static draw
+   list for the renderer, both built once at load.
+
+STATIC GEOMETRY - USE ASSIMP, DON'T WRITE A .OBJ PARSER
+  Import model geometry with ASSIMP (a mature importer) instead of
+  writing a runtime .obj reader by hand. Prefer it as a BUILD-TIME /
+  AUTHORING host tool in tools/: it reads source model files
+  (obj, gltf/glb, fbx, etc.) and writes out model files the engine
+  loads - a simple format the engine can read directly, or gltf/glb
+  read at load. Assimp is C++, so it lives in a separate tool
+  executable and is never linked into the pure-C engine or game
+  (matching the host-tool rule in text.txt). This keeps the runtime
+  simple while avoiding fragile hand-written geometry parsing.
+  For 3D prefer gltf/glb as the source format (materials/transforms
+  in the file).
+  Colliders are inferred from object names in the imported data, for
+  example BoxCollider, CircleCollider, EdgeCollider, ChainCollider,
+  MeshCollider. Non-collider objects become draw geometry. Markers
+  (see below) are also read from the model.
+
+MARKERS AND SPAWNS
+Named markers in the geometry/tool become spawn-point tables and
+trigger volumes. Gameplay refers to them by integer id, not by
+looking up strings every frame.
+
+VARIABLE CONTENT (dialogue, tuning, messages)
+Author in YAML or TOML under a content folder. A codegen tool runs
+at build time and emits static const C tables plus an index.
+Runtime reads the generated const data only.
+
+TUNING
+Damage, speeds, timers, etc. live as constants in one config header
+referenced everywhere, so tuning has a single source.
+
+SEEDS
+Deterministic seeds for anything procedural (audio melody, pickups)
+come from a per-level seed so runs reproduce.
+
+EXAMPLE API (level.h, extern "C")
+  level_load(def)    build static phys world + render draw list
+  level_unload()
+
+BANNED
+  - Parsing YAML/JSON at runtime to build a scene graph.
+  - A registry where components are added by string at runtime.
+  - Rebuilding level content in another language for web.
+  - Putting gameplay logic into a data file.
+
+CHECK
+  Editing a content YAML (a dialogue line, a message) and rebuilding
+  changes the game with no code edit.
+  Model geometry is imported (via Assimp or its cooked output) and
+  loads to build colliders from object names and spawn actors at the
+  right spots. No hand-written runtime .obj parser is used.
+  No runtime allocation during play after initial load.
+  Storing logic in a scene file is impossible (there is no scene
+  file runtime).

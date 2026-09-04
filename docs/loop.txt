@@ -1,0 +1,109 @@
+ame-next ENGINE SPEC
+File: loop.txt - app entry and game loop
+
+GOAL
+One clear program lifecycle that works the same on every target
+(POSIX desktop, Windows, Android, web), with only a tiny per-platform
+bootstrap. Game logic is shared.
+
+RULES
+1. Entry uses the SDL3 callback style:
+     SDL_AppInit, SDL_AppEvent, SDL_AppIterate, SDL_AppQuit
+   from a minimal main.c on desktop. On web a small shim maps this to
+   the Emscripten main loop; on Android an SDL3-native Android
+   bootstrap (SDL_android_main) runs the SAME app_* functions. NO
+   second copy of game logic for any target.
+
+2. THREADING (split threads, kept from A-Mongoose - see principles).
+   The MAIN thread runs SDL callbacks: window + input events and
+   rendering at display rate. A separate LOGIC thread owns and steps
+   all simulation/geometry. Shared state crosses threads via atomics /
+   published const snapshots (one writer per field; principles). On
+   web and Android, the same split is emulated under their main loops.
+
+3. All simulation advances through ONE fixed-step function on the
+   logic thread. Rendering is separate and runs at display rate on
+   the main thread.
+
+4. No game logic lives in the window/event boilerplate. Events are
+   just forwarded to the input module; input state is published to the
+   logic thread via atomics for it to read each step.
+
+FIXED STEP (>= 1000 Hz is NON-NEGOTIABLE)
+  A modern CPU runs 1000 Hz or more trivially, and that rate is
+  essential for low-latency smooth play - a coarse per-frame step is
+  NOT acceptable. Use a fixed dt of AT LEAST 1000 Hz (fixed_dt <=
+  0.001 s), as A-Mongoose did. The logic thread runs the fixed step
+  continuously at that rate, decoupled from the display refresh. It is
+  not tied to per-frame accumulator catch-up:
+    logic thread loop:  sleep until next 1 ms tick,
+                        run_all_updates(fixed_dt)
+  (On the main/SDL side an accumulator-style catch-up is NOT used for
+  gameplay - the sim owns its own high-frequency clock.)
+
+  REAL-TIME / INPUT-COUPLED ACTIONS GET SUB-TICK RESPONSE:
+    For actions that must track input with the lowest latency (aim,
+    camera, direct movement), the response time must be far below one
+    display frame. Two acceptable mechanisms, both safe under the
+    split-thread + atomics model (principles THREADING / input.txt):
+      - the >= 1000 Hz logic loop already yields sub-millisecond input
+        latency, OR
+      - a real-time input-coupled layer reads the LATEST input atomic
+        immediately (at input arrival) and updates that action's own
+        state without waiting for the next logic tick or render frame.
+    The asyncinput/SDL reader thread itself only writes raw input
+    ATOMICS (input.txt) - it never runs sim/gameplay code. Realtime
+    actions update from those atomics on a thread that owns them; they
+    do not mutate the deterministic sim's state.
+  DETERMINISTIC / SIM CASES UPDATE BEFORE THE FRAME:
+    The sim and anything that must replay are advanced only on the
+    fixed logic step, before the frame - never with raw per-frame dt.
+  Both rules together give >= 1000 Hz sim plus sub-tick input response.
+
+STATE
+Game state is module statics (data.txt) plus a reset() that rebuilds
+everything from a fixed seed for a clean retry.
+
+INIT ORDER (be consistent)
+  1 render / window / GL context
+  2 input init and bind default actions
+  3 audio init
+  4 geometry init (static world for collision queries) if used
+  5 load content (geometry, textures, audio) into static slots
+  6 init simulation (pools, player, spawns)
+  7 start the fixed step on the logic thread (1000 Hz)
+
+NAMING: CAMERA (across 2D and 3D)
+  There is ONE camera module, chosen by the build dimension macro,
+  not two separate systems. Name it camera.h with camera_* functions;
+  inside it, AME_2D builds the pixel-perfect 2D camera and AME_3D
+  builds the 3D camera (position/look/projection). Do NOT create
+  camera2d.* and camera3d.* as separate public modules. A camera is a
+  setup-layer descriptor (principles two-layer rule), created in init
+  step 1 and treated as read-only each frame.
+
+PUBLIC API SHAPE
+  app.h (extern "C")
+    int  app_init(void)
+    int  app_event(const void* sdl_event)
+    int  app_fixed(float dt)     (logic thread) run all *_update at
+                                 fixed dt = 0.001 s
+    int  app_render(void)        (main thread) build + submit one frame
+    void app_quit(void)
+  main.c (desktop): thin, only lifecycle glue; starts the logic thread.
+  web bootstrap: thin shim calling the SAME app_* functions.
+
+BANNED
+  - Advancing logic by raw per-frame dt (frame-rate dependent motion).
+  - Game logic inside event callbacks.
+  - Writing the same shared field from two threads.
+  - Separate native and web implementations of the game.
+
+CHECK
+  A sprite moves at identical fixed-step distance regardless of the
+  display refresh rate (the sim runs at >= 1000 Hz, not tied to the
+  display). Real-time input-coupled actions respond in well under one
+  display frame (sub-tick) from the latest input atomics. Two threads
+  (logic + render) run without data races under the atomics/snapshot
+  rules; ASan/TSan clean. Reset returns an identical first frame for a
+  fixed seed. No tunneling at high speed.

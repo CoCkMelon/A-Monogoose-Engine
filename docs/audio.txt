@@ -1,0 +1,78 @@
+ame-next ENGINE SPEC
+File: audio.txt
+
+GOAL
+Sound that is deterministic, low-latency, and consistent across
+desktop and web. Two source kinds: synthesized (no files needed) and
+decoded samples (opus/wav). One C API for both.
+
+RULES
+1. ONE implementation in C. Web gets the same C via Emscripten.
+   NO TypeScript or Web Audio re-implementation. (A past attempt had
+   a C synth and a TS twin that drifted. Banned.)
+
+2. Procedural synthesis does no file I/O and no allocation. Each
+   waveform is computed per sample from a small fixed state struct.
+
+3. The audio callback only pulls samples. It never calls game logic
+   and never allocates. Control params are written by the sim through
+   atomics or a published struct (one writer, see data.txt).
+
+4. Audio is deterministic for a fixed sample rate and event order,
+   so it can drive gameplay visuals (beats, energy) without drift.
+
+SOURCE KINDS
+  SYNTH     oscillator/drum/envelope patch. Params live in a fixed
+            AmeSource struct: freq, gain, pan, playing. The sim sets
+            fields; the callback reads them.
+  DECODED   a PCM buffer loaded once (decode opus, or read wav).
+            Streaming is out of scope for v0.
+
+SUPPORT
+Mono + optional stereo with constant-power pan. Add plain helper
+functions for spatial volume/pan from listener to source distance.
+Offer a beat/energy helper so gameplay can react deterministically.
+In a 3D build, spatialization is 3D: distance falloff plus per-axis
+level into a surround/stereo down-mix, not just a 2D pan. Keep the
+mixer and synthesis dimension-agnostic; only the spatial helper
+differs (2D pan vs 3D position).
+
+OCCLUSION VIA RAYCAST (audio raytracing) - DEFERRED TO A LATER STAGE
+  NOT part of v0 audio core. Audio occlusion (raycasting from the
+  LISTENER to each SOURCE, accumulating per-surface acoustic loss:
+  distance rolloff, air absorption in dB/m, surface transmission_loss_db
+  and a mono-collapse so an occluded source loses stereo width) is
+  OUT of v0 scope.
+  Staging: a LATER stage ports the EXISTING 2D audio raytracer already
+  written in A-Mongoose. Copying/adapting that working code is a SMALL
+  task; building one from scratch is a multi-turn task - so the
+  from-scratch build is deliberately deferred (v1 / a later stage), not
+  attempted in the v0 rush. When it lands it reuses the engine's own
+  geometry raycast (physics.txt) and is dimension-agnostic: 2D ray or
+  3D ray, same acoustic material model (transmission_loss_db,
+  mono_collapse). This is the AME audio_ray idea, kept and generalized,
+  but ported, not rewritten from zero.
+
+EXAMPLE API (audio.h, extern "C")
+  audio_init(sample_rate, channels)
+  audio_shutdown()
+
+  audio_new_synth(cfg)                 returns source id
+  audio_new_decoded(pcm, frames, rate)
+  audio_set(id, patch)                 publish control params
+  audio_play(id) / audio_stop(id)
+
+  audio_beat_amplitude(id)             0..1, for visuals
+
+BANNED
+  - Re-implementing the synth in another language for web.
+  - Allocating inside the audio callback.
+  - Driving visuals from wall-clock phase that can drift from the
+    synth's internal clock.
+  - Blocking file reads in the callback.
+
+CHECK
+  Headless test: render N seconds of synth + pan + limiter from a
+  fixed seed and compare to a golden buffer -> byte identical.
+  No heap growth over minutes of synthesis.
+  Native and web synth output match.

@@ -1,0 +1,162 @@
+ame-next ENGINE SPEC
+File: text.txt - text rendering
+
+GOAL
+Real, good-looking text rendering that works in both the desktop and
+web builds from one C implementation, feeds the same batch renderer
+as sprites (render.txt), and is crisp at any size or rotation.
+Serves UI, HUD, and the dialogue typewriter (dialogue.txt).
+
+WHY THIS IS HARD / WHAT BROKE BEFORE
+  - attempt 1's engine shipped a "stroke font" (stb_easy_font):
+    ugly, no antialiasing. The game had to hack around it by
+    rasterizing each string with SDL_ttf into a texture every time
+    text changed.
+  - attempt 2 had no text at all.
+  - The single-header font libs were also a compile problem
+    (include/OOM pain, fragile in a mixed C/C++ tree). "Good" here
+    must mean: the engine's own text module compiles clean with
+    warnings-as-errors and is included from exactly one place; any
+    vendored rasterizer lives in third_party/ and is exempt from
+    -Werror (build.txt rule 3).
+
+DECISIONS (from the requirements)
+  1. V0 RENDERS TEXT FROM A FONT-TO-TEXTURE GLYPH ATLAS (rasterized
+     glyphs baked into an atlas texture), drawn as textured quads.
+     This is the v0 baseline: simple, reliable, works in one pass.
+     Reason: signed-distance-field text (esp. DSDF, a separate pass
+     for multi-channel SDF edge) is more complex to implement. DSDF
+     may need its OWN pass, so it is NOT the v0 path.
+  2. Text becomes MESH geometry. Each glyph quad (from the atlas
+     texture) is tessellated using per-glyph metrics; glyph quads are
+     packed into the shared sprite/mesh batch alongside everything
+     else, so text stays in the SAME single pass/batch where possible
+     (render.txt rule 5, ui.txt). This mesh design is what lets text
+     work in 2D AND 3D from one code path: each glyph quad is placed
+     by a pose (a 2D x/y or a 3D position + orientation), so the same
+     layout feeds both.
+  3. DSDF IS OPTIONAL, decided LATER by implementation quality.
+     Do not commit DSDF to v0. Whether the engine ever uses DSDF
+     (instead of or to augment the atlas) depends on how well an LLM
+     agent implements its multi-channel pass. Rule: ship the atlas at
+     v0; only add DSDF if/when a clean implementation exists and is
+     tested. If a separate DSDF pass is needed, that is acceptable but
+     it is a LATER rendering decision (render.txt / ui.txt), not part
+     of the v0 single-pass baseline.
+  4. The atlas + glyph data can be built EITHER at startup OR at
+     build time. Prefer BUILD TIME: a host tool rasterizes the font
+     once and emits plain C arrays (atlas pixels + glyph metric
+     table) baked into the binary. Deterministic, zero startup cost,
+     identical on native and web. A startup path is an allowed
+     fallback for fonts not known until runtime.
+  5. The baking/rasterizer tool may be written in a language with
+     compile-time power (a C++ constexpr generator, or a small
+     Python tool) because that simplifies generating the tables.
+     What matters is the OUTPUT: plain C data arrays the C23 engine
+     reads. The in-engine side stays C23; if a runtime rasterizer is
+     ever needed in-engine, it lives in the single allowed C++ shim.
+     This host tool is BUILD-TIME ONLY - it is never linked into the
+     engine.
+
+FONT SOURCE
+  - Bundle the font bytes as data (the project already has a font,
+    e.g. Pixelify). For pixel-art 2D, enable nearest/point sampling
+    and integer glyph sizes. In 3D use a softer bilinear sampling;
+    this is a sampling/filter choice at draw, not a separate font.
+    (If DSDF is adopted later, its shader-based edge replaces the
+    texture-filter crispness - decision 3.)
+  - Unicode: UTF-8 input. The atlas covers the needed codepoint
+    ranges (latin, latin-ext, cyrillic, plus a fallback). A missing
+    glyph renders as a visible fallback box, never a crash.
+
+WHERE TEXT LIVES (2D and 3D)
+  Text can be placed in three ways from one layout engine:
+    - SCREEN/UI text: stays in front, in the UI layer. Used by HUD
+      and dialogue boxes.
+    - WORLD labels: placed at a world point/pose. In 3D, BILLBOARD
+      mode keeps the glyph plane facing the camera so text is always
+      readable (name tags, floating hints). In 3D, PLANAR mode lays
+      the text flat on a surface (wall signs, decals) via its pose.
+    - In 2D, world labels are just text at a world x/y, same as any
+      in-scene mesh (ui.txt says UI is in-scene meshes).
+  The layout math is identical for all; only the pose differs. Keep
+  the billboard "face camera" and planar "apply orientation" as two
+  pose helpers, not as separate text systems.
+
+TEXT PIPELINE (order)
+  decode utf-8 -> runs (inline styles) -> layout (wrap/align) ->
+  glyph list (index + position, with kerning) -> submit glyph quads
+  to the batch.
+
+FEATURES REQUIRED IN V0 (full scope was requested)
+  - Word wrap to a box width.
+  - Horizontal alignment: left, center, right. Vertical: top, center.
+  - Per-string color tint and scale.
+  - Inline rich tags in the string for runs, for example a color,
+    a size change, and a pause used by the typewriter:
+        {c=FFD700}gold{/c}, pause {p=0.5}
+    The exact tag set is defined by the layout parser; it must be
+    small, plain, and case-insensitive.
+  - UTF-8 / Unicode text (not limited to ASCII).
+  - Typewriter reveal for dialogue: the layout yields an ordered
+    glyph list, and a reveal amount 0..1 (or a glyph index) hides
+    glyphs beyond it so the UI can type out text over time.
+
+API SHAPE (text.h, extern "C")
+  Layout and drawing are two steps so the UI can measure before it
+  draws (needed for centering and dialogue boxes).
+
+    text_init()                 load baked atlas + metrics into GL
+    glyph info lookup per codepoint
+
+    measure(text, box_w) -> width, height, glyph count   (no draw)
+    layout(text, box_w, align) -> an array of positioned glyphs
+    draw_ui(layout, x, y, scale, tint)      // screen/UI position
+    draw_world(layout, pose, scale, tint)   // world pose; billboard
+                                            // or planar via pose mode
+    reveal controls feed draw a hidden-glyph count for typewriter.
+
+  The text module knows nothing about gameplay; it just places
+  glyphs. The dialogue UI (a gameplay concern) owns a text box, a
+  box width, an alignment, and a typewriter timer.
+
+QUALITY BAR
+  - Text is crisp at integer and, where possible, at non-integer scale
+    and rotation from the atlas (bilinear/trilinear filtering), not
+    the blurry per-string-raster problem of the past.
+  - Thin strokes in small sizes do not vanish. The v0 atlas handles
+    common cases; if very small/colored-thin glyphs need a crisper
+    edge, that is the moment DSDF is reconsidered (decision 3) - it
+    is optional, not required at v0.
+  - Deterministic: the same string + font + settings lays out the
+    same on native and web (byte-identical glyph positions).
+
+COMPILE / TEST REQUIREMENTS (fixes the past problems)
+  - The font code is included from exactly ONE translation unit.
+    No fragile single-header that is force-included or doubled.
+  - Warnings-as-errors in CI on the whole tree including this module.
+  - A test renders a known string and compares glyph count,
+    positions, and width against a golden expected value.
+  - A headless layout test needs no GL (layout is pure CPU); only
+    the final draw needs GL. Keep layout and draw separable so text
+    logic is unit-testable without a window.
+
+BANNED
+  - The old per-string-texture approach (rasterize every change).
+  - A separate 2D text and 3D text system (one mesh/layout engine).
+  - Depending on DSDF/SDF as a v0 requirement (atlas is v0; DSDF is an
+    optional later upgrade, decision 3 - do not let a fragile SDF
+    implementation block shipping text).
+  - Depending on a font lib that must be force-included or that
+    breaks the build; any vendored rasterizer is used from one TU
+    and compile-tested.
+  - A separate text renderer for web (same C, shared by Emscripten).
+  - Blocking font work in the audio callback or per frame.
+  - Any allocation per frame in the layout/draw hot path.
+
+CHECK
+  A UI example draws a wrapped, centered, colored line and a
+  Cyrillic line; both are crisp at 1x and 3x and when rotated.
+  The dialogue box types out with a typewriter reveal.
+  Layout tests pass headlessly; compile is clean with
+  warnings-as-errors; native and web match.

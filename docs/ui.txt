@@ -1,0 +1,94 @@
+ame-next ENGINE SPEC
+File: ui.txt - UI decision and scope
+
+STATUS / DECISION
+This is a SCOPE and ROADMAP decision for UI, not yet a full
+implementation spec. Read it, decide direction, then fill in the
+detail when UI is actually built.
+
+THE STAGED ROADMAP WE IMAGINED (and what we kept)
+  Stage A: UI as in-scene meshes/models, driven responsively by C
+           code (no heavy runtime automation).  KEEP (this engine).
+  Stage B: use a general solver (psolve: CP/LP/QP/MIP) for runtime
+           automation and game mechanics such as pathfinding.
+                                                     PARKED (below).
+  Stage C: a flat-geometry constraint-language library layered on
+           the solver.                              PARKED (below).
+
+OUT OF SCOPE FOR ame-next (parked - belongs to another engine)
+  psolve solver integration, solver-driven automation, pathfinding
+  done by solving, and any geometry constraint language are all
+  PARKED. Rationale (decision log):
+    - They add a large runtime + authoring surface.
+    - They pull toward a retained, declarative, auto-laid-out UI and
+      "smart" world - the exact opposite of the fast, small,
+      data-oriented goal of this engine (principles.txt).
+    - They are valuable ideas but a poor fit here; if pursued, they
+      belong in a separate, bigger engine. Revisit only if a concrete
+      need appears; do not pre-build it.
+
+WHAT UI MEANS IN ame-next FOR NOW (stage A only)
+  1. UI is IN-SCENE: widgets live in the game WORLD at world
+     coordinates and are drawn as MESHES in the main scene batch
+     (render.txt), not as a separate screen-space overlay. This
+     matches how text is drawn as glyph meshes (text.txt) and the
+     model/OBJ scene style. A HUD/panel may sit near the camera in
+     world space; it is still world geometry, not a UI texture pass.
+     This holds for 2D and 3D builds: in 3D, panels/labels are placed
+     at world poses, with text using billboard/planar modes
+     (text.txt). The UI is in-scene geometry either way; there is
+     no separate 2D screen-space widget pass.
+  1b. UI IS SINGLE-PASS (confirmed). UI is drawn in the SAME single
+     pass and batch as the world/text (render.txt rule 5). There is
+     no separate UI pass, no UI render target, no post pass. A
+     separate/multi pass is a deferred later decision, not part of v0.
+  2. UI is built and driven IMPERATIVELY BY C in an update function
+     (responsive, direct). The game code decides each frame where a
+     panel/button/label is and what it shows. This is deliberate:
+     "C code for responsiveness" means no waiting on a layout engine
+     or solver - the code is the layout.
+  3. Text is supplied by text.txt (layout + typewriter + wrap/align),
+     not by a separate UI text system.
+  4. Interaction is hit-testing on the meshes against pointer/action
+     input (input.txt). It is not a retained widget-object tree with
+     events per widget yet.
+
+REACTIVITY
+Gameplay and UI respond to things happening through the events
+pattern (events.txt) - discrete gameplay events are the first source.
+Later input->UI events can reuse the same ideas. For now UI reads
+current input actions and reacts to gameplay events; it does not need
+a bigger event system.
+
+MINIMAL UI PRIMITIVES (to define when built, not yet):
+  draw a panel/box (mesh + tint)
+  draw a button (box + hit-test + pressed state from input)
+  draw a bar/gauge (fuel, hp)
+  draw a text block (via text.txt) and a dialogue text box
+  a dropdown/select and a slider (needed by the data-driven screens)
+Keep this list small. There is no editor, no .ui scene file, no
+declarative markup.
+
+DATA-DRIVEN REGULAR SCREENS (allowed, bounded)
+  One narrow exception to "all UI hand-written": REGULAR, TABULAR
+  screens with many near-identical rows (settings, control bindings,
+  subtitle/localization options, list/history screens) are rendered
+  PROCEDURALLY from DATA (see settings.txt). The data is authored by
+  an AI agent; the engine renders any of it generically. This is a
+  bounded row/column/group layout over the data - it is NOT the
+  general declarative UI / auto-layout toolkit, which stays parked
+  below. If a screen needs arbitrary nesting or free layout, write it
+  by hand as C.
+
+BANNED / NOT NOW
+  - Declarative UI markup or a .ui layout file parsed at runtime.
+  - Auto-layout / constraint-solving for UI position.
+  - Retained widget hierarchy engine with per-widget events.
+  - psolve / solver / pathfinding-by-solve in this engine.
+  - A separate screen-space text renderer (text is text.txt meshes).
+
+CHECK (when UI is built)
+  A pause/HUD and a dialogue box are drawn with meshes + text.txt and
+  react (open/close, update bars, typewriter) from C each frame.
+  Buttons highlight/hit with pointer input; keyboard/action also
+  drives them. Same result native and web. No per-frame allocation.

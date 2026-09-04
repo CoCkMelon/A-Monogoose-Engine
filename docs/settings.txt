@@ -1,0 +1,267 @@
+ame-next ENGINE SPEC
+File: settings.txt - data-driven settings UI (procedural, AI-authored)
+
+GOAL
+A full, comprehensive Settings screen WITHOUT hand-writing hundreds of
+per-control C functions. Settings are DATA, and the engine renders any
+settings screen procedurally from that data. An AI agent authors the
+settings data (from a requirements doc), so adding/removing/grouping
+settings is editing YAML, never bespoke UI code.
+
+WHY THIS IS THE RIGHT FIT FOR SETTINGS (and why it stays bounded)
+  A settings menu is large and very REGULAR: rows of near-identical
+  controls (slider / toggle / dropdown / numeric / color / button),
+  grouped into categories, with presets, reset, search, tooltips.
+  Hand-coding that is a waste and drifts. But it is ALSO not a general
+  declarative UI/auto-layout engine - see ui.txt. The bounded idea:
+  a data-driven renderer for ONE family of regular, tabular screens
+  (settings, control bindings, subtitle options, dialogue-history /
+  similar lists). Layout is simple rows/columns/groups done in C over
+  the data. No nesting, no expression language, no scene-graph UI.
+
+IMPORTANT FRAMING - IT IS A CATALOG, NOT A PROMISE
+  settings.definitions.yaml is a LIST OF ALL POSSIBLE SETTINGS. Being
+  in the list does NOT mean a setting is implemented, or even
+  supported by this engine. Most of it is aspirational/industry-wide
+  (DLSS/FSR/XeSS, HDR10+, ray tracing, DirectX/Vulkan/Metal, VRS,
+  frame generation, network) and will show as unavailable for a long
+  time. Think of the file as the full taxonomy + a "supported /
+  implemented" flag on every row. Only rows actually wired do
+  anything. The file is easy to grow, so there is no cost to listing
+  the whole catalog up front (reference: docs/reference/
+  settings-taxonomy-2d3d.txt, the "Comprehensive graphics and
+  presentation settings standard").
+
+SUPPORT STATE PER SETTING (what the row means on screen)
+    implemented            active and editable (wired)
+    unsupported_build      shown but disabled, tooltip says why
+                           (e.g. "OpenGL only - DirectX unavailable")
+    not_implemented        listed but disabled, "not yet implemented"
+    hidden                 excluded by a filter (debug/advanced)
+  A filter shows "implemented only" or "everything". Listing the full
+  catalog while most rows are disabled is expected and acceptable.
+
+V0 WIRED SUBSET (what is actually active first)
+  The FIRST release wires only a small subset the renderer/audio/
+  input actually honour (~25-30). Everything else stays listed-but-
+  disabled. Wired v0 set, for the first game (Memory game; README):
+    display mode, resolution, vsync, framerate limit, render scale
+    (2D canvas + UI scale),
+    master / music / sfx / dialogue volume,
+    output + input device selection (device rows - see below),
+    UI text scale, subtitle size + language, subtitle on/off,
+    accessibility: colourblind mode, reduce flash, reduce motion,
+    input: key + button bindings/mapping (input.txt), input device
+    selection (keyboard/mouse/gamepad), mouse sensitivity + raw/low-
+    latency toggle, controller deadzone,
+    camera comfort (screen shake reduction), a graphics preset
+    (Low/Med/High) + per-category and global reset, import/export.
+  Later games add rows to the same catalog and wire them; the screen
+  mechanism itself does not change.
+
+DEFINITIONS (schema) vs VALUES (state) - two layers
+  DEFINITIONS are the static schema of every setting. They live in a
+  YAML file (settings.definitions.yaml) loaded once at init with
+  libfyaml, editable without a rebuild. An agent authors this file.
+  VALUES are the current value of each setting (and a dirty flag),
+  stored by id in a fixed table (data.txt), and persisted to YAML per
+  save.txt (plus import/export of profiles).
+
+A SETTING DEFINITION (fields)
+  id            stable key (e.g. video.vsync), used by save + appliers
+  category      which group it belongs to (display, audio, text,
+                accessibility, ui, input, camera, system, network...)
+  label         short display name
+  help          tooltip text (impact + cost), optional
+  type + control: which widget and how to edit:
+      bool            -> toggle/checkbox
+      enum            -> list of (value, label) options
+      int / float     -> slider with min, max, step (or numeric input)
+      color           -> color picker (rgba)
+      device          -> select from a device list (input device:
+                         keyboard/mouse/gamepad, or audio output/
+                         input device); a device row can hold a second
+                         per-device sub-control set (see DEVICE
+                         SETTINGS above)
+      action          -> a button that does something (reset category,
+                         clear shader cache, benchmark)
+      header / spacer -> grouping/divider only, no value
+  default      default value (definitions hold defaults; the user's
+               current value lives in the value store)
+  unit         optional (percent, Hz, nits, dB)
+  support      supported / unsupported_build / not_implemented / hidden
+  keywords     extra search words
+  group:       accessibility, audio, video, ui, perf (for filtering)
+  live         true = read every frame by a system; false = applied
+               on commit via an applier (see below)
+
+CATEGORY SCHEMA
+  The taxonomy's top sections (Display/Resolution, Framerate & Sync,
+  Anti-aliasing & Upscaling, Geometry/LOD, Textures/Materials,
+  Lighting/Shadows/RT, Volumetrics/Water/Foliage, Particles/Decals,
+  Post-processing, Camera, 2D pixel-art & stylized, Text/typography/
+  subtitles/localization, Visual accessibility, HUD/UI, System/memory,
+  Audio I/O, Input/Interaction, Network, File/save/content, and the
+  Settings-menu usability section) become categories in the file. The
+  engine only wires appliers/live reads for the items it truly
+  supports; the rest stay feature-gated as above.
+
+DEVICE SETTINGS - INPUT AND AUDIO (device-specific + selection + mapping)
+  Two regular families use the same "device" control (select from an
+  enumerated device list):
+  INPUT devices. Rows under the input category let the user pick WHICH
+  device fills each role and tune it per device, not globally:
+    - device selection: keyboard / mouse / gamepad / controller, and
+      which physical device when several are attached;
+    - per-device settings: sensitivity, deadzone, raw/low-latency
+      mode, read/polling rate, mouse acceleration - stored per device
+      so switching devices keeps its own tuning;
+    - mapping: key/button -> action remap with conflict detection
+      (writes the input.txt action/binding table).
+  Which options appear depends on the BUILD's low-level input backend,
+  chosen at COMPILE TIME between SDL and asyncinput (input.txt):
+  asyncinput builds expose the raw low-latency keyboard/mouse path, so
+  "Input Lag Reduction / raw input" is active; SDL-backend and web
+  builds expose what that path offers. Rows are marked accordingly
+  (a raw-input toggle is unsupported_build when asyncinput is not the
+  backend), never a hidden surprise.
+  AUDIO devices. Rows under the audio-I/O category select the OUTPUT
+  device (speakers/headphones/DAC/interface) and the INPUT device
+  (microphone) used for voice chat/capture, with per-device format
+  (sample rate, bit depth, buffer) and monitoring/sidetone where the
+  audio backend enumerates devices (audio.txt).
+
+APPLYING A SETTING - two kinds
+  1. LIVE (read each frame): a system reads the current value from the
+     value store directly. Examples: UI text scale, master/music/sfx/
+     dialogue volume, subtitle + dialogue options, colorblind matrix,
+     reduce-flash/reduce-motion, camera FOV/shake, crosshair, bindings.
+  2. APPLY-ON-COMMIT: takes effect when the user hits Apply (with
+     Revert/countdown). Done through an APPLIER, a small per-id
+     callback/table that sets the real thing once. Examples:
+     resolution/display mode, vsync, framerate limit, fullscreen,
+     render/render-scale. The screen shows "changed" state and Apply/
+     Revert; settings needing a restart are flagged in tooltip.
+  The settings module owns the value store + dirty/applied bookkeeping
+  and the definitions; the game registers appliers and reads live
+  values. The settings module itself has no gameplay logic.
+
+PRESETS AND PROFILES
+  Presets are named value sets (e.g. Graphics: Low/Med/High/Ultra/
+  Custom; Audio: preset; Colorblind: Off/Protanopia/Deuteranopia/
+  Tritanopia/Custom+strength). A profile = a full named snapshot of
+  current values, exportable/importable as YAML (save.txt), e.g.
+  "Laptop Battery", "4K Ultra". Per-category and global reset to
+  defaults. Built-in benchmark + stats overlay are optional system
+  settings, not core v0.
+
+RENDERING (procedural) - settings.txt UI behavior
+  A settings SCREEN module walks the definitions in category order and
+  emits, into the in-scene mesh UI (ui.txt) + text (text.txt):
+    category header, then one control row per setting.
+  It uses a small fixed widget set (draw the row by its type). Layout
+  is plain C rows/columns within the panel with simple scrolling;
+  wrapping via text.txt. Keyboard + pointer navigation; a focused row
+  shows its tooltip as a floating text box; search filters by label +
+  keywords. A "recommended/auto-configure" applies a detected profile.
+  This same bounded renderer is reused for other regular screens:
+    control bindings (input.txt remap), subtitle/localization options,
+    dialogue-history / save-slot lists. If a screen needs arbitrary
+    nesting or free layout, that is out of this mechanism's scope.
+
+REUSE OF OTHER MODULES
+  - YAML definitions + persistence: libfyaml + save.txt (dialogue.txt,
+    build.txt) - libfyaml is now used by dialogue, save/load, and
+    settings definitions.
+  - Binding remap + input device selection/per-device tuning write
+    into the input.txt action/binding/device table.
+  - Audio output/input device rows feed the audio backend's device
+    enumeration (audio.txt).
+  - Subtitle/font/language settings feed text.txt + dialogue.txt.
+  - Accessibility settings feed renderer/text (contrast, reduce flash,
+    reduce motion) and audio (mixer) where supported.
+
+AI AUTHORING (agents.txt tie-in)
+  Generating the definitions file is a good 0-SHOT agent task: feed an
+  agent a requirements doc (the reference taxonomy) + this file's
+  field schema, and it produces settings.definitions.yaml (categories,
+  settings, types, ranges, defaults, support flags, keywords). The
+  engine then needs no per-setting code beyond wiring appliers/live
+  reads for the items actually supported. If the agent emits fields it
+  cannot map, it marks them unsupported/not_implemented instead of
+  guessing.
+
+EXAMPLE (definition, YAML shape)
+  category: display
+  - id: video.display_mode
+    label: Display Mode
+    type: enum
+    options: [Windowed, Borderless Fullscreen, Fullscreen]
+    default: Windowed
+    live: false
+    applier: apply_display_mode
+    support: supported
+    help: Fullscreen gives lowest latency; Windowed is easiest to alt-tab.
+  - id: video.resolution_scale
+    label: Render Scale
+    type: int
+    min: 25  max: 300  step: 5  unit: "%"
+    default: 100
+    live: true
+    support: supported
+
+  input: (device + per-device rows)
+  - id: input.device.mouse
+    label: Mouse Device
+    type: device
+    kind: input_device
+    sub: [ input.mouse.sensitivity, input.mouse.raw, input.mouse.deadzone ]
+    default: System Mouse
+    applier: set_input_device
+    support: supported     # asyncinput backend exposes raw/low-latency
+    help: Picks the active mouse; asyncinput native builds enable the
+         raw low-latency path here (SDL/web builds mark raw unavailable).
+  - id: input.mouse.raw
+    label: Raw Input (Low Latency)
+    type: bool
+    default: true
+    live: true
+    support: unsupported_build   # flips to supported when built with
+                                 # asyncinput (input.txt)
+
+  audio: (device rows)
+  - id: audio.output_device
+    label: Output Device
+    type: device
+    kind: audio_output
+    default: System Default
+    applier: set_output_device
+    support: supported
+    help: Speakers, headphones, DAC, or interface (enumerated by the
+         audio backend).
+  - id: audio.input_device
+    label: Input Device (Mic)
+    type: device
+    kind: audio_input
+    default: System Default
+    applier: set_input_audio_device
+    support: supported
+
+BANNED / NOT NOW
+  - General declarative UI markup + a general auto-layout engine (ui.txt).
+  - Hand-writing one bespoke widget per setting.
+  - Storing engine handles/pointers in definitions.
+  - Running layout/settings work in the audio callback or per-frame
+    allocation in the hot loop.
+  - A second settings system for web (same code, same YAML).
+
+CHECK
+  Open Settings: categories and controls appear from settings.definitions
+  .yaml with no per-setting code. Editing that YAML (rename a label,
+  add a slider, add a category) changes the screen on the next load.
+  Live settings (volume, UI text scale, subtitle size) take effect
+  immediately; apply-on-commit settings (resolution, vsync) apply on
+  Apply and revert cleanly. Per-category and global reset, presets,
+  and import/export round-trip values via YAML. Full taxonomy is
+  present but feature-gated (disabled items show a reason). Same on
+  native and web. No per-frame allocation.

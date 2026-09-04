@@ -1,0 +1,179 @@
+ame-next ENGINE SPEC
+File: dialogue.txt - dialogue system
+
+GOAL
+A dialogue system that is easy and SHORT to author, plays back
+line-by-line with choices, and hooks into the game (events,
+portraits, inline effects). Content is authored as YAML.
+
+YAML PARSING (libfyaml)
+  - Dialogue .yaml files are parsed with LIBFYAML (MIT, YAML 1.2, C),
+    vendored in third_party (or vcpkg/system where available). It is
+    used by the dialogue module, by save/load (save.txt), and by
+    settings definitions (settings.txt); levels/content keep their
+    own pipeline (levels.txt).
+  - DEFAULT: runtime. Load .yaml from the content folder with
+    libfyaml at load/startup and build the runtime scene in memory.
+    Editable without a rebuild. Use the document API
+    (fy_document_build_from_file / from_string, fy_document_root,
+    node lookups) and libfyaml's accurate errors for bad files.
+  - OPTIONAL: bake-to-C. For content that must be embedded (no file
+    at runtime, or a single web binary) run a small build-time tool
+    that parses the SAME YAML (it may reuse libfyaml) and emits C
+    tables. Both paths must build the SAME runtime scene structure,
+    and for one .yaml file the runtime path and the baked path must
+    produce identical scenes (a determinism test).
+  - Scope note: the old "no runtime YAML at all" rule is relaxed for
+    dialogue, save/load (save.txt), and settings definitions
+    (settings.txt) because libfyaml gives a real parser cheaply. The
+    ban on runtime YAML SCENE GRAPHS (levels.txt) is unchanged.
+
+WHAT STAYS FROM BEFORE
+  - YAML is the authoring language. No script DSL, no CSV.
+  - Branching is "like the current engine": mostly a linear run,
+    with some lines offering choices that jump to other lines.
+    Full node graphs are out of scope.
+  - Playback walks an in-memory scene of lines; advance is driven by
+    the game (usually the player pressing a button, input.txt), so
+    dialogue can pause gameplay. Typewriter reveal is text.txt's job.
+
+WHAT CHANGES (the point of this file)
+  - Remove the verbosity. The old format repeated "speaker:" and
+    "text:" on every line. The new format is one short line per
+    dialogue line: aliases, a persistent default speaker, and bare
+    quoted strings for the current speaker.
+  - Portrait, game-event hooks, choices, and inline text effects are
+    optional extras added only where needed.
+
+THE FORMAT (tight)
+Top level:
+  scene:  name
+  speakers: {alias: DisplayName, ...}     optional; if absent use names
+  default speaker: Name                   optional; current until changed
+  lines:  [ one entry per line ]
+
+A LINE ENTRY is one of:
+  1. A quoted STRING:
+       - "Hi."                 spoken by the current speaker.
+  2. A one-line FLOW MAP (preferred when extras or a switch are on):
+       - {V: "I like jumps."}                 switch speaker (alias V)
+       - {V: "Oh no!", portrait: worried, on: unlock_jump}
+       - {mid: "Good, onward."}               give the line a label "mid"
+  3. A BLOCK MAP (same keys, spread out) when you prefer readability.
+
+Reserved keys (never treated as a speaker or label):
+  text, speaker, label, portrait, on, choices.
+Any other single key in a line is DISAMBIGUATED:
+  if its value is a known speaker/alias  -> it is a SPEAKER switch;
+  otherwise                              -> it is a LABEL id for the line.
+So "{V: ...}" switches to Venera; "{mid: ...}" labels the line "mid".
+Do not name a label the same as a speaker/alias.
+
+Choices
+  A line entry whose only key is "choices" is a CHOICE POINT. The
+  text line before it is the prompt. "choices" is a list; each item
+  is a map from the button text to a target label. A button with no
+  target (empty value) just ends the scene/branch.
+      choices: [{Bridge: bridge}, {Tunnel: tunnel}]
+  Jumping to a label continues from that line. Labels let you build
+  small loops (a "go back" choice).
+
+Extras
+  portrait: sprite for the speaker's side. May also be set once as
+    "default portrait".
+  on: a game event fired when the line is first shown. One string,
+    or a list for several:  on: [unlock_jump, play_chime].
+  text effects/colors inside a line use the inline tags from
+  text.txt ({c=..}...{/c}, pause, scale). These braces are inside
+  quotes so they are valid inside flow-map strings; for lines with
+  many tags prefer a block map or a plain quoted string so the YAML
+  stays readable.
+
+EXAMPLE 1 - tiny intro (English, one speaker, no extras)
+  scene: intro
+  speakers: {G: Glitcher}
+  default speaker: G
+  lines:
+    - "Hi. Press ENTER to proceed."
+    - "How is your day?"
+    - "The road ahead is ours."
+
+EXAMPLE 2 - meet (two speakers, portrait, event, a choice)
+  scene: meet
+  speakers: {G: Glitcher, V: Venera}
+  default speaker: G
+  lines:
+    - "Hi. Press ENTER to proceed."
+    - {V: "I like jumps."}
+    - "With enough skill anything is fun."
+    - {V: "Oh no!", portrait: worried, on: unlock_car_jump}
+    - "What now?"
+    - choices: [{Keep going: mid}, {Stop here: }]
+    - {mid: "Good, onward."}
+    - {V: "Then let us race.", portrait: happy}
+
+EXAMPLE 3 - rest stop (longer, English + Russian, to stress the
+compact format: fast speaker switches, a loop, portraits, an event,
+inline color, longer lines, choices)
+  scene: rest
+  speakers: {G: Glitcher, V: Venera}
+  default speaker: V
+  lines:
+    - "Перед нами развилка. Налево - мост, направо - тоннель."
+    - {G: "Which one eats less fuel?"}
+    - "Мост ровный и быстрый. Тоннель темнее, но короче."
+    - {G: "Значит, проверим оба."}
+    - {V: "Your call. Choose one.", portrait: thinking}
+    - choices: [{Bridge: bridge}, {Tunnel: tunnel}]
+    - {bridge: "Мост. Гофрированная сталь под колесами."}
+    - {G: "Держим ровную скорость, без рывков."}
+    - "Решётка мокрая. Скользко на повороте."
+    - {V: "Хорошо вышли. Красиво тут.", portrait: happy}
+    - "Дальше по мосту - заправка справа."
+    - {tunnel: "Тоннель. Темно и тесно, но тихо."}
+    - {G: "Включаю фары и дальний свет."}
+    - "Запах бензина тут сильный."
+    - {V: "Топливо тает. Надо заправиться.", portrait: worried, on: fuel_low}
+    - "Главное - {c=FFD700}не спешить{/c} на стыках."
+    - "Куда теперь: к станции или назад к развилке?"
+    - choices: [{To station: station}, {Go back: rest_loop}]
+    - {rest_loop: "Снова на развилке. Реши уже."}
+    - {V: "We keep going in circles.", portrait: amused}
+    - choices: [{Bridge again: bridge}, {Tunnel again: tunnel}, {Stop: }]
+    - {station: "Станция за следующим поворотом."}
+    - "Заправка на месте. Бака хватит до города."
+
+RUNTIME SHAPE (C, extern "C")
+A scene is an array of lines. A line has: text, speaker, portrait,
+an optional label id, an optional event name(s), and an optional
+list of choices (button text + target label index).
+The runtime exposes:
+    scene_load(file)          parse .yaml via libfyaml -> lines
+    scene_load_embedded(name) optional baked variant, same layout
+    play_begin(scene)
+    line_current()            text + speaker + portrait + effects
+    advance()                 next line (false if at end)
+    choose(choice_index)      jump to that choice's target label
+    on_event: a table of handlers the game registers at init;
+      firing a line's "on" names calls the matching handler.
+Playback/typewriter live above this in the dialogue UI (a gameplay
+concern) using text.txt.
+
+BANNED
+  - Hand-rolled YAML parsing (use libfyaml). Never regex a .yaml.
+  - Repeating speaker/portrait on every line when they do not change.
+  - Runtime YAML for LEVELS/scene graphs (levels.txt unchanged).
+  - A full branching node graph, quests, or a scene graph.
+  - Storing game logic in the dialogue data.
+  - Two authoring formats for native vs web (same .yaml, optional
+    bake for web).
+
+CHECK
+  Examples 1-3 above stay compact; speaker names are typed at most
+  once or twice, not per line.
+  Editing a .yaml and rerunning (runtime path) changes the game with
+  no rebuild; the baked path gives byte-identical scenes for the
+  same file.
+  Choices, jump-to-label loops, portrait changes, "on" events, and
+  UTF-8/Cyrillic lines all play correctly, native and web.
+  A malformed .yaml reports a clear libfyaml error, never a crash.

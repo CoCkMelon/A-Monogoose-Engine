@@ -1,0 +1,160 @@
+ame-next ENGINE SPEC
+File: agents.txt - rules for editors and agents
+
+These rules exist so whoever builds this next does not repeat the
+two past failures.
+
+SCOPE
+Make small, local, single-purpose changes. Do not tidy unrelated
+code while on a task. Match the style of the file you edit.
+Before adding a feature, read its file here and follow it. Do not
+invent a parallel subsystem.
+
+THREE CARDINAL RULES (breaking any of these recreates the old mess)
+1. Never add a second implementation of something that already
+   exists in another language or target. If web is needed, compile
+   the same C. A TS or hand-written WASM twin is wrong.
+2. Never add an ECS or Unity-style facade on top of the C API.
+   The C API is the interface.
+3. Hot-path state lives in fixed static pools. Builder/fluent style
+   is setup-time only (see principles.txt two-layer rule).
+
+LOGGING
+Non-essential logs go behind a debug-only macro and print nothing
+in release builds:
+  #ifdef DEBUG
+  #define LOGD(...) SDL_Log(__VA_ARGS__)
+  #else
+  #define LOGD(...) ((void)0)
+  #endif
+No per-frame or per-keypress spam. Errors and one-time init lines
+may always log. No file I/O or allocation in audio callbacks or hot
+loops.
+
+STYLE
+C23 for the engine (one standard per build - never mix C11/C17/C23
+TUs). Plain ASCII in identifiers and comments. extern "C" around all
+public headers. Never leak C++ types into C files. Module state in
+one .c; never put static data in a header. The C standard follows
+principles: C23 everywhere in the engine; third_party/ keeps its own
+standard. Engine code compiles warnings-as-errors; do NOT add -Werror
+to third_party/ (vendored code is exempt).
+
+COMMITS
+Clear, atomic messages. If an AI did the work, note the model in the
+commit body when asked.
+
+TESTING
+Pure logic changes add/extend a test in tests and run it.
+Render/geometry/audio/input changes get a working example and note
+how to run it. Keep the spec files in sync with the code. If code
+and a file here disagree, say so instead of silently diverging.
+
+SPEC/CODE DRIFT CHECK (CI)
+  Specs rot exactly when they are needed most. Add a CI check: if a
+  module's public header changed in a PR, its spec file in docs/ must
+  have changed too. This makes "keep the spec in sync with the code"
+  an enforced rule, not a wish.
+
+EXPLICITLY FORBIDDEN (verbatim pitfalls from the past)
+  - Do not build a Unity/Behaviour facade "as the next example."
+    That was the wrong step in the old engine's own notes.
+  - Do not revive the big scene YAML schema or a scene runtime.
+  - Do not hand-write a WASM module or a TS engine twin.
+  - Do not add a results-only benchmark doc without the benchmark
+    source.
+  - Do not leave dead code nothing imports. If you add an
+    experimental file, wire it in or delete it.
+  - Do not commit trash folders, editor backups, or build output.
+
+HANDOFF
+For long work, keep a short AGENT_HANDOFF.txt at the root: current
+status, which module is mid-flight, pitfalls hit this session, next
+actions in order.
+
+HOW TO PLAN WORK FOR AGENTS (0-shot vs iterative) - research-based
+This engine is rebuilt by agents. Plan tasks according to what is
+safe to ask in ONE pass and what must be an iterative loop.
+
+WHAT IS 0-SHOT-ABLE (give as one self-contained task)
+  A single, small piece whose interface is fully pinned by a header
+  and that compiles/tests in isolation. Examples:
+    - one spec'd module implemented as one .c + one header, with no
+      other responsibilities;
+    - pure CPU logic that is unit-testable headlessly: math helpers,
+      text layout/measure, audio synth sample rendering, the event
+      queue, a dialogue parser/codegen against golden output,
+      level-geometry baking;
+    - authoring DATA files: turning a requirements doc (such as the
+      settings taxonomy in reference/) into a schema-conformant YAML
+      definitions file (settings.txt). The engine then needs no
+      bespoke code for that data;
+    - a codegen/baker tool that only emits C.
+  These succeed in one pass because the contract is closed and a
+  headless test verifies them. Give the agent the header contract,
+  the exact file to write, and the test to run.
+
+WHAT NEEDS MANY TURNS (run as an iterative loop WITH feedback,
+NEVER as a one-shot "build the whole thing")
+  Anything that integrates across files/systems, or whose rightness
+  depends on running and looking correct. Examples:
+    - engine bootstrap: window + GL context + loop + first frame;
+    - any wiring across modules: geometry -> events -> gameplay ->
+      render; dialogue runtime -> text -> UI; text atlas -> shader;
+    - text glyph-atlas baking + rasterizer + shader integration
+      (DSDF optional, text.txt);
+    - renderer visuals, camera feel, "pixel-perfect" correctness,
+      3D camera and in-scene UI/labels;
+    - gameplay "feel" and tuning (controls, movement, hazards) driven
+      by geometry queries, not a physics solver.
+  These need a compile + run + test loop, and for anything visual a
+  screenshot/vision (or human) look. First-attempt code for a complex
+  multi-file project is measurably fragile; correctness comes from
+  the feedback loop, not the first pass.
+
+SCHEDULING RULE FOR THE ENGINE
+  Because an engine is integration-heavy, do NOT one-shot the whole
+  engine. Do it in two stages:
+    1. Build many isolated 0-shot modules first, each compiling and
+       passing a headless test on its own, behind a stable header.
+    2. Run a separate ITERATIVE integration phase that wires the
+       modules together behind a tiny main + running example, using
+       compile/test (and screenshot/vision for visuals) feedback.
+  Provide the small running harness + tests up front so every module
+  is verifiable, and require each agent to actually run its work and
+  report results, not just claim success.
+
+GUARDRAILS FROM RESEARCH FINDINGS
+  - Do not ask an agent to change UI and game mechanics in the same
+    turn; touching too many things at once multiplies errors.
+  - Tell agents explicitly what is legacy/forbidden so they do not
+    "improve" it or rebuild it (models re-create old systems).
+  - Models add layers on top of layers; require explicit cleanup and
+    forbid scope creep toward abstraction.
+  - Agentic work is a multi-turn game: recovery after a failed test
+    matters more than a perfect first attempt. Benchmarks measure
+    single-shot; real work rewards the run-fix loop. Prefer a simple
+    workflow + strong compile/debug feedback over many parallel
+    specialist agents (more agents adds latency and can reduce code
+    rigor without improving accuracy).
+
+SOURCES (research background; plain links)
+  OpenGame (arxiv.org/abs/2604.18394) - zero-shot (0 debug iters)
+    multi-file game generation is fragile (Build Health ~58); needs
+    iteration + template families.
+  MindStudio "Claude Opus 5 one-shot playable 3D games"
+    (mindstudio.ai/blog/claude-opus-5-ai-game-generation) - single
+    demo games one-shot now possible, but rough/laggy and "system
+    integration is the bottleneck"; assets built in code still harder
+    to integrate.
+  Augment Code "Single-agent vs Multi-agent"
+    (augmentcode.com/guides/single-agent-vs-multi-agent-ai) -
+    single-file edits = single-agent; cross-service refactors need
+    independent modules; end-to-end features = supervised agent.
+  Multi-agent codegen study (arxiv.org/html/2505.02133) - a strong
+    debug loop alone usually beats complex multi-agent; simple
+    workflow + debugging is the sweet spot.
+  No physics at v0 - only a geometry/collision-query module. Do not
+    add a rigid-body solver or link Box2D/Box3D into v0 or the engine
+    core. Later projects that need real physics use raw Box2D/Box3D
+    directly, no engine wrapper (physics.txt, principles).

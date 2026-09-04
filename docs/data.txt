@@ -1,0 +1,96 @@
+ame-next ENGINE SPEC
+File: data.txt - data model
+
+GOAL
+Store live game state so it is fast and simple:
+  cache friendly, zero allocation per frame, race free.
+
+RULES
+1. Hot state lives in FIXED STATIC ARRAYS with a compile-time size.
+   No malloc/free in the sim loop. (Rare setup/load code may allocate,
+   then hand data to a static pool.)
+
+2. Use SOA (STRUCT OF ARRAYS: one array per field) when a group is
+   large and updated in a tight loop every step: projectiles,
+   particles, saws, pickups.
+   Use AOS (ARRAY OF STRUCTS: one struct per element) for few
+   singletons: the player, the player car, hud.
+
+3. Refer to things by HANDLE, never a raw pointer kept across frames.
+   A handle is (index, GENERATION). A per-slot generation counter is
+   bumped on every reuse, so a stale handle fails loudly instead of
+   silently pointing at a recycled slot. This is the cheapest bug
+   preventer in the design - always include the generation.
+   The INVALID handle is generation 0 (slots are allocated starting
+   at generation 1). Every slot type encodes an INVALID_HANDLE, and
+   "no slot" is reported as INVALID_HANDLE, never a sentinel int like
+   -1 (see pool_spawn below).
+   A CROSS-POOL reference is a triple (pool_id, index, generation),
+   not two bare ints. events.txt stores its a/b contacts as this
+   triple.
+
+4. One writer per array/slot. Never two threads writing the same field.
+
+5. No GameObject, no component registry, no reflection.
+
+6. DIMENSION-SAFE.
+   The pool code does not care if the game is 2D or 3D (principles
+   rule 6). Positions and velocities are stored with the dimension
+   chosen at build time (x,y for 2D; x,y,z for 3D). Keep pool code
+   generic and put the dimension only in the math/camera/geometry
+   layer, not in the pool logic.
+
+HOW TO ORGANIZE
+Each "kind of thing" is one module with a header + one .c file that
+owns its arrays and functions. Example modules: grenades, saws,
+pickups, projectiles.
+
+Every pool offers the same few operations:
+  pool_reset()              clear all, reset statics
+  handle pool_spawn(params)  first free slot (a valid handle), or
+                             INVALID_HANDLE if full - NOT -1
+  pool_despawn(handle)
+  pool_valid(handle)         false for INVALID_HANDLE and stale gens
+  inline helpers to read/write fields
+
+DESPAWN IS DEFERRED
+  pool_despawn does not free mid-iteration. Requests QUEUE and are
+  applied at the end of the fixed step. A drained event handler
+  (events.txt) may despawn the entity it just hit without corrupting
+  an in-progress pool walk. Provide:
+    pool_despawn(handle)         request (deferred)
+    pool_apply_despawns()        called once per fixed-step end
+
+EXAMPLE (SoA projectile pool)
+  #define MAX_PROJECTILES 256
+  typedef struct {
+      float  x[MAX_PROJECTILES], y[MAX_PROJECTILES];
+      float  vx[MAX_PROJECTILES], vy[MAX_PROJECTILES];
+      float  life[MAX_PROJECTILES];
+      uint8_t kind[MAX_PROJECTILES];
+      uint8_t alive[MAX_PROJECTILES];
+  } Projectiles;
+  One module-level static instance. Update loop iterates 0..N and
+  skips slots where alive is 0.
+
+THREAD SAFETY (split threads - see principles.txt)
+  The engine uses split threads by default: a logic/sim thread owns
+  the pools and steps at 1000 Hz; the main thread renders; optionally
+  an audio thread. Pools are owned by the LOGIC thread (their sole
+  writer). Handoff to render/audio:
+    - the logic thread is the ONLY writer of a pool/slot/field;
+    - cross-thread reads use atomics or a published CONST snapshot
+      with release/acquire ordering - other threads read, never
+      write back;
+    - ordering: writer writes, publish (release), readers read
+      (acquire).
+  So a render thread never calls a pool's spawn/despawn/mutation; it
+  only reads the published snapshot/atomics.
+
+BANNED
+  - New instance per bullet or dynamic entity.
+  - Keeping a raw pointer to a pooled slot across a frame, then using
+    it after the slot was freed.
+  - Static variables defined in a header (causes duplicate copies
+    per file). Put state in one .c, expose prototypes in the header.
+  - Object/interface wrappers that hide the arrays.

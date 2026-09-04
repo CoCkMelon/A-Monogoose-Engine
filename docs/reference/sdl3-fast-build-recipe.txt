@@ -1,0 +1,103 @@
+SDL3 FAST MINIMAL BUILD RECIPE (headless Wayland + audio, Linux/Debian)
+Measured on 2 cores / 2 GB RAM, SDL release-3.2.x, Debian 13, gcc 14 / clang 19.
+Result: 12 s fresh compile, 1.6 MB libSDL3.so. (Naive minimal build: 31 s / 2.8 MB.)
+
+DEPS
+  sudo apt-get install -y libwayland-dev wayland-protocols libxkbcommon-dev \
+       libegl1-mesa-dev cmake ninja-build clang mold
+  git clone --depth 1 -b release-3.2.x https://github.com/libsdl-org/SDL.git SDL
+
+BUILD (fastest verified configuration)
+  cmake -S SDL -B build -G Ninja \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_C_COMPILER=clang \
+    -DCMAKE_C_FLAGS="-O2 -pipe -DSDL_LEAN_AND_MEAN=1" \
+    -DCMAKE_SHARED_LINKER_FLAGS="-fuse-ld=mold" \
+    -DSDL_SHARED=ON -DSDL_STATIC=OFF \
+    -DSDL_TESTS=OFF -DSDL_EXAMPLES=OFF -DSDL_TEST_LIBRARY=OFF -DSDL_INSTALL_TESTS=OFF \
+    -DSDL_AUDIO=ON -DSDL_VIDEO=ON \
+    -DSDL_WAYLAND=ON -DSDL_WAYLAND_LIBDECOR=OFF \
+    -DSDL_X11=OFF -DSDL_KMSDRM=OFF -DSDL_DIRECTFB=OFF -DSDL_RPI=OFF -DSDL_VIVANTE=OFF \
+    -DSDL_OFFSCREEN=OFF -DSDL_DUMMYVIDEO=ON \
+    -DSDL_RENDER=ON -DSDL_OPENGL=OFF -DSDL_OPENGLES=ON \
+    -DSDL_CAMERA=OFF -DSDL_JOYSTICK=OFF -DSDL_HAPTIC=OFF -DSDL_HIDAPI=OFF -DSDL_SENSOR=OFF \
+    -DSDL_POWER=OFF -DSDL_DIALOG=OFF -DSDL_GPU=OFF -DSDL_VULKAN=OFF \
+    -DSDL_ALSA=OFF -DSDL_PULSEAUDIO=OFF -DSDL_PIPEWIRE=OFF -DSDL_JACK=OFF -DSDL_SNDIO=OFF -DSDL_OSS=OFF \
+    -DSDL_DISKAUDIO=ON -DSDL_DUMMYAUDIO=ON \
+    -DSDL_LIBUDEV=OFF -DSDL_DBUS=OFF -DSDL_IBUS=OFF -DSDL_LIBICONV=OFF \
+    -DSDL_ASSERTIONS=disabled \
+    -DSDL_AVX=OFF -DSDL_AVX2=OFF -DSDL_AVX512F=OFF
+  cmake --build build -j$(nproc)
+
+RUN HEADLESS
+  mkdir -p /tmp/xdgrt && chmod 700 /tmp/xdgrt
+  XDG_RUNTIME_DIR=/tmp/xdgrt weston --backend=headless --socket=wl-headless --width=800 --height=600 &
+  XDG_RUNTIME_DIR=/tmp/xdgrt WAYLAND_DISPLAY=wl-headless SDL_AUDIO_DRIVER=dummy ./app
+
+COMPILE APP
+  clang app.c -Ibuild/include -ISDL/include -Lbuild -lSDL3 -o app
+
+MEASURED EFFECTS (2 cores, fresh build dir each time, serial runs)
+  baseline minimal wayland build .................. 31 s   2.8 MB
+  + -DSDL_LEAN_AND_MEAN=1 ......................... 16 s   1.8 MB   <- biggest win, -48%
+  + clang instead of gcc .......................... 12 s            <- second win, -25%
+  + mold linker ................................... 12 s   (~0.1 s, noise)
+  + -g0 -fno-ident -fno-async-unwind-tables ....... 12 s   1.6 MB   (size only, no time)
+  AVX/AVX2/AVX512 off ............................. -20% on gcc, already in flags above
+  final ........................................... 12 s   1.6 MB
+
+WHAT SDL_LEAN_AND_MEAN DOES (src/SDL_internal.h)
+  One define disables: SDL_blit_auto.c, SDL_blit_0/1/A/N, RGB565 LUT blits, RLE,
+  software renderer, STB image conversion, YUV. Those files become 808-byte stubs.
+  This is the supported switch for the blitter/software-renderer bulk that has no
+  dedicated CMake option.
+
+  VERIFIED STILL WORKING with the define (headless Weston, opengles2 renderer):
+    window creation, GLES renderer, RenderClear/RenderFillRect/RenderPresent,
+    plain blit, alpha-blend blit, color-mod blit, scaled blit, RLE colorkey blit,
+    SDL_ConvertSurface, audio stream open.
+    (Blits keep working: they fall back to the generic C paths.)
+  VERIFIED BROKEN with the define:
+    SDL_CreateSoftwareRenderer -> "SDL not built with rendering support"
+    YUV surface conversion     -> "That operation is not supported"
+  So: safe if you render via GPU (GLES/Vulkan). Do NOT use it if you need the
+  software renderer or YUV/video-frame surfaces. Header says it is meant for static
+  linking, but it works fine for a shared lib you build and ship yourself.
+
+DO
+  - Ninja, not Make (-10%).
+  - clang over gcc: -25% here, largest compiler-level win.
+  - SDL_LEAN_AND_MEAN if GPU-rendering only.
+  - AVX/AVX2/AVX512 off; SSE2 stays, runtime perf unaffected.
+  - Turn off every unused subsystem and backend.
+  - Shallow clone (2 s vs 40 s).
+  - Keep the precompiled header (on by default).
+
+DO NOT
+  - ccache: 0 hits, 88% of compiles uncacheable due to the PCH.
+  - -DCMAKE_DISABLE_PRECOMPILE_HEADERS=ON: 40 s -> 87 s.
+  - Lower -O for speed: -O0/-O1/-O2 compile in the same time.
+  - -DCMAKE_UNITY_BUILD=ON: SDL3 fails to compile (symbol clashes).
+  - Oversubscribe -j: -j3 on 2 cores = 12.3 s vs 12.1 s. No gain.
+  - tmpfs build dir: measured 12.0 s vs 12.0 s. The page cache already does this;
+    only worth it on a cold/slow disk or under memory pressure.
+  - mold expecting seconds: SDL links ONE .so, so linking is ~0.3 s total.
+    Harmless and nice, but it is not a meaningful lever here.
+  - Deleting SDL_blit_auto.c from the source list: unnecessary, LEAN_AND_MEAN
+    already stubs it, and manual deletion breaks the symbol table.
+  - -DSDL_LOCALE=OFF: not a real option in SDL3 (no such switch); ignored.
+
+GOTCHAS
+  - All video backends off => cmake hard-errors. Keep Wayland/X11 or pass
+    -DSDL_UNIX_CONSOLE_BUILD=ON.
+  - All real audio backends off => SDL_Init fails "No available audio device".
+    disk/dummy are never auto-picked; set SDL_AUDIO_DRIVER=dummy.
+  - Dummy video is never auto-picked; set SDL_VIDEODRIVER=dummy when no compositor.
+  - Wayland uses EGL/GLES only; SDL_OPENGL=ON is dead code there.
+  - libdecor is optional (client-side decorations); off avoids pulling in GTK.
+  - -DSDL_RENDER=OFF on top of LEAN_AND_MEAN is SLOWER (13.5 s) and BIGGER (1.8 MB)
+    than leaving RENDER=ON, because it re-enables unrelated fallback code. Leave it ON.
+
+WANT REAL SOUND
+  Add exactly one: -DSDL_PULSEAUDIO=ON or -DSDL_ALSA=ON (needs libasound2-dev).
+  ~2 s, dlopen'd by default, no hard link dependency.

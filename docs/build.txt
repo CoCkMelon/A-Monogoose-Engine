@@ -1,0 +1,260 @@
+ame-next ENGINE SPEC
+File: build.txt - build and tests
+
+GOAL
+One CMake build that makes the game for every TARGET platform and, on
+request, a WASM build of the SAME C sources. Cross-platform build +
+test runs on GITHUB ACTIONS CI. Targets are: POSIX desktop (Linux,
+macOS, and other Unix), Windows, ANDROID, and WEB (Emscripten). The
+same C sources, one codebase, per-target toolchain.
+
+RULES
+1. Same sources, every toolchain.
+   The C files compile with the native desktop compiler, the Android
+   NDK toolchain, and Emscripten for web - never a fork per target.
+   A platform only adds a thin bootstrap/entry (main / Android activity
+   / web shim) and picks the right render + window glue. No duplicate
+   game logic, ever.
+
+2. SDL3 (one window/event/audio abstraction across all targets).
+   Default for v0 is a SDL_LEAN_AND_MEAN build everywhere practical -
+   it is SMALLER and quicker to build and this engine needs only the
+   GPU/GLES path (no SDL software renderer) and no video/YUV yet. Keep
+   one real audio backend on for shipped desktop builds; CI uses
+   dummy/headless audio (see CI below for when lean is dropped).
+     - POSIX/desktop: vcpkg SDL3, or a fast lean local build (see CI
+       below / reference recipe).
+     - Windows: vcpkg/system SDL3.
+     - Android: SDL3's Android support (CMake via the NDK toolchain
+       + a thin Android bootstrap); renderer is OpenGL ES.
+     - web: the Emscripten SDL port (no separate lean concept; the
+       WASM build is inherently the lean path).
+   Renderer picks GLES (Android, web, embedded) vs desktop GL (POSIX
+   desktop, Windows) via a macro, not separate files.
+   asyncinput (native low-level input, input.txt): bundled ONLY for
+   the AME_INPUT_ASYNCINPUT backend build - prefer a local sibling
+   checkout, else FetchContent; force ASYNCINPUT_BUILD_EXAMPLES OFF;
+   link the asyncinput_static target where available, else
+   asyncinput_shared. NOT built for web or Android. Link it to targets
+   that take keyboard/mouse input.
+
+3. Release uses -O3 and LTO where supported.
+   The engine's OWN code is compiled warnings-as-errors (-Wall -Wextra
+   -Werror with GCC/Clang; the clang-cl equivalent -WX on Windows).
+   third_party/ is EXEMPT: vendored libs are built WITHOUT -Werror
+   (their warnings are not ours and differ across toolchains), so a
+   third-party warning never breaks any job. Debug offers ASan/UBSan
+   switches.
+
+3b. FLOAT BEHAVIOUR IS PINNED (for determinism - principles.txt).
+   -ffast-math is OFF and FP contraction is OFF (-ffp-contract=off)
+   on EVERY target: POSIX desktop, Windows (clang-cl / MinGW - the
+   -ffp-contract=off equivalent; MSVC's /fp:strict only if a third-
+   party MSVC-only build is made), Android, and web. The engine's
+   geometry module is compiled with the SAME flags as the rest of the
+   build so
+   the sim cannot diverge. This is what makes per-binary replay +
+   golden CI tests reliable.
+
+4. Heavy optional libs (glad etc.) link only to the targets that need
+   them. At v0 there is NO physics library in the graph - only the
+   in-house geometry module (physics.txt). A later project that opts
+   into Box2D/Box3D links it to THAT project only. The build stays
+   flat. There is no engine core that drags in an ECS.
+
+5. If anyone claims speed, ship the benchmark source and runner,
+   not just a results file.
+
+6. DIMENSION IS A BUILD OPTION.
+   One macro picks the dimension for a whole build:
+       AME_2D  -> compiles the 2D geometry/render path.
+       AME_3D  -> compiles the 3D geometry/render path.
+   Both come from the same shared geometry module (physics.txt); no
+   physics lib is linked at v0. Do not compile both dimensions into
+   one game. Tests/examples build once per dimension in CI.
+
+7. INPUT BACKEND IS A BUILD OPTION (input.txt).
+   One macro picks the native low-level input backend:
+       AME_INPUT_ASYNCINPUT -> asyncinput raw keyboard/mouse (default
+           on desktop where supported); SDL stays for windowing +
+           gamepad. asyncinput is a bundled dep (sibling checkout else
+           FetchContent; ASYNCINPUT_BUILD_EXAMPLES OFF; link the
+           asyncinput_static target where available).
+       AME_INPUT_SDL        -> SDL keyboard/gamepad input; asyncinput
+           not compiled in.
+   Web is neither macro - browser events are mapped (input.txt).
+   Tests/examples build once per input backend in CI where relevant.
+
+C STANDARD - C23 EVERYWHERE (engine + game)
+  The engine and game compile as ONE C23 standard for the WHOLE build
+  on every target. No C11/C17/C23 mixing across TUs - every engine TU
+  is -std=c23 (GCC 15+ / Clang 18+, #embed needs Clang 19 / GCC 15).
+  Because C23 is the whole-build standard, C23 features (including
+  #embed) are available everywhere in the engine with no juggling.
+    - third_party/ is compiled at ITS OWN required standard, never
+      forced to C23, and is exempt from -Werror (rule 3). Vendored
+      code keeps whatever C/C++ it needs.
+    - Windows builds the engine with clang-cl (Clang in MSVC-compatible
+      mode) or MinGW GCC, BOTH of which are C23. MSVC proper does not
+      ship C23/#embed and is NOT a supported engine compiler. (A
+      Windows MSVC build of third_party only is fine, but never the
+      engine.)
+    - Keep one C standard per engine build and pin the toolchain in CI
+      (GCC 15 / Clang 19) so -std=c23 and #embed are real everywhere.
+  EMBED: because the whole engine build is C23, C23 #embed is the
+  NATIVE way to bake assets into the binary (deploy.txt). No per-TU
+  standard juggling and no array-generator fallback is required for
+  the engine build.
+
+FOLDER LAYOUT
+  CMakeLists.txt          project, options, warnings
+  include/ame/            public headers (extern "C")
+  src/                    implementation (pure C; the engine itself
+                          has NO C++ translation unit - geometry is
+                          C, no runtime obj loader, etc.)
+  content/                YAML/TOML content you edit
+  tools/                  codegen and bakers, run at build time;
+                          the ASSIMP importer lives here (a C++ host
+                          tool, build-time only, never linked in)
+  tests/                  test main + tests + benchmarks
+  examples/               one working example per module
+  third_party/            vendored libs: glad, stb, libfyaml, and
+                          ASSIMP (for the importer tool). NO physics
+                          lib here at v0 (geometry is in src/); a
+                          project that opts into Box2D/Box3D fetches
+                          it to itself, not the engine core.
+
+THIRD_PARTY RULES
+  - Assimp is a BUILD-TIME host dependency for the tools/ importer
+    only (levels.txt). It is C++ and is a separate tool executable;
+    it is never linked into the engine or the game. The engine and
+    game stay pure C and never see Assimp headers.
+  - libfyaml (MIT, YAML 1.2, C) is a RUNTIME dependency, used by the
+    dialogue module, by save/load (save.txt), and by settings
+    definitions (settings.txt). Include it from one place; compile it
+    WITHOUT -Werror (it is third_party/, rule 3); link it only to the
+    targets that need it (dialogue + save/load + settings), not to the
+    whole engine. Vendored by default; allow vcpkg/system via a cache
+    var.
+  - The optional bake-to-C path for dialogue reuses libfyaml in a
+    small host tool (tools/), not a second parser.
+
+OPTIONS
+  AME_BUILD_EXAMPLES   on/off
+  AME_BUILD_TESTS      on/off
+  AME_BUILD_WEB        off; builds the same C to WASM
+  AME_BUILD_ANDROID    off; Android NDK toolchain build
+  AME_ENABLE_ASAN/UBSAN
+There is NO unitylike option, NO flecs option. Those do not exist.
+
+TARGET PLATFORMS (first-class; deploy.txt has each)
+  POSIX DESKTOP   Linux, macOS, other Unix (BSD). glibc/clang or gcc.
+  WINDOWS         clang-cl (Clang MSVC-compatible) or MinGW GCC -
+                  the engine needs C23, which MSVC proper does not
+                  ship, so MSVC is not an engine compiler.
+  ANDROID         NDK + CMake toolchain; SDL3 Android bootstrap; GLES;
+                  packages as an APK/AAB. Uses the SAME engine .c files.
+  WEB             Emscripten; same C to WASM + browser input.
+  One OS/ABI switch (a CMake variable / macro, e.g. AME_PLATFORM) plus
+  the existing AME_2D/AME_3D + AME_INPUT_* picks the toolchain glue;
+  the shared src/ never #ifdef's per-platform game logic.
+
+CODEGEN
+Content codegen is a build step that regenerates generated_content.c
+and .h and re-runs when the tool or content changes.
+
+LINKING
+game (POSIX/Windows), game_android, and game_wasm (web) all link the
+engine lib built from src. Public engine headers never require C++.
+
+CI - GITHUB ACTIONS, cross-platform, build AND test
+  Use .github/workflows/ci.yml (GitHub Actions). A JOB MATRIX covers
+  every target so nothing rots:
+  Toolchain pin: jobs install a C23 compiler explicitly (GCC 15 or
+  Clang 19; clang-cl on the Windows job) - do not rely on the runner's
+  default GCC (often <15), which would silently drop C23/#embed.
+    POSIX:      ubuntu-latest (Linux/glibc) and macos-latest
+                (also run an ASan/UBSan job) - and at least one other
+                POSIX if feasible (e.g. a FreeBSD runner) to prove the
+                code stays POSIX-clean.
+    WINDOWS:    a clang-cl job (C23) on windows-latest + a MinGW (GCC
+                C23) job. No MSVC job - MSVC is not C23-capable.
+    ANDROID:    a job that builds for the NDK (compile + package an
+                APK or at least a linked .so) to prove Android builds.
+    WEB:        a WASM/Emscripten job that compiles the same C.
+  Every job: build at least one example AND the tests in BOTH
+  dimensions (AME_2D and AME_3D) so neither path silently breaks.
+  Warnings-as-errors applies to the engine's OWN code on every job;
+  third_party/ is exempt (rule 3), so vendored-lib warnings cannot
+  fail a job.
+
+  HEADLESS RUNS (tests actually EXECUTE, not just compile):
+    GitHub runners have no display/audio. Build a LEAN HEADLESS SDL3
+    for the Linux job and run the integration/golden/determinism tests
+    under it (the sdl3-fast-build-recipe in the repo notes tells how;
+    keep it updated with that file):
+      - Build SDL3 minimal-fast: SDL_LEAN_AND_MEAN=1, clang, Ninja,
+        Wayland backend for a headless compositor (or DummyVideo),
+        audio = dummy/disk, every unused subsystem/backend OFF. This
+        cuts a fresh SDL build to ~12 s so CI stays quick.
+      - Run the app headless: point SDL at a headless Wayland socket
+        (XDG_RUNTIME_DIR + weston --backend=headless) or SDL_VIDEODRIVER=
+        dummy, and SDL_AUDIO_DRIVER=dummy. The engine's render is
+        GLES, so it runs under headless GL (GLES on llvmpipe/weston).
+      - Golden render + determinism tests then RUN for real on the
+        Linux job. (If a window/GL context cannot be made on a job,
+        fall back to headless-logic tests for that job - never skip
+        running the sim/event/golden tests.)
+    This SDL_LEAN_AND_MEAN build is not just for CI - it is the
+    PREFERRED SDL for the v0 product too. The engine renders via
+    GPU/GLES only (no SDL software renderer) and has no video-frame
+    / YUV need yet, so lean is the better default now: smaller, faster
+    to build, no dead code shipped. So lean-and-mean SDL is used for
+    BOTH the CI/test build AND the v0 shipped build.
+    When to STOP lean: the moment the product needs something lean
+    drops. For this engine the two concrete triggers are real audio
+    (keep ONE real backend on, e.g. -DSDL_PULSEAUDIO=ON or -DSDL_ALSA=ON
+    for shipped builds - the CI dummy-audio build is fine because CI
+    has no sound) and, later, the Stage 3 runtime codecs, which need
+    SDL's video/YUV surface path that lean stubs out. So:
+      - shipped + audio-basics (Stage 0): lean AND_MEAN, plus one real
+        audio backend ON.
+      - shipped + runtime codecs (Stage 3): drop lean (re-enable YUV /
+        video surfaces), keep a real audio backend.
+      - CI test build: lean AND_MEAN with dummy/headless audio + video
+        (nothing real to play against on a runner).
+    Re-evaluate lean at each stage rather than assuming it is permanent.
+    ctest runs on every buildable job; the hot-loop ASan test shows no
+    heap growth.
+
+  PACKAGING + SMOKE TEST:
+    A release job produces the unit per target (deploy.txt) and
+    SMOKE-TESTS the packaged artifact on a clean machine/VM/container
+    (and an Android emulator for the Android package), not the dev
+    build - so missing libs or missing assets are caught in CI, not by
+    players. CI artifacts are reproducible (never hand-built).
+
+BANNED
+  - A second source tree for web or another target that duplicates
+    game logic.
+  - Engine config that forces an ECS onto every consumer.
+  - A results-only benchmark doc with no source.
+  - In-source builds.
+  - Committing editor junk (trash folders, png~ and blend1 backups,
+    build output) - put them in .gitignore.
+
+CHECK
+  Fresh clone builds and runs the game on POSIX desktop and Windows.
+  The Android NDK build compiles/links the same C; the WASM build
+  compiles too.
+  GitHub Actions CI is GREEN for the whole matrix (POSIX + Windows +
+  Android + web), both dimensions, warnings-as-errors on the engine's
+  own code (third_party/ exempt).
+  ctest passes, and the headless Linux job actually RUNS the
+  integration/golden/determinism tests under lean headless SDL3 (not
+  just compiles them). The ASan build of the hot-loop test shows no
+  heap growth.
+  The POSIX job covers Linux and macOS (plus one more POSIX/BSD where
+  practical) so the C stays POSIX-portable.
+  Every engine TU compiles as C23 and #embed is usable on every job
+  (GCC 15/Clang 19/clang-cl), including the Windows clang-cl job.

@@ -1,0 +1,14 @@
+build/
+out/
+dist/
+trash/
+*.o
+*.a
+*.so
+*.exe
+*.dll
+*.png~
+.DS_Store
+.vscode/
+.idea/
+cmake-build-*/

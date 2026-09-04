@@ -1,0 +1,231 @@
+COMPREHENSIVE GRAPHICS AND PRESENTATION SETTINGS STANDARD - 2D AND 3D
+
+GOAL: Support the widest possible range of hardware, player preference, and accessibility needs. No setting should be preset-only.
+
+DISPLAY AND RESOLUTION
+- Monitor Selection: Choose target display in multi-monitor setups.
+- Display Mode: Exclusive Fullscreen, Borderless Fullscreen, Windowed, Borderless Windowed. Remember mode per monitor.
+- Resolution: Manual numeric input for Width x Height plus curated presets. Range from 2 to 16384 with validation and clamping. Show native resolution.
+- Aspect Ratio: Auto, 4:3, 16:10, 16:9, 21:9, 32:9, Portrait modes, Custom. Option to lock aspect ratio to window.
+- Refresh Rate: Manual selection including 60, 120, 144, 240, etc. plus custom.
+- Orientation and Safe Zone: Portrait or Landscape, Safe Area or Overscan adjustment sliders.
+- Resolution Scaling and Render Scale: Percentage slider 25 percent to 300 percent plus division modes /2, /4 and multiplication x2, x4. Separate Render Resolution and Display Resolution.
+- Dynamic Resolution: Toggle, Target Framerate, Min and Max Scale Limit.
+- HDR: SDR or HDR toggle, HDR10, HDR10+, Dolby Vision, Peak Brightness in nits, Paper White, Tone-map calibration, Auto HDR.
+- Calibration: Brightness, Contrast, Gamma, Black Level, Color Temperature, SDR and HDR brightness calibration images.
+
+FRAMERATE AND SYNCHRONIZATION
+- Framerate Limit: Direct numeric input for Foreground, Background, Menu, On Battery, Cutscenes. Examples 30, 60, 120, 144, 240.
+- Uncapped Framerate: Explicit toggle.
+- V-Sync: Off, On, Adaptive, Fast, 1/2 Rate, 1/3 Rate.
+- Adaptive Sync: NVIDIA G-Sync, AMD FreeSync, VESA VRR toggle.
+- Low Latency: NVIDIA Reflex plus Boost, AMD Anti-Lag plus, Intel Xe Low Latency, Ultra Low Latency Mode.
+- Frame Pacing: Force consistent frame delivery intervals; toggle frame-time smoothing and eliminate micro-stutter independent of V-Sync.
+
+ANTI-ALIASING AND UPSCALING
+- Traditional AA: Off, FXAA, SMAA, MSAA 2x/4x/8x, TXAA, TAA, CMAA, RSA.
+- Modern Upscaling: DLSS 2/3/4, FSR 1/2/3, XeSS 1/2, PSSR, TSR. Allow multiple versions to coexist.
+- Upscaler Settings: Mode - Quality, Balanced, Performance, Ultra Performance, Ultra Quality, Native AA, Custom percent, Sharpness slider 0 to 100, Mipmap Bias.
+- Frame Generation: DLSS Frame Gen, FSR Frame Gen, XeSS Frame Gen - Toggle plus Multiplier x2, x3, x4.
+- Variable Rate Shading (VRS): Toggle and Quality setting.
+- Native AA Mode: Render at native resolution with upscaler applied only as anti-aliasing.
+- Mipmap Bias: Numeric slider for texture sharpness versus aliasing at distance.
+
+GEOMETRY, LOD AND WORLD DETAIL
+- Overall Preset: Plus individual overrides.
+- Mesh or Model Quality: Character, NPC, Environment, Vehicle separate sliders.
+- Level of Detail: LOD Quality, LOD Distance or Bias, LOD Transition smoothness.
+- Draw Distance: View Distance, Object Distance, Character Distance.
+- Density: Vegetation Density, Grass Density, Crowd or NPC Density, Traffic Density.
+- Tessellation and Displacement: Quality plus Distance, Parallax Occlusion Mapping.
+- LOD Transition Smoothness: Crossfade distance and dither pattern for LOD swaps.
+- Crowd and Traffic Density: Separate from general NPC density.
+- Displacement and Tessellation Distance: How far tessellation remains active.
+
+TEXTURES, MATERIALS AND SHADERS
+- Texture Quality: Pool size - Low, Medium, High, Ultra, Insane, or 512 to 8192 or 8K. Maximum texture resolution limit.
+- Filtering: Bilinear, Trilinear, Anisotropic 2x/4x/8x/16x, Mipmap Quality, Mipmap Bias.
+- Shader or Material Quality: Low to Ultra, affects complexity of shaders.
+- PBR: PBR Quality slider for Lighting, Reflections, Specular. For stylized games: Option to disable PBR. For realistic games: PBR should not be fully disabled, only scaled.
+- Texture Streaming: Streaming Quality, Pool Budget, Aggressiveness of streaming and eviction.
+- Texture Pool Budget: Explicit MB or GB cap with real-time usage bar.
+- Shader Quality or Precision: Low or Full precision; affects lighting computation cost.
+- Material Complexity: Number of texture channels used, complexity of BRDF approximation.
+
+LIGHTING, SHADOWS, REFLECTIONS AND RAY TRACING
+- Shadow Quality: Resolution 512 to 8192, Distance, Cascade Count 1 to 6, Cascade Resolution.
+- Shadow Filtering: Soft Shadows, PCF, PCSS - Quality and Sharpness.
+- Contact Shadows: Toggle, Quality, Length.
+- Ambient Occlusion: Toggle, Type - SSAO, HBAO+, HDAO, GTAO, CACAO, RTAO. Intensity, Radius, Quality.
+- Global Illumination: Quality, Bounces, SSGI, RTGI.
+- Reflections: Overall Quality, SSR Quality, Resolution, Distance, Planar Reflections, Cubemap Resolution.
+- Ray Tracing Master: Toggle plus Preset Low, Medium, High, Ultra.
+- RT Features: RT Shadows, RT Reflections, RT Ambient Occlusion, RT Global Illumination, RT Caustics, RT Translucency, Bounce Count.
+- Path Tracing: Toggle, Samples Per Pixel, Bounce Count.
+- RT Denoiser: Quality, BVH Quality.
+- Shadow Distance Scale: Independent from general draw distance.
+- Reflection Cube Resolution: Explicit cubemap resolution control.
+- RT BVH Quality: Bounding Volume Hierarchy build quality for ray tracing acceleration.
+- RT Denoiser Types: Toggle between spatial and temporal denoisers with quality tiers.
+
+VOLUMETRICS, WATER, VEGETATION AND ENVIRONMENT
+- Volumetric Quality: Fog, Lighting or God Rays or Light Shafts, Clouds - Quality, Resolution, Distance.
+- Water: Quality, Reflection, Refraction, Caustics, Foam, Tessellation, Simulation, Physics simulation tick rate.
+- Terrain: Quality, Tessellation, Detail Distance, Heightmap Quality.
+- Foliage or Grass: Quality, Density, Distance, Wind Simulation.
+- Sky or Atmosphere: Quality, Cloud Quality, Atmospheric Scattering, 2D versus 3D volumetric cloud quality, shadow casting.
+
+PARTICLES, DECALS AND PHYSICS VISUALS
+- Particles or VFX: Quality, Count, Lifetime, Lighting.
+- Decals: Quality, Count, Lifetime, Blood or Debris persistence, Projection type Orthographic versus projected, clipping.
+- Physics Visuals: Cloth Quality, Destruction Quality, Fluid Simulation, Fire or Smoke Quality, Physics Tick Rate for visual updates.
+- Weather Particles: Rain, Snow, Dust - Quality and Density.
+
+POST-PROCESSING AND CINEMATIC EFFECTS
+- Post-Process Quality: Master quality toggle with per-effect override.
+- Bloom: Toggle, Intensity, Threshold, Radius, Quality.
+- Depth of Field: Toggle, Quality, Bokeh Shape such as Circular or Hexagonal, Near and Far plane numeric input, Auto-focus toggle, ADS DoF override.
+- Motion Blur: Toggle, Camera Motion Blur separate, Per-Object Motion Blur separate, Intensity, Shutter Angle in degrees, Sample Count.
+- Lens Effects: Lens Flare, Lens Dirt, Chromatic Aberration Intensity, Vignette Intensity, Film Grain Intensity and Size, Lens Distortion.
+- Sharpening: Toggle, Intensity, Type - CAS, LumaSharpen, Unsharp Mask with radius.
+- Color Grading: LUT Strength, Tone Mapping - ACES, Neutral, Reinhard, etc.
+- Film Grain: Size and Intensity separate controls.
+
+CAMERA SETTINGS
+- FOV: Horizontal and Vertical separate sliders for First-Person, Third-Person, Vehicle, ADS or Scoped. Range 60 to 120 plus with numeric input. Hor plus or Vert minus scaling option.
+- Clipping: Near Clip and Far Clip numeric input.
+- Camera Comfort: Camera Shake Intensity 0 to 100 percent, Head Bob, View Bob, Weapon Bob, Camera Roll, Smoothing.
+- Motion Sickness Aids: Center Dot, Peripheral Vignette during movement, FOV vignette disable, Motion Blur disable.
+- Camera Smoothing: Interpolation speed for FOV transitions and position smoothing.
+
+2D PIXEL ART AND STYLIZED SPECIFIC
+- Sprite Quality: Resolution, Compression.
+- Filtering Mode: Point or Nearest Neighbor for Pixel Perfect, Bilinear, Trilinear, xBRZ, HQx, Scale2x, Bicubic.
+- Scaling: Integer Scaling Toggle, Pixel Perfect Mode, Aspect Correction for pixel art.
+- Retro Filters: CRT Shader - Scanlines, Curvature, Phosphor Bloom, NTSC or Composite artifacting, LCD Grid.
+- Animation: Sprite Animation FPS Limiter, Frame Interpolation for 2D, Frame interpolation for low-FPS sprites.
+- 2D Effects: Parallax Layer Quality, VFX Pixelation Consistency Toggle, Line Thickness for vector or cartoon games.
+- Canvas Resolution: Separate UI or Game render resolution for 2D.
+- Sprite Batch Quality: Sorting and batch size limits.
+
+TEXT TYPOGRAPHY SUBTITLES AND LOCALIZATION
+- UI Text Scaling: Global slider 50 percent to 200 percent independent of UI Scale. Font Size Override.
+- Font Selection: Default, Dyslexia-Friendly - OpenDyslexic, Atkinson Hyperlegible, High-Legibility. Font Weight or Bold Text toggle.
+- Text Rendering Quality: Anti-aliasing, SDF or MSDF Sharpness, Hinting, Subpixel rendering.
+- Readability: Text Outline Toggle plus Thickness, Drop Shadow Toggle plus Offset, Background Plate or Text Box Opacity, Line Spacing, Letter Spacing.
+- Subtitles and Closed Captions: Enable All, Story Only, or Off, Size - Small to Huge, Font selection, Background Opacity, Speaker Names Toggle, Speaker Color Coding, Max Lines 1 to 4, Direction horizontal or vertical.
+- CC for SFX: Footsteps, Music, etc. with size and opacity.
+- Dialogue System: Typewriter Speed - Instant to Slow, Auto-Advance Delay, Skip Unread Toggle, Dialogue History Log Size.
+- Floating Text: Damage Numbers, Heal Numbers, Quest Text - Scale, Opacity, Animation.
+- Chat Text: Font Size, Opacity, Timestamp Toggle, Profanity Filter with custom word list import, Text-to-Speech for chat, Speech-to-Text transcription.
+- Localization: Separate Text Language and Voice or Audio Language. Fallback font for CJK, Cyrillic, Arabic, Devanagari.
+- Text-to-Speech or Speech-to-Text: TTS Toggle, Voice Selection, Speed 0.5x to 2x, STT for voice chat transcription toggle and language.
+- Subtitle Speaker Color Coding: Unique colors per speaker.
+- Subtitle Direction: Horizontal versus vertical layout for CJK.
+- Dialogue History: Log buffer size and scrollback limit.
+- Floating Combat Text: Scale, opacity, and animation speed.
+- Chat Profanity Filter: Toggle with custom word list.
+- Speech-to-Text: Real-time voice chat transcription.
+- Fallback Fonts: Explicit font fallback chain.
+
+VISUAL ACCESSIBILITY
+- Colorblind Modes: Off, Protanopia, Deuteranopia, Tritanopia, Custom Matrix plus Strength slider 0 to 100 percent.
+- High Contrast Mode: UI and World high contrast separate toggles.
+- Reduce Flashing: Photosensitive Mode - limit flashes to less than 3Hz, Screen Shake Reduction.
+- Motion Reduction: Disable parallax, reduce animations.
+- Cursor Customization: Size, color, outline, and motion trail for visibility.
+
+HUD UI AND PRESENTATION
+- UI Scale: Master 50 percent to 200 percent.
+- HUD Scale and Opacity: Separate from UI, HUD Borders or Safe Area.
+- HUD Visibility: Toggle individual elements, Dynamic or Minimal HUD, HUD Motion or Wobble toggle.
+- Crosshair: Style, Color picker RGB or Hex, Size, Outline thickness, Dynamic spread toggle.
+- Safe Area or Overscan: Percentage-based adjustment per display.
+
+SYSTEM AND MEMORY MANAGEMENT
+- VRAM Limits: Target VRAM usage slider or Texture Budget in MB or GB, Show usage bar.
+- System RAM Limits: Cap system memory consumption.
+- Cache Management: Pre-load assets toggle, On-demand texture streaming, Model pre-caching, Shader Pre-compilation, Clear Shader Cache button.
+- Stats Overlay: FPS, Frame Time Graph, GPU, CPU, VRAM usage, Latency.
+- GPU Selection: Force dedicated GPU in multi-GPU or hybrid graphics laptops.
+- CPU Thread Allocation: Specific thread count or Auto with utilization display.
+- Render API Selection: DirectX 11, DirectX 12, Vulkan, Metal, OpenGL with feature-level selection.
+- Shader Pre-compilation: Toggle background shader compilation; Clear Shader Cache button.
+- Performance Impact Indicators: Visual bar or icon next to each setting showing Low, Medium, High, Very High cost.
+- Auto-Configure or Recommended Settings: Hardware detection with one-click apply based on VRAM, GPU, and CPU.
+- Per-Category Reset: Reset to default for individual sections without global reset.
+- Benchmark: Built-in benchmark with frame-time graph, 1 percent and 0.1 percent lows, and comparison report.
+- Stats Overlay Customization: Customizable OSD with FPS, frame time, GPU clock, VRAM usage, CPU usage, latency, temperature.
+
+AUDIO I/O SETTINGS
+- Output Device Selection: Choose the audio OUTPUT device from the
+  enumerated list - Speakers, Headphones, DAC, or Audio Interface,
+  plus System Default. Show the driver/backend and current format.
+- Input Device Selection: Choose the audio INPUT device (microphone,
+  line-in, or interface input) used for voice chat / capture.
+- Per-Device Audio Settings: For the selected output/input device -
+  sample rate (44.1 / 48 / 96 / 192 kHz), bit depth, channel count,
+  buffer size, and exclusive vs shared / low-latency access where the
+  driver supports it.
+- Input Monitoring or Sidetone: Toggle and volume per input device,
+  with latency compensation so the monitor matches.
+- Default Device Handling: Auto-select the last-used device and react
+  to device connect/disconnect without losing the chosen device.
+- Volume Mixers: Numeric 0 to 100 sliders for Master, Music, SFX,
+  Dialogue, UI, Ambient, Voice Chat.
+- Spatial Audio: Stereo, 5.1, 7.1, HRTF, Dolby Atmos, Windows Sonic, 3D Audio.
+- Background Audio: Play or Mute when window loses focus.
+- Voice Chat Volume: Separate mixer slider.
+- Audio Compression or Dynamic Range: Night mode or compression toggle for consistent dialogue.
+- Dialogue Boost or Clarity: EQ preset or high-pass filter for voice frequencies.
+- Microphone Gain: Per input device input-level/trim slider (in
+  addition to monitoring above).
+
+INPUT CONTROLS AND INTERACTION
+- Input Device Selection: Choose which physical device / backend fills
+  each input role - keyboard, mouse, gamepad/controller. Which
+  devices are offered depends on the build: the native low-level
+  backend is chosen at COMPILE TIME between SDL and asyncinput
+  (see input.txt). asyncinput builds offer the raw low-latency
+  keyboard/mouse path; SDL-backend or web builds offer what the SDL /
+  browser path exposes.
+- Key and Button Mapping: Remap keyboard, mouse, and controller to
+  actions, with conflict detection and a per-device default mapping.
+- Per-Device Settings: Sensitivity and deadzone can differ per device
+  (mouse vs analog stick), per stick/trigger, and per profile, not
+  one global value.
+- Key Remapping: Full keyboard, mouse, and controller remapping with conflict detection.
+- Controller Deadzone: Inner and outer deadzone sliders for analog sticks and triggers.
+- Aim Sensitivity: Separate X and Y axis, scoped, vehicle, and menu navigation sensitivity.
+- Mouse: Raw input / low-latency mode, sensitivity or DPI, read or
+  polling rate, and a mouse acceleration toggle with a custom curve.
+- Haptics or Vibration: Intensity slider and toggle per event type such as damage, environment, UI.
+- Input Lag Reduction: Raw input toggle. On asyncinput builds this
+  selects the raw device path; on SDL-backend builds it reports
+  whether a raw path is available at all.
+
+NETWORK AND ONLINE
+- Region Selection: Manual server region with ping display.
+- Packet Loss or Latency Display: In-game network graph overlay.
+- Bandwidth Limit: Cap upload and download for background stability.
+
+FILE SAVE AND CONTENT MANAGEMENT
+- Auto-Save or Save Slots: Number of backup slots and interval.
+- Cloud Save Sync: Toggle with conflict resolution local, cloud, or both.
+- Mod Support: Mod loading order, compatibility check display, and asset override rules.
+- Screenshot or Video Capture Settings: Resolution, format, codec, and save path.
+
+UI AND USABILITY OF SETTINGS MENU
+- Quality Presets: Low, Medium, High, Ultra, Custom - with Apply and Revert.
+- Logical Grouping: Categories as above with search bar for settings.
+- Preview: Live preview window or Side-by-side comparison.
+- Tooltips: Every setting explains visual impact, VRAM cost, and performance cost.
+- Profiles: Named save slots such as Laptop Battery or 4K Ultra, import and export.
+- Search Function: Quick search to find specific settings.
+- Recommended Settings: Auto-detection and recommendation based on hardware.
+- Reset to Defaults: Per-category or global reset options.
+- Apply Changes: Instant preview or Apply button to test changes. Apply or Revert with countdown timer.
+- Settings Import and Export: Ability to save and load custom configurations.
+- Accessibility in Menu: High-contrast menu theme, full keyboard navigation, and screen reader tags for all options.
+
+END OF STANDARD

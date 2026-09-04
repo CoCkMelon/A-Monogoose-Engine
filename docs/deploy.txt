@@ -1,0 +1,97 @@
+ame-next ENGINE SPEC
+File: deploy.txt - distribution
+
+GOAL
+The finished game RUNS on a machine with no dev environment. This was
+left unspecified and it hurt before: the old AME build shipped by
+copying the bin plus an assets folder, and on LINUX it broke on
+missing dynamic libraries (the binary could not find its SDL/lib
+dependencies). This file fixes the real problem (libraries) and keeps
+content distribution SIMPLE. Do not over-engineer this.
+
+CONTENT / ASSETS - keep it simple
+  Distributing SOURCE ASSETS is NOT banned. If the game loads its
+  models/textures/audio from an assets folder at load time, ship that
+  folder - it is plain data, no legal or engine problem. The runtime
+  may load content by path at startup from the assets folder. There is
+  no requirement to build an engine-native data pack or a custom
+  packer/index blob; do NOT build a bespoke pack pipeline unless a
+  real need appears. That is extra work this engine does not need.
+
+  EMBEDDING is the EASY single-file option when you want the game to
+  be one binary with nothing beside it. The engine compiles as C23 on
+  every target (build.txt), so C23 #embed is the NATIVE way to pull
+  asset files into the executable at build time - a small TU that
+  #embeds each file and exposes pointers + sizes. No per-TU standard
+  juggling and no array-generator fallback is needed; #embed works
+  because the whole engine build is -std=c23 (GCC 15+ / Clang 19;
+  Windows via clang-cl or MinGW).
+  Alternatively simply ship the assets folder. Pick whichever is least
+  work.
+  Decision rule: ship an assets folder, OR embed files with C23 #embed.
+  Do not stand up a separate packaging/data-pack subsystem for v0.
+
+LIBRARY LINKING (the real Linux fix)
+  Release links third-party libraries STATICALLY wherever available
+  (SDL3, libfyaml, glad, asyncinput - there is no physics lib at v0).
+  Static linking is
+  the most reliable fix for "works on my machine, missing .so on
+  yours".
+  The shipped SDL3 is the SDL_LEAN_AND_MEAN build for v0 (smaller and
+  enough - the engine renders via GLES and has no YUV/video need yet),
+  with ONE real audio backend enabled so shipped audio works. When
+  Stage 3 runtime codecs need SDL's video/YUV path, re-enable that in
+  the shipped build (see build.txt).
+    - Prefer static builds of bundled libs for release.
+    - Where a lib must be dynamic, on Linux set RPATH to $ORIGIN so a
+      library sitting NEXT TO the executable is found (the old failure
+      was a dynamic lib copied beside the binary but not found).
+    - Test the packaged build on a CLEAN machine (no dev libs).
+
+TARGETS (first-class - each has a CI job, build.txt)
+  POSIX DESKTOP  (Linux, macOS, other Unix), WINDOWS, ANDROID, WEB.
+
+PER-PLATFORM
+  POSIX DESKTOP - LINUX AND OTHER UNIX
+    Ship the executable plus its dynamic libs (RPATH $ORIGIN so they
+    are found beside it) plus the assets folder, OR a single binary
+    with content #embedded. A static binary (embedded content) is the
+    cleanest when the toolchain allows. Keep the code POSIX-portable
+    (no Linux-only calls in shared src/) so a *BSD or other Unix build
+    is only a new toolchain, never a fork. macOS is POSIX too but
+    packages as its own .app bundle (below).
+  POSIX DESKTOP - MACOS
+    A .app bundle with the needed frameworks inside and assets inside
+    the bundle (or embedded). Sign/notarize only when distributing
+    broadly. Same C core as Linux; only the packaging differs.
+  WINDOWS
+    A folder with game.exe + the needed DLLs co-located (Windows finds
+    DLLs next to the exe) + the assets folder, or embedded content.
+  ANDROID
+    An APK/AAB built from the SAME C + SDL3 Android bootstrap, with the
+    assets folder packaged into the APK (Android's assets/), plus the
+    engine's OpenGL ES renderer. GLES (not desktop GL). Built and
+    smoke-tested on an Android EMULATOR in CI. The game logic is the
+    identical C - only the entry/package differs.
+  WEB
+    Serve the html/wasm and its assets from the SAME origin/directory
+    so every asset resolves. If you want one self-contained page, use
+    Emscripten's file embedding (--embed-file) or C23 #embed (the web
+    build is C23 too) - but plain same-origin asset files are fine
+    too. Nothing may load from a different host than the page.
+
+BANNED
+  - A release whose dynamic libs are found only because the dev
+    machine has them installed (no static link, no RPATH $ORIGIN).
+  - A web build that fetches assets from a host/path that differs from
+    where the page is hosted.
+  - Mandating a bespoke engine-native data pack / packer pipeline.
+  - Hand-built release packages that are not reproducible in CI.
+
+CHECK
+  On a clean Linux VM (no dev packages) the game runs with no
+  missing-lib errors. Same for Windows and macOS. Whether it ships an
+  assets folder or embedded content, every asset resolves at load.
+  The Android APK builds from the same C and runs on an emulator. The
+  web build runs from one hosted directory. Every per-platform package
+  is produced and smoke-tested in GitHub Actions, never by hand.

@@ -1,0 +1,82 @@
+name: ci
+
+# ame-next CI (build.txt): every job builds the engine's OWN code with
+# warnings-as-errors; third_party/ is exempt. The Linux job also RUNS the
+# tests headlessly (logic + golden render under llvmpipe/EGL surfaceless).
+# Windows/Android/web toolchain jobs are tracked in AGENT_HANDOFF.txt.
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+jobs:
+  linux:
+    name: linux (clang-19, C23, both dims, headless tests)
+    runs-on: ubuntu-latest
+    env:
+      LIBGL_ALWAYS_SOFTWARE: "1"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: toolchain (clang-19 pinned for C23/#embed, build.txt)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            clang-19 lld-19 cmake ninja-build libsdl3-dev libegl1 \
+            libgl1-mesa-dri libgles-dev
+
+      - name: configure + build (Debug, tests + examples + game)
+        run: |
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_C_COMPILER=clang-19 -DCMAKE_BUILD_TYPE=Debug
+          cmake --build build
+
+      - name: ctest (logic + geometry + audio + text + sim + golden render)
+        run: ctest --test-dir build --output-on-failure
+
+      - name: headless game screenshot smoke (Stage 0 exit check)
+        run: |
+          cd build
+          SDL_VIDEODRIVER=offscreen SDL_AUDIO_DRIVER=dummy \
+          AME_SCREENSHOT=game_shot.png \
+            timeout 60 ./examples/memory_game/memory_game
+          test -s game_shot.png
+
+      - name: release build (warnings-as-errors, -O3, LTO)
+        run: |
+          cmake -S . -B build-rel -G Ninja \
+            -DCMAKE_C_COMPILER=clang-19 -DCMAKE_BUILD_TYPE=Release \
+            -DAME_ENABLE_ASAN=OFF
+          cmake --build build-rel
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: screenshots
+          path: |
+            build/game_shot.png
+            build/render_golden.png
+          if-no-files-found: warn
+
+  asan:
+    name: linux (ASan/UBSan, hot-loop heap check)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            clang-19 lld-19 cmake ninja-build libsdl3-dev libegl1 \
+            libgl1-mesa-dri libgles-dev libclang-rt-19-dev
+      - name: build + run tests under sanitizers
+        run: |
+          cmake -S . -B build -G Ninja -DCMAKE_C_COMPILER=clang-19 \
+            -DCMAKE_BUILD_TYPE=Debug -DAME_ENABLE_ASAN=ON
+          cmake --build build
+          ctest --test-dir build --output-on-failure

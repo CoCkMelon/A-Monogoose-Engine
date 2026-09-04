@@ -1,0 +1,71 @@
+AGENT_HANDOFF — ame-next
+Last updated: end of session 1 (bootstrap + Stage 0 local slice)
+
+STATUS: engine core + first game (LOCAL Memory, Stage 0) build clean on
+Linux/clang-19 C23, 9 ctest suites green incl. headless GOLDEN RENDER
+(EGL surfaceless + llvmpipe) and a headless game SCREENSHOT smoke.
+
+WHAT EXISTS (all tested)
+- include/ame/: ame.h (handles, rng, snapshot macro), math.h (v2/v3/v4, m4,
+  ortho-pixel + perspective, inverse), pool.h (slot template: gen handles,
+  DEFERRED despawn), geometry.h, events.h, input.h, audio.h, camera.h,
+  text.h, render.h, app.h
+- src/: geometry.c (prims + static world + uniform-grid broadphase, 2D/3D),
+  events.c (bounded ring, drop-oldest), input.c (atomics + per-step edges),
+  audio.c (fixed-point-phase synth, SPSC cmd queue, SDL stream attach),
+  camera.c (fluent setup builder; persp + pixel-perfect ortho), text.c
+  (utf-8, {c=}{p=} tags, wrap/align, screen+world draw), render.c (one
+  program, counting-sorted batch, texture-grouped draw ranges, injected GL
+  loader, FBO-compatible), app_sdl.c (SDL3 callback bootstrap, logic thread
+  1000 Hz, in_begin_step + app_fixed, SDL input backend), input_asyncinput.c
+  (guarded TU: AME_INPUT_ASYNCINPUT; evdev->scancode map, atomics only)
+- examples/memory_game/: mem_sim (pure deterministic rules engine; tests
+  play full scripted games) + mem_app (3D board, flip animation, raycast
+  picking via geometry module, in-scene billboard scoreboard, synth sfx,
+  snapshot publish logic->render, AME_SCREENSHOT env for headless shots)
+- tools/bake_font.c: ttf -> generated/font_atlas.c/h at build time
+- tests/: math, pool, geometry_2d/3d, input, audio, text, mem_sim, render
+- .github/workflows/ci.yml: linux (both dims, headless tests, screenshot
+  smoke, release build) + ASan job
+- docs/: the full spec (copied verbatim from the engine_spec upload)
+
+PITFALLS HIT THIS SESSION (do not rediscover)
+- SDL_main.h: Debian SDL3's SDL.h does NOT pull SDL_main.h; the bootstrap
+  defines SDL_MAIN_USE_CALLBACKS + includes <SDL3/SDL_main.h> explicitly in
+  ONE TU. Tests define SDL_MAIN_HANDLED (they own main()).
+- GL function typedefs: use <GL/glcorearb.h>; Khronos PFN names are ALL
+  CAPS: PFNGLCREATESHADERPROC (not PfnglCreateShaderProc).
+- EGL surfaceless has NO default framebuffer: tests must create an FBO and
+  bind it before rp_begin_frame; read pixels from the FBO.
+- Baked-atlas header: never name a size macro like the include guard
+  (AME_FONT_ATLAS_H height collided with the guard -> now ..._WIDTH/_HEIGHT).
+- text_draw_world maps glyph PIXELS to world units directly: scale the pose
+  (see card_label_pose gs / billboard_pose scale in mem_app.c).
+- Generated font_atlas.c: glyph table must be emitted closed BEFORE the
+  atlas byte array opens (array nesting).
+- CMake: tools/ (bake_font) must come BEFORE the engine libs (they link
+  ame_font). asyncinput's own "smoke" ctest leaks: BUILD_TESTING is toggled
+  OFF around its add_subdirectory.
+- pass camera CENTER in 2D: world origin = screen center with pos(0,0).
+
+NOT DONE / NEXT ACTIONS (in order)
+1. Windows job: MinGW-w64 or clang-cl cross build in CI (engine is
+   POSIX-clean; needs SDL3 for the target + the same C23 pin).
+2. Web job: Emscripten build of the SAME C (rp GL loader ->
+   emscripten_proc_address; GLES desc path exists: rp_desc_gles(true);
+   app shim maps the callbacks; text/atlas already data-only).
+3. Android job: NDK toolchain + SDL3 android bootstrap (CMake), GLES.
+4. Stage 1: ONLINE server-authoritative Memory (README.txt FIRST GAME):
+   run mem_sim on a server; message set join/state/your-turn/open-card/
+   match/no-match/win; headless two-client loopback test in CI.
+5. libfyaml vendoring + dialogue/save/settings modules (specs in docs/;
+   NOT part of the first game slice).
+6. tools/assimp importer -> cooked model loader (levels.txt).
+7. audio occlusion raytracer port from A-Mongoose (audio.txt, later stage).
+8. Spec/code drift CI check (agents.txt): header changed -> docs/ changed.
+
+CONVENTIONS LOCKED
+- C23 everywhere in engine+game; third_party keeps its own standard, no
+  -Werror there. -ffp-contract=off always. Per-target AME_2D/AME_3D and
+  AME_INPUT_SDL/AME_INPUT_ASYNCINPUT defines. Games live in examples/ with
+  their own CMakeLists (user decision, like A-Mongoose).

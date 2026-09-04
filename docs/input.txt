@@ -1,0 +1,155 @@
+ame-next ENGINE SPEC
+File: input.txt
+
+GOAL
+A small input layer so gameplay asks "is jump pressed?" instead of
+reading raw OS events, and the same game logic works on desktop and
+web.
+
+RULES
+1. Gameplay reads only MAPPED ACTIONS (jump, left, boost, switch),
+   never raw keycodes. This keeps logic portable.
+
+2. Raw events arrive from the low-level backend: the asyncinput
+   callback on its reader thread (AME_INPUT_ASYNCINPUT native
+   keyboard/mouse), SDL events from the app loop (windowing, gamepad,
+   and the AME_INPUT_SDL keyboard path), or browser events on web.
+   None reach gameplay directly - every backend only writes the
+   shared atomic down-state. Gameplay never touches the event queue.
+
+3. ONE input tree. The low-level input BACKEND is chosen at COMPILE
+   TIME between SDL and asyncinput (a build macro, see build.txt).
+   Native default is asyncinput for raw keyboard/mouse; SDL supplies
+   windowing + gamepad + the SDL input backend; web uses browser
+   events. All backends write the SAME shared action state. No
+   per-platform input logic in gameplay.
+   Note: the engine core is not bound to SDL input. On asyncinput
+   builds the engine's input path reads asyncinput; SDL is used for
+   windowing only. Making the engine FULLY free of SDL input (so an
+   SDL-input build needs no SDL event mapping) is a stretch goal that
+   would require editing the asyncinput lib itself - not needed for
+   the engine's own input layer.
+
+COMPILE-TIME INPUT BACKEND
+  A build selects its low-level input backend with one macro:
+    AME_INPUT_ASYNCINPUT   native raw keyboard/mouse via asyncinput
+                           (default on desktop where supported); SDL
+                           still provides windowing + gamepad.
+    AME_INPUT_SDL          SDL keyboard/gamepad input (fallback build,
+                           or targets where asyncinput is unavailable).
+  Web is neither - it maps browser events (build.txt). The gameplay
+  action layer (below) is identical for both; only the source of the
+  atomic down-state differs.
+
+LOW-LEVEL NATIVE BACKEND: libasyncinput (asyncinput)
+  asyncinput is the raw, LOW-LATENCY input library used at the bottom
+  of the native input path (as A-Mongoose did). SDL stays the window/
+  event layer, but keyboard/mouse device input is read by asyncinput,
+  which polls raw device nodes (/dev/input/event* on Linux; raw input
+  on Windows) at high rate instead of the less precise SDL input
+  path. HOW it is used (this is the established pattern):
+    - Init in app setup (AME_INPUT_ASYNCINPUT build):
+        ni_register_callback(on_raw_input, NULL, 0);
+        if (ni_init(0) != 0)  -> raw keyboard/mouse unavailable (e.g.
+           no permission on the device nodes). An asyncinput build does
+           NOT fall back to SDL keyboard input (SDL only does
+           windowing here). Surface a clear on-screen message; the fix
+           is device permission or an AME_INPUT_SDL build. The game
+           keeps running, just with no raw keyboard/mouse.
+      Optional raw relative mouse motion is enabled at init where the
+      game wants low-latency mouse (picking/UI/aim).
+    - The callback runs on asyncinput's OWN reader thread (it is
+      async). It must NOT touch game logic, pools, or the sim. It
+      only maps raw events to shared down-state:
+        static void on_raw_input(const struct ni_event* ev, void* ud) {
+            if (!ni_is_key_event(ev)) return;
+            atomic_store(&key_down[ev->code], ev->value != 0);   // NI_KEY_*
+        }
+      Per-key flags are ATOMICS (see principles THREADING); the
+      callback only stores, never computes gameplay. (In the old
+      engine a mutex-guarded table was also used in one demo - prefer
+      the atomics; keep one pattern.)
+    - Async input state is then CONSUMED BY POLLING on the logic
+      thread once per fixed step (principle: poll, don't dispatch
+      gameplay from callbacks). The action/binding layer translates
+      the atomic key-down state into actions and computes edges.
+    - Shutdown: ni_shutdown() during app quit.
+  BACKEND VARIANTS / WEB:
+    - AME_INPUT_SDL build: SDL provides keyboard + gamepad input;
+      asyncinput is not compiled in. Same action layer below.
+    - AME_INPUT_ASYNCINPUT build: keyboard/mouse come from asyncinput;
+      gamepads still come via SDL (SDL is linked for windowing anyway).
+      Per device there is exactly ONE backend feeding each key/button,
+      so never two writers on the same atomic.
+    - Web: asyncinput is native-only; it is neither backend macro.
+      Browser events are mapped (via SDL/Emscripten) into the same
+      shared action state. Gameplay is identical; only the low-level
+      source differs.
+  BUILD: asyncinput is a bundled dependency of the AME_INPUT_ASYNCINPUT
+  build (prefer a local sibling checkout, else FetchContent; disable
+  its examples; link the static target where available - see
+  build.txt). It is NOT built for web. Users need read access to the
+  raw device nodes (/dev/input/event*) or ni_init fails and that
+  build has no raw keyboard/mouse (permission note above).
+
+ACTIONS AND BINDINGS
+Define a fixed action table, each action bound to one or more
+inputs. Bindings give:
+  pressed   (edge this frame)
+  held      (down now)
+  released  (edge this frame)
+and axes give a float (wheel spin, mouse motion).
+
+KEYBOARD + GAMEPAD TOGETHER
+Treat them uniformly: jump = Space or Gamepad A; switch = E or
+Gamepad Y, and so on. Set by a table at init.
+
+POLLING (deterministic sim) + REAL-TIME INPUT PATH
+  For the DETERMINISTIC sim: the action layer translates the atomic
+  down-state into actions and edges once per fixed step, then the sim
+  reads that action state. pressed/released are edges computed by
+  comparing current vs previous down-state at the fixed step
+  boundary, so they are frame-rate independent (the sim runs at >=
+  1000 Hz, loop.txt).
+  For REAL-TIME / input-coupled actions (aim, camera, direct
+  movement): a thin real-time layer may read the latest input atomic
+  AT INPUT ARRIVAL and respond immediately (sub-tick), rather than
+  waiting for the next sim step or render frame - see loop.txt /
+  principles. It must not mutate the deterministic sim's state; it
+  updates only the action state it owns, which the sim/render read.
+  In both cases, do NOT run game logic inside the asyncinput/SDL
+  reader callback itself - that thread only writes atomics; real-time
+  consumers read them from their own context.
+
+EXAMPLE API (input.h, extern "C")
+  enum actions: LEFT, RIGHT, UP, DOWN, JUMP, BOOST, SWITCH, FIRE, ...
+
+  in_begin_step()           on logic thread: read atomics, compute
+                            this fixed step's held/pressed/released
+  in_bind_key(action, key)  key = NI_KEY_* code (asyncinput build) or
+                            SDL scancode/button (gamepad, AME_INPUT_SDL
+                            build, web)
+  in_held(action)
+  in_pressed(action)        true for one fixed step on press
+  in_released(action)
+  in_axis(axis_id)          float
+
+Mouse position for UI/picking is exposed in world space via the
+camera (camera_screen_to_world).
+
+BANNED
+  - if (event.key == X) checks sprinkled through gameplay.
+  - Reading raw device state in two modules.
+  - Exposing raw backend/OS structs to gameplay.
+  - A web copy of the action mapping.
+
+CHECK
+  A demo drives a character the same with keyboard and gamepad.
+  in_pressed fires for exactly one fixed step (not held). The two
+  native builds behave identically at the action layer: AME_INPUT_SDL
+  reads SDL, AME_INPUT_ASYNCINPUT reads raw asyncinput devices (and
+  if it lacks permission it reports clearly instead of silently half-
+  working). The same action mapping behaves the same on desktop and
+  web.
+  TSan: asyncinput callback only stores to its own atomics - no data
+  race with the logic thread that reads them.

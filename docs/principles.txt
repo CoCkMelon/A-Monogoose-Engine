@@ -1,0 +1,162 @@
+ame-next ENGINE SPEC
+File: principles.txt
+
+PURPOSE
+Everything below is a firm rule. When in doubt, follow principles.txt.
+If a later file disagrees with this one, this one wins and the other
+file is wrong.
+
+CORE IDEAS
+1. ONE source of truth per feature.
+   Implement a behavior once, in C. Share it across desktop and web.
+   Never re-implement in another language or target.
+
+2. NO abstraction layers.
+   The plain C API IS the engine. No ECS-core, no GameObject /
+   Behaviour facade, no reflection, no virtual components.
+
+3. DATA ORIENTED.
+   Live game state sits in fixed static arrays. Hot loops never
+   allocate, never chase pointers across object layers.
+
+4. SIMPLE BEATS CLEVER.
+   Flat, obvious design an agent can reproduce without guesswork.
+   Every dependency must earn its place.
+
+5. ONE C CORE, MANY TARGETS (cross-platform from day one).
+   All target platforms come from the SAME C: POSIX desktop (Linux,
+   macOS, other Unix), Windows, ANDROID, and WEB (Emscripten). A
+   target is only a toolchain + a thin entry/bootstrap + the right
+   render glue (GLES on Android/web, desktop GL elsewhere) over SDL3.
+   There is no separate engine per platform, and no hand-written
+   WASM/TS twin. Every target is built and tested in GitHub Actions CI
+   (build.txt) so the code never silently rots on a platform.
+
+6. 2D AND 3D FROM ONE C CORE.
+   The engine targets BOTH 2D and 3D from a shared C core, not two
+   engines. NO physics at v0 - only a GEOMETRY/collision-query module
+   (intersections, raycasts, mesh->primitive proxies, broad-phase),
+   shared across dimensions. A single dimension is chosen per build or
+   per project via a macro (AME_2D or AME_3D) so code stays simple.
+   Rigid-body PHYSICS is NOT an engine feature: a project that needs
+   it links raw Box2D (2D) / Box3D (3D) itself, with no engine
+   abstraction over them (physics.txt). The dimension-agnostic parts
+   (pools, events, input actions, audio synthesis, dialogue, text,
+   UI) are written once and shared; only the math/camera/render (and
+   a project's own physics choice) have a 2D and a 3D variant. Sim is
+   still one fixed-step owner; render still batches.
+
+THE TWO-LAYER RULE
+There are exactly two kinds of object:
+  - SETUP / DESCRIPTOR: built once (render pass, camera config,
+    audio source config). Style: take a pointer, mutate in place,
+    return the same pointer for chaining. Convenience only.
+  - HOT / LIVE: updated every step (entities, bullets, positions,
+    velocities, hp, live audio). Live in fixed static pools.
+    Style: plain arrays + plain functions.
+The builder style must NEVER be used for hot live state.
+
+THREADING - SPLIT THREADS (the model that worked)
+  The engine runs SPLIT THREADS, the way the A-Mongoose engine did
+  and it worked well. This is the default model, not an afterthought:
+    - A dedicated LOGIC/SIM thread owns and steps the simulation and
+      geometry at a high fixed rate (see FIXED STEP).
+    - The MAIN thread (SDL callback / render) handles window/OS
+      events and rendering at display rate.
+    - An optional AUDIO thread consumes the mixer.
+    - libasyncinput runs its OWN reader thread on native and delivers
+      raw key/mouse events to the registered callback (input.txt).
+  Rules for shared state across threads:
+    - ONE WRITER per piece of shared state. Exactly one thread may
+      write a given field/array; never two.
+    - Cross-thread handoff is via ATOMICS (and/or a published const
+      snapshot with release/acquire ordering). Writers publish,
+      readers read atomics/const snapshots. They do NOT write back.
+  This is the accepted design - do not "simplify" it back to single
+  thread. The cost (atomics + careful ownership) is worth it and is
+  what the earlier engine validated.
+
+FIXED STEP - UPDATE RATE IS NON-NEGOTIABLE
+  A modern CPU runs a 1000 Hz (or higher) update trivially, and that
+  rate is ESSENTIAL for low-latency, smooth gameplay - do not settle
+  for a coarse per-frame step. Rule:
+    - The simulation runs at AT LEAST 1000 Hz (fixed dt <= 0.001 s)
+      on the logic thread. 1000 Hz or more is the floor, not a goal.
+    - For REAL-TIME / input-driven actions (aim, camera, movement
+      that must track the controller exactly), response must be
+      sub-tick: the >= 1000 Hz loop already gives it, OR a real-time
+      layer reads the latest input atomic at input arrival and updates
+      that action without waiting for the next tick/frame. The raw
+      input reader thread only writes atomics (input.txt); realtime
+      updates come from those atomics on a thread that owns them.
+    - For DETERMINISTIC / simulation-driven cases (the sim, anything
+      that must replay), update BEFORE the frame on the fixed logic
+      step - do not advance them with raw per-frame dt.
+  Concretely: >= 1000 Hz fixed sim step is the default and
+  non-negotiable; real-time input-coupled actions additionally get
+  sub-tick response from the latest input atomics. The split-thread
+  model makes both safe: the sim thread owns sim state, and input
+  writes atomics the realtime/render/sim layers read. Cost-free on
+  modern hardware.
+
+RUNTIME PARSING (one rule, decided here)
+  Runtime parsing is BANNED in the hot loop and for scene/level data
+  (levels.txt bakes to C). It is ALLOWED at load/init time for
+  content-shaped data - dialogue, save/load, and settings definitions
+  (dialogue.txt, save.txt, settings.txt) - which use libfyaml. That
+  is the single rule; do not re-litigate it per file.
+
+DETERMINISM (guarantee we can actually keep)
+  Default guarantee is PER-BINARY / PER-PLATFORM: the same build on
+  the same platform replays identically (good for replays + golden
+  tests in CI). Determinism is NOT the backbone of online play: the
+  netcode is SERVER-AUTHORITATIVE (README Stage 1), so a server is
+  the source of truth and corrects client divergence - exact
+  cross-client bit-identity is not required for the game to work.
+  Cross-platform bit-identity is NOT promised by default; libm
+  (sinf/expf/powf) and vectorization/FMA differ across glibc / musl /
+  macOS / Android (bionic) / Emscripten and change float rounding.
+  Rules:
+    - Pin FP behaviour in build.txt (-ffast-math OFF, fp-contract OFF)
+      for EVERY target (POSIX, Windows, Android, web), and compile the
+      engine's geometry module with the same.
+    - At v0 there is no third-party physics, so determinism is fully
+      ours: we control the geometry/math, the FP gap is small, and
+      per-binary determinism is free. Exact cross-platform bit-identity
+      is cheap to add later (own sin/exp/sqrt + pinned FP) but not a
+      requirement, because the server is authoritative. If a project
+      opts into raw Box2D/Box3D later, their per-binary determinism
+      conventions apply (physics.txt).
+    - Determinism is not a vibe; it is enforced by tests. Golden
+      sim/audio/layout tests replay per-binary in CI.
+
+WHAT WE LEARNED FROM THE OLD ATTEMPTS
+  - Flecs ECS as a core dependency: REJECT. Not needed.
+  - Unity-style C++ facade (unitylike): REJECT. Delete the idea.
+  - 1000 Hz fixed step + split threads + atomics: KEEP. This is the
+    accepted model (see THREADING / FIXED STEP). It worked well in the
+    old engine.
+  - Big scene YAML with rules/systems baked in: REJECT.
+  - Four copies of one demo in C/TS/WAT: REJECT. One C version.
+  - Pointer builder API: KEEP for setup objects only.
+  - Deterministic procedural audio: KEEP.
+  - Test your claims, ship benchmark source if you mention speed:
+    KEEP.
+
+SCOPE GUARDRAIL (decided)
+  Keep the engine fast, small, and data-oriented. Big general runtimes
+  (an ECS, a solver such as psolve, a constraint/automation language,
+  a declarative UI/auto-layout system) are PARKED - they belong in a
+  separate, bigger engine. Adding one here requires amending this file
+  and giving a concrete need. See ui.txt and events.txt.
+
+DONE MEANS
+  Compiles clean (warnings as errors in CI). Engine is C23, one
+  standard per build (third_party/ keeps its own standard).
+  Has a test or a working example for what it does.
+  Stays POSIX-portable (no target-specific call in shared src/) unless
+  it is guarded behind a thin, documented platform shim.
+  No new dependency without updating this spec.
+  No duplicate implementation in another language, dimension, or
+  target.
+  Follows the two-layer rule and agents.txt.

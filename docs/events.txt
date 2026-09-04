@@ -1,0 +1,162 @@
+ame-next ENGINE SPEC
+File: events.txt - discrete gameplay events (dev pattern)
+
+GOAL
+Turn discrete "something happened" outcomes (landed, touched a
+hazard, entered/left a trigger, impact) into EVENTS that gameplay and
+UI consume at one stable point, WITHOUT scattering state checks and
+WITHOUT data races under the engine's split-thread model. Scope is
+discrete gameplay/collision events only (a general event bus is not
+part of this engine yet).
+
+WHERE THE EVENTS COME FROM (v0 has no physics solver - physics.txt)
+  At v0 there is NO physics engine that emits contact callbacks.
+  Collision is GEOMETRY: gameplay tests shapes against static world
+  geometry each fixed step (geometry.h, physics.txt). A discrete
+  event is just an OVERLAP-STATE TRANSITION the game detects by
+  remembering each shape's state from the previous step:
+    - became overlapping this step   -> ENTER (e.g. landed, hazard,
+      trigger enter, impact),
+    - stopped overlapping this step  -> EXIT / LEAVE.
+  The game owns this per-shape "was overlapping last step?" state and,
+  on a transition, PUSHES an event record into the deferred queue.
+  This is cheap, needs no solver, and is fully deterministic.
+  (If a later project opts into raw Box2D/Box3D, their contact
+  callbacks can feed the same queue - events.txt does not care about
+  the source, only that something pushes discrete records.)
+
+WHAT THIS IS FOR
+Examples of events gameplay/UI want:
+  - a character lands on ground again (overlap-begin while airborne)
+  - the player touches a spike hazard (hazard flag + speed)
+  - an actor enters a trigger volume / exits it
+  - a projectile first hits a wall (impact event)
+Today gameplay would scatter these checks; this small library makes
+them events a handler can subscribe to once, drained at one point.
+
+TWO DELIVERY MODES (mixed, by design)
+Mode A - SYNC SIGNALS (cheap, low-level, per-step predicates)
+  - Instant "is it overlapping X right now" checks used inside the
+    update loop on the LOGIC thread (which owns sim + geometry).
+    Examples: grounded, touching_wall, touching_hazard_flag.
+  - These are NOT re-entrant handler dispatch. They read current
+    overlap state and return a bool/float. No allocation, no queue,
+    zero latency. They are thin predicates over the geometry module
+    (helpers in physics.txt).
+  - Safe ONLY on the logic thread that owns the sim. The render
+    thread never calls these against the live world; it reads the
+    published const snapshot if it needs any such value.
+
+Mode B - DEFERRED EVENT QUEUE (for discrete "something happened")
+  - Discrete events (enter/leave, impact) are PUSHED into a bounded
+    ring buffer by gameplay on the LOGIC thread the moment the game
+    detects an overlap transition. The logic thread DRAINS the queue
+    once per fixed step and dispatches to subscribed handlers in
+    order.
+  - Because dispatch happens at a defined point (end of fixed step),
+    handlers may safely read/modify gameplay state. They must NOT
+    itself trigger re-entrancy into the same detection loop.
+  - Threading: everything (produce, drain, dispatch) is on the LOGIC
+    thread, so the ring is producer==consumer in the normal case and
+    needs no lock. Keep the ring atomic/SPSC-friendly anyway so an
+    optional audio/render-side event consumer (or a future separate
+    physics thread) can read without locks - one producer, readers
+    read via release/acquire. Do not dispatch handlers to other
+    threads; handlers always run on the logic thread.
+
+WHY MIXED
+  - Sync signals cover hot per-step conditions cheaply (grounded,
+    touching hazard) where an event per step would be wasteful.
+  - The queue carries the discrete events that should be handled at
+    one stable, deterministic moment (landed, hazard hit, entered a
+    trigger) so handlers run predictably and can safely act.
+  - Rule of thumb: if a handler must MUTATE or fires rarely, use the
+    queue. If it is a stateless per-step test, use a sync signal.
+
+EVENT RECORD (fixed POD, no pointers into pooled slots)
+  kind        (enum, below)
+  a, b        cross-pool handles (pool_id, index, generation) of the
+              two things involved (see data.txt); 0 for world/other
+  p[AME_DIM]  point (world), e.g. contact/hit point; sized to the
+              build dimension (p[2] for 2D, p[3] for 3D) - do NOT
+              hard-code x,y only
+  n[AME_DIM]  normal (if meaningful; else zeros), same dimension
+  rel_speed   approximate relative/impact speed (for damage scaling)
+  flags       copied flags (e.g. hazard bit)
+Handles are resolved to pool slots by the handler; events never hold
+raw pointers that can dangle after a despawn. The record is
+dimension-safe: 3D contacts carry a full p[3] point + normal.
+
+EVENT KINDS (small collision/gameplay enum)
+  EV_OVERLAP_ENTER      overlap first became true this step
+  EV_OVERLAP_EXIT       overlap became false this step
+  EV_HAZARD             entered overlap with a hazard-flagged shape
+                        (composed from EV_OVERLAP_ENTER + flags)
+  EV_IMPACT             enter with relative speed above a threshold
+  ("landed", "break" etc. are NOT separate kinds - gameplay composes
+  them from EV_OVERLAP_ENTER + its own prior state, e.g. was airborne.)
+Keep the kind list small.
+
+SUBSCRIPTION
+Handlers are registered at init into a small fixed table: one
+function pointer + user data per kind, several per kind allowed up
+to a small cap. No dynamic string registry, no runtime lookup by
+name in the hot path. Kind is an enum, not a string.
+
+  event_subscribe(EV_HAZARD, my_hazard_handler, my_ctx);
+  event_drain();        // call ONCE per fixed step, logic thread
+
+Queue overflow: a bounded ring (size = compile-time constant). On
+overflow DROP the oldest record, set an overflow counter, log once
+in debug. Overflow policy is defined and deterministic (drop-oldest),
+never a silent unbounded grow.
+
+DETERMINISM
+Given the same seed and geometry input, the drained event stream is
+identical (order preserved per step). Handlers run in push order.
+The per-shape prev-overlap state lives in the sim, so it replays
+deterministically with the fixed-step sim.
+
+RESPONSIBILITY / WHERE THINGS LIVE
+  - Gameplay (the sim update) owns the per-shape overlap state, runs
+    the geometry overlap tests each fixed step, and on a transition
+    calls events_push. This is the ONLY place that computes overlap
+    transitions. It lives in gameplay, not in the events library.
+  - The events library owns the queue, the handler table, drain, and
+    the sync predicates. It does not know gameplay or geometry.
+  - A later Box2D/Box3D project may instead feed the queue from its
+    own contact callbacks; the events library is agnostic to the
+    source.
+
+API SHAPE (events.h, extern "C")
+  events_init(queue_capacity)
+  events_subscribe(kind, fn, userdata)
+  events_push(kind, a, b, const float p[AME_DIM],
+              const float n[AME_DIM], rel_speed, flags) // caller only
+  events_drain()                    // logic thread, once per fixed step
+  events_sync_is_grounded(handle)   // Mode A example (thin)
+  events_sync_touching_flag(handle, flags)
+  events_clear()
+
+BANNED
+  - A general-purpose event bus / string-named events for now.
+  - Dispatching to gameplay handlers re-entrantly from inside the same
+    detection/drain (no recursion into the sim update).
+  - Running detection/drain from more than one thread.
+  - Holding a raw pointer to a pooled slot in an event record.
+  - Per-event heap allocation; unbounded queue growth.
+  - Polling collisions from many places instead of subscribing here.
+  - Requiring a physics solver to produce these events (v0 has none).
+
+CHECK
+  A demo: a character jumps and lands -> exactly one EV_OVERLAP_ENTER
+  (landed) per landing, no spam while held. A spike hazard emits
+  EV_HAZARD with correct rel_speed once on impact. Trigger enter/exit
+  fire once each.
+  A stress test of many simultaneous overlaps under the ASan build
+  shows no heap growth and no lost/duplicated events.
+  Events drain on the logic thread with no data races (TSan clean);
+  handlers run once per discrete event, not per step.
+  Determinism: same seed -> same event sequence per-binary (golden CI
+  replay); event ordering is preserved, not relied on across platforms
+  (principles.txt). No physics solver is used to produce events.
