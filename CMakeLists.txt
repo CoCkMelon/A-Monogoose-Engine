@@ -130,6 +130,8 @@ function(ame_test name)
 endfunction()
 
 ame_test(test_pool   tests/test_pool.c   src/pool.c)
+# Seqlock snapshot: real threads, TSan target (see ci.yml).
+ame_test(test_snap   tests/test_snap.c)
 ame_test(test_events tests/test_events.c src/events.c)
 ame_test(test_geo    tests/test_geo.c    src/geo.c)
 ame_test(test_math   tests/test_math.c   src/math.c src/camera.c)
