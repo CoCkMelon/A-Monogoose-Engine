@@ -175,6 +175,14 @@ target_compile_options(test_biscuit PRIVATE ${AME_WARN})
 target_link_libraries(test_biscuit PRIVATE Threads::Threads m)
 add_test(NAME test_biscuit COMMAND test_biscuit)
 
+# Regression: the example self-tests must write their BMP relative to the
+# caller's working directory (they used to hard-code /home/user/ame-next/...).
+add_test(NAME test_selftest_paths
+         COMMAND ${CMAKE_COMMAND}
+                 -DMEMORY_EXE=$<TARGET_FILE:memory>
+                 -DBISCUIT_EXE=$<TARGET_FILE:biscuit>
+                 -P ${CMAKE_SOURCE_DIR}/cmake/run_selftest_paths.cmake)
+
 # Reference C emitted from the Lean model (generated/ame_gen.c).
 add_executable(test_gen tests/test_gen.c generated/ame_gen.c)
 target_include_directories(test_gen PRIVATE ${CMAKE_SOURCE_DIR}/generated)

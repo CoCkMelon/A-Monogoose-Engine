@@ -2,6 +2,21 @@
 
 #include <string.h>
 
+/*
+ * Bounds check on the *unsigned* slot index.
+ *
+ * The previous test was `if ((int)i >= p->cap) return 0;`. An index with the
+ * high bit set (e.g. 0x80000000) converts to a negative int, so it passes the
+ * test and the next line reads p->alive[i] far out of bounds. Handles come
+ * from serialised/network input (see memnet payloads) and from saved state, so
+ * they are not trusted values: the check has to be exact, not sign-flipped.
+ * cap <= 0 covers an unbound/reset pool (bind with cap 0 is allowed).
+ */
+static int pool_index_ok(const ame_pool *p, uint32_t i)
+{
+    return p != NULL && p->cap > 0 && i < (uint32_t)p->cap;
+}
+
 ame_pool *ame_pool_bind(ame_pool *p,
                         uint32_t *generation, uint8_t *alive, uint32_t *pending,
                         int cap)
@@ -45,7 +60,7 @@ int ame_pool_valid(const ame_pool *p, ame_handle h)
     if (!p || h == AME_HANDLE_INVALID) return 0;
     uint32_t i = ame_handle_index(h);
     uint32_t g = ame_handle_generation(h);
-    if ((int)i >= p->cap) return 0;
+    if (!pool_index_ok(p, i)) return 0;
     if (g == 0) return 0;
     return p->alive[i] && p->generation[i] == g;
 }
@@ -63,9 +78,11 @@ void ame_pool_despawn(ame_pool *p, ame_handle h)
 void ame_pool_apply_despawns(ame_pool *p)
 {
     if (!p) return;
-    for (int k = 0; k < p->n_pending; k++) {
+    int n = p->n_pending;
+    if (n < 0 || n > p->cap) return;      /* corrupt pending count: do nothing */
+    for (int k = 0; k < n; k++) {
         uint32_t i = p->pending[k];
-        if ((int)i >= p->cap) continue;
+        if (!pool_index_ok(p, i)) continue;
         if (p->alive[i]) {
             p->alive[i] = 0;
             p->live--;

@@ -124,7 +124,7 @@ static void SDLCALL on_audio(void *userdata, SDL_AudioStream *stream,
     SDL_PutAudioStreamData(stream, tmp, frames * 2 * (int)sizeof(float));
 }
 
-static int run_selftest(void)
+static int run_selftest(const char *bmp_path)
 {
     mem_reset(42);
     MemSnap s;
@@ -149,11 +149,11 @@ static int run_selftest(void)
                 s.score[0], s.n_matched, s.turn);
         return 0;
     }
-    if (!mem_write_bmp(APP_SELFTEST_BMP, 640, 640)) {
-        fprintf(stderr, "bmp write failed\n");
+    if (!mem_write_bmp(bmp_path, 640, 640)) {
+        fprintf(stderr, "bmp write failed: %s\n", bmp_path);
         return 0;
     }
-    printf("selftest ok, wrote preview.bmp\n");
+    printf("selftest ok, wrote %s\n", bmp_path);
     return 1;
 }
 
@@ -230,8 +230,11 @@ SDL_AppResult game_app_init(void **appstate, int argc, char **argv)
     g_mode = MODE_LOCAL;
 
     for (int i = 1; i < argc; i++) {
-        if (!strcmp(argv[i], "--selftest"))
-            return run_selftest() ? SDL_APP_SUCCESS : SDL_APP_FAILURE;
+        if (!strcmp(argv[i], "--selftest")) {
+            const char *out = APP_SELFTEST_BMP;   /* cwd-relative default */
+            if (i + 1 < argc && argv[i + 1][0] != '-') out = argv[++i];
+            return run_selftest(out) ? SDL_APP_SUCCESS : SDL_APP_FAILURE;
+        }
         if (!strcmp(argv[i], "--dump-bmp") && i + 1 < argc) {
             mem_reset((uint32_t)time(NULL));
             mem_write_bmp(argv[i + 1], 800, 800);
@@ -260,7 +263,8 @@ SDL_AppResult game_app_init(void **appstate, int argc, char **argv)
             printf("memory                 local hotseat\n"
                    "memory --listen [port] dedicated server (default 4242)\n"
                    "memory --connect [host] [port]\n"
-                   "memory --seed N\n");
+                   "memory --seed N\n"
+                   "memory --selftest [out.bmp]   (default: " APP_SELFTEST_BMP ")\n");
             return SDL_APP_SUCCESS;
         }
     }

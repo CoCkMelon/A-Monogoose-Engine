@@ -22,4 +22,7 @@
 /* Unity-like Debug.DrawLine overlay (track segs, wheel circles). */
 #define APP_DEBUG_DRAW 1
 
-#define APP_SELFTEST_BMP "/home/user/ame-next/biscuit.bmp"
+/* Where `--selftest` writes its BMP. Relative to the process working
+   directory, so the self-test works in any checkout; pass a path to
+   `--selftest <file>` to override it. */
+#define APP_SELFTEST_BMP "biscuit.bmp"

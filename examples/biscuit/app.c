@@ -64,7 +64,7 @@ static void SDLCALL on_audio(void *userdata, SDL_AudioStream *stream,
     SDL_PutAudioStreamData(stream, tmp, frames * 2 * (int)sizeof(float));
 }
 
-static int run_selftest(void)
+static int run_selftest(const char *bmp_path)
 {
     bf_reset(1);
     bf_skip_dialogue();
@@ -103,11 +103,11 @@ static int run_selftest(void)
         fprintf(stderr, "selftest: fuel did not burn\n");
         return 0;
     }
-    if (!bf_write_bmp(APP_SELFTEST_BMP, 640, 360)) {
-        fprintf(stderr, "bmp write failed\n");
+    if (!bf_write_bmp(bmp_path, 640, 360)) {
+        fprintf(stderr, "bmp write failed: %s\n", bmp_path);
         return 0;
     }
-    printf("selftest ok, wrote biscuit.bmp  x=%.2f fuel=%.1f\n", s.car_x, s.fuel);
+    printf("selftest ok, wrote %s  x=%.2f fuel=%.1f\n", bmp_path, s.car_x, s.fuel);
     return 1;
 }
 
@@ -115,8 +115,11 @@ SDL_AppResult game_app_init(void **appstate, int argc, char **argv)
 {
     (void)appstate;
     for (int i = 1; i < argc; i++) {
-        if (!strcmp(argv[i], "--selftest"))
-            return run_selftest() ? SDL_APP_SUCCESS : SDL_APP_FAILURE;
+        if (!strcmp(argv[i], "--selftest")) {
+            const char *out = APP_SELFTEST_BMP;   /* cwd-relative default */
+            if (i + 1 < argc && argv[i + 1][0] != '-') out = argv[++i];
+            return run_selftest(out) ? SDL_APP_SUCCESS : SDL_APP_FAILURE;
+        }
         if (!strcmp(argv[i], "--dump-bmp") && i + 1 < argc) {
             bf_reset(1);
             bf_skip_dialogue();
@@ -126,7 +129,7 @@ SDL_AppResult game_app_init(void **appstate, int argc, char **argv)
         }
         if (!strcmp(argv[i], "--help") || !strcmp(argv[i], "-h")) {
             printf("biscuit                 Biscuit Fuel\n"
-                   "biscuit --selftest\n"
+                   "biscuit --selftest [out.bmp]   (default: " APP_SELFTEST_BMP ")\n"
                    "biscuit --dump-bmp file.bmp\n");
             return SDL_APP_SUCCESS;
         }

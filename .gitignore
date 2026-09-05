@@ -1,4 +1,5 @@
 build/
+build-*/
 preview.bmp
 *.o
 .cache/

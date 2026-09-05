@@ -32,10 +32,15 @@ ctest --test-dir build --output-on-failure
 Headless checks (no window):
 
 ```
-./build/memory --selftest          # writes preview.bmp
+./build/memory --selftest          # writes preview.bmp (relative to cwd)
+./build/memory --selftest out.bmp  # or wherever you want it
 ./build/memory --dump-bmp board.bmp
-./build/biscuit --selftest         # writes biscuit.bmp
+./build/biscuit --selftest         # writes biscuit.bmp (relative to cwd)
 ```
+
+`--selftest` writes next to the caller, not to a fixed directory, so it works
+in any checkout. `ctest` runs both self-tests in a scratch directory as
+`test_selftest_paths` to keep it that way.
 
 ## Biscuit Fuel
 
