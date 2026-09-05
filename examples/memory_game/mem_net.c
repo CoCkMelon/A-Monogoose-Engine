@@ -187,7 +187,11 @@ void mem_net_encode_state(const mem_game *g, uint8_t *out, uint16_t *len) {
     out[7] = (uint8_t)(mem_over(g) ? mem_winner(g) : -2);
     for (int i = 0; i < g->count && i < MEM_MAX_CARDS; i++) {
         uint8_t *p = out + 8 + i * 7;
-        p[0] = g->card[i].pair;
+        /* anti-peep: face-down cards keep their pair secret; open /
+         * matched / closing cards are public (a flip showed them) */
+        p[0] = g->card[i].state == MEM_CARD_DOWN
+            ? MEM_PAIR_HIDDEN
+            : g->card[i].pair;
         p[1] = g->card[i].state;
         p[2] = g->card[i].matched;
         memcpy(p + 3, &g->card[i].angle, 4);
@@ -233,8 +237,12 @@ void mem_client_on(mem_client *c, const mem_msgv *m) {
         c->opp_left = -1;
         break;
     case MEM_MSG_OPENED:
-        /* authoritative pick echo: replays the flip animation */
-        (void)mem_pick(&c->g, m->b);
+        /* authoritative pick echo: replays the flip animation and
+         * reveals the card's pair (anti-peep: only now knowable) */
+        if (m->b < c->g.count) {
+            (void)mem_pick(&c->g, m->b);
+            c->g.card[m->b].pair = m->c;
+        }
         break;
     case MEM_MSG_LEFT:
         c->opp_left = m->a;

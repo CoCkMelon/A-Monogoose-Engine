@@ -72,7 +72,14 @@ static void send_state_to(int p) {
 }
 
 static void start_game(void) {
-    uint32_t seed = (uint32_t)time(NULL) ^ 0xC0FFEEu;
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    /* time(NULL) alone repeats within the same second (two back-to-back
+     * games got identical boards) - mix in monotonic nanos + a call
+     * counter so consecutive games always differ. */
+    static uint32_t games;
+    uint32_t seed = (uint32_t)time(NULL) ^ 0xC0FFEEu
+        ^ (uint32_t)ts.tv_nsec ^ (games++ << 13);
     mem_reset(&G, 4, 4, seed);
     started = 1;
     rematch = 0;
@@ -272,8 +279,8 @@ int main(int argc, char **argv) {
                             || !mem_pick(&G, m.a)) {
                             continue; /* not your turn / illegal: ignored */
                         }
-                        bcast(MEM_MSG_OPENED, (uint8_t)p, (uint8_t)m.a, 0,
-                               NULL, 0, -1);
+                        bcast(MEM_MSG_OPENED, (uint8_t)p, (uint8_t)m.a,
+                              G.card[m.a].pair, NULL, 0, -1);
                     }
                 }
                 if (r < 0)

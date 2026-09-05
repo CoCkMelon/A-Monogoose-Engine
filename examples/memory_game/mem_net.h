@@ -12,10 +12,15 @@
  * server messages: OPENED -> mem_pick on the mirror replays the exact
  * flip animation; STATE overwrites the whole mirror (join / rejoin /
  * rematch). Clients never decide anything.
- *   NOTE (v0, loopback first): STATE carries the face-down pairs, so a
- *   memory-scanning client COULD peek. Hiding pairs behind reveal
- *   events is a later hardening item; the exit test only requires
- *   correct authority, not secret-keeping.
+ *
+ * ANTI-PEEP (competitive fairness): pairs of cards that were NEVER
+ * OPENED travel as MEM_PAIR_HIDDEN (0xFF). A card's true pair is
+ * revealed exactly when the server echoes its OPEN (and in STATE for
+ * cards already open/matched/closing). This is precisely the
+ * information a HONEST player has: you see a face when it flips open,
+ * you may remember it, and never before. TCP ordering guarantees the
+ * mirror holds both true pairs before its sim enters RESOLVE, so the
+ * deterministic mirror still computes match/no-match exactly.
  */
 #ifndef MEM_NET_H
 #define MEM_NET_H
@@ -36,7 +41,7 @@ enum {
     MEM_MSG_WELCOME = 16, /* S->C a=you b=cols c=rows                  */
     MEM_MSG_STATE   = 17, /* S->C full snapshot (join/rejoin/rematch)  */
     MEM_MSG_TURN    = 18, /* S->C a=turn: your-turn / whose turn       */
-    MEM_MSG_OPENED  = 19, /* S->C a=player b=card: a validated open    */
+    MEM_MSG_OPENED  = 19, /* S->C a=player b=card c=PAIR: validated open */
     MEM_MSG_MATCH   = 20, /* S->C a=player b,c=cards (scored)          */
     MEM_MSG_NOMATCH = 21, /* S->C a=player b,c=cards (flip back)       */
     MEM_MSG_WIN     = 22, /* S->C a=winner(-1 tie) b,c=scores          */
@@ -46,6 +51,7 @@ enum {
 
 #define MEM_NET_MAX_PAYLOAD 512
 #define MEM_NET_PLAYERS 2
+#define MEM_PAIR_HIDDEN 0xFF /* never-opened card: pair withheld */
 
 typedef struct {
     uint8_t  type, a, b, c;
