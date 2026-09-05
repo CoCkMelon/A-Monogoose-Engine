@@ -936,3 +936,50 @@ Audit positives worth remembering: "by a wide margin the healthiest
 code in this repository"; A recommended as go-forward core; port from
 B: endian codec (DONE), selftest-paths CTest pattern (n/a - no
 hardcoded paths), test_gen (n/a).
+
+SESSION 19 - USER: "Same problem with text editor. Other problem is
+glitching during resize: not updating when upscaled, moving down when
+scaled vertically to direction to which moved."
+
+REPRODUCTION INFRASTRUCTURE: Xvfb :99 + SDL_VIDEODRIVER=x11 = REAL
+window path in-sandbox (BLO backbuffer, real resize events). xwd root
+dumps = ground truth pixels (window position: SDL centers in screen,
+root rows minus (screen_h-win_h)/2).
+
+EDITOR ON REAL X11 (HEAD): caret bar x=86 == CPU math (NDC -0.866,
++0.933 -> col 86, row 24); window dump shows text at TOP (rows 24..57
+window-relative). READBACK SAGA CLOSED: llvmpipe glReadPixels is
+spec-BLO everywhere (offscreen AND X11); the earlier "TLO pbuffer"
+theory was WRONG (my own flip bookkeeping); AME_SHOT_NOFLIP harmless.
+The audit proved the user's snapshot was c196c15 (pre-f56774a PAD
+fix) - likely stale build; gave them the AME_ED_TRACE recipe.
+
+REAL BUGS FOUND + FIXED THIS SESSION (user's symptoms were legitimate):
+1. HiDPI MOUSE POINTS != PIXELS (most plausible root of their
+   persistent caret/click complaint on fractional scaling):
+   in_on_mouse_move received POINTS; hit-tests run in PIXELS. app_sdl
+   now tracks g_mouse_scale = pixel_w/points_w (init + every resize)
+   and scales motion before forwarding.
+2. 2D EXAMPLES HALF-WINDOW OFFSET: ortho2d default camera pos (0,0) =
+   view CENTER; examples pushed WINDOW-px as WORLD px (line_draw drew
+   below-left of cursor, audio puck/rails, tilemap centering, raymarch
+   quad margin). All 7 2D examples now set camera_pos(w/2,h/2) at
+   init + app_resize => world == window px. Editor unaffected (was
+   origin-consistent). memory_game untouched (3D).
+3. RESIZE GLITCH (their report): WM-driven resize showed stale
+   bottom-left-anchored buffer ("moves with the drag, doesn't update
+   when enlarged") because no synchronous re-present on the event.
+   app_sdl: present_frame() (app_render+Swap) called on
+   RESIZED/PIXEL_SIZE_CHANGED(change) + EXPOSED/RESTORED/MAXIMIZED.
+   CRITICAL: offscreen driver OPTS OUT (g_expose_redraw=false) - the
+   extra present shifted memory_game's own screenshot frame counter
+   (goldens broke: 11523 px scoreboard-phase diff, shadow band 0);
+   after opt-out BOTH goldens byte-identical again.
+VERIFIED: resize roast under Xvfb (6 programmatic SetWindowSize
+cycles: 1280x720->1600x900->900x1400->1700x500->...): text anchored
+rows 32..53 at EVERY size, events flow, no garbage. Suite 19/19,
+-Werror clean, goldens intact.
+坑: present-on-expose perturbs game render counters (goldens) on
+headless drivers - driver-name opt-out is the pattern; ALWAYS decode
+window position (SDL centers unmanaged windows) before reading root
+dumps as ground truth.

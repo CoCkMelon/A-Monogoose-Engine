@@ -18,6 +18,7 @@
 #define SDL_MAIN_USE_CALLBACKS
 #include <SDL3/SDL_main.h>
 #include <stdio.h>
+#include <string.h>
 #include <stdlib.h> /* generates main() -> SDL_App* callbacks */
 
 #include <ame/app.h>
@@ -31,6 +32,9 @@
 #include <stdatomic.h>
 
 static SDL_Window *g_window = NULL;
+static float g_mouse_scale = 1.0f; /* window px per point (HiDPI) */
+static bool g_expose_redraw = true; /* offscreen (headless QA) opts out:
+                                    * extra presents shift game-frame counters */
 static SDL_GLContext g_gl = NULL;
 static SDL_Thread *g_logic = NULL;
 static _Atomic int g_run;       /* 1 = running, 0 = stop requested */
@@ -132,6 +136,17 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char **argv) {
         }
     }
 
+    {
+        int iw = 0, ih = 0, pw = 0, ph = 0;
+        if (SDL_GetWindowSize(g_window, &iw, &ih) && iw > 0
+            && SDL_GetWindowSizeInPixels(g_window, &pw, &ph) && pw > 0)
+            g_mouse_scale = (float)pw / (float)iw;
+    }
+    /* headless QA driver: extra presents shift game-level frame
+     * counters (goldens count renders); real WMs need them */
+    const char *drv = SDL_GetCurrentVideoDriver();
+    if (drv && strcmp(drv, "offscreen") == 0)
+        g_expose_redraw = false;
     atomic_store(&g_run, 1);
     atomic_store(&g_exit_code, 0);
     {
@@ -146,6 +161,8 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char **argv) {
     return SDL_APP_CONTINUE;
 }
 
+static void present_frame(void);
+
 SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
     (void)appstate;
     /* window layer first */
@@ -154,18 +171,42 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
         atomic_store_explicit(&g_run, 0, memory_order_relaxed);
         return SDL_APP_SUCCESS;
     case SDL_EVENT_WINDOW_RESIZED:
-    case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED: {
+    case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED:
+    case SDL_EVENT_WINDOW_EXPOSED:
+    case SDL_EVENT_WINDOW_RESTORED:
+    case SDL_EVENT_WINDOW_MAXIMIZED: {
         /* data1/data2 can be POINTS (scaled Wayland/macOS); the GL drawable
          * only ever matches PIXELS. Always re-query. */
         int pw = 0, ph = 0;
         static int last_w, last_h;
-        if (SDL_GetWindowSizeInPixels(g_window, &pw, &ph) && pw > 0 && ph > 0
-            && (pw != last_w || ph != last_h)) {
+        bool changed = false;
+        if ((event->type == SDL_EVENT_WINDOW_RESIZED
+             || event->type == SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED)
+            && SDL_GetWindowSizeInPixels(g_window, &pw, &ph) && pw > 0
+            && ph > 0 && (pw != last_w || ph != last_h)) {
             last_w = pw;
             last_h = ph;
             rp_viewport(pw, ph);
             app_resize(pw, ph);
+            changed = true;
         }
+        /* mouse coordinates are POINTS; hit-testing runs in PIXELS -
+         * track the scale (fractional HiDPI made every click land at
+         * points*w instead of the clicked pixel) */
+        int iw = 0, ih = 0;
+        if (SDL_GetWindowSize(g_window, &iw, &ih) && iw > 0 && ih > 0
+            && SDL_GetWindowSizeInPixels(g_window, &pw, &ph) && pw > 0
+            && ph > 0)
+            g_mouse_scale = (float)pw / (float)iw;
+        /* WM resize/expose: present a fresh full-viewport frame NOW so
+         * the drag never shows a stale or bottom-left-anchored buffer */
+        if (changed && g_expose_redraw)
+            present_frame(); /* re-render at the NEW size immediately */
+        else if (g_expose_redraw
+                 && (event->type == SDL_EVENT_WINDOW_EXPOSED
+                     || event->type == SDL_EVENT_WINDOW_RESTORED
+                     || event->type == SDL_EVENT_WINDOW_MAXIMIZED))
+            present_frame(); /* damage/restore: fresh frame NOW */
         return SDL_APP_CONTINUE;
     }
     default:
@@ -181,7 +222,8 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
             in_on_key(event->key.scancode, event->type == SDL_EVENT_KEY_DOWN);
         break;
     case SDL_EVENT_MOUSE_MOTION:
-        in_on_mouse_move(event->motion.x, event->motion.y);
+        in_on_mouse_move(event->motion.x * g_mouse_scale,
+                         event->motion.y * g_mouse_scale);
         break;
     case SDL_EVENT_MOUSE_BUTTON_DOWN:
     case SDL_EVENT_MOUSE_BUTTON_UP:
@@ -205,6 +247,15 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
  * memory game's stb PNG path) keep their own AME_SCREENSHOT hook. */
 static int g_shot_left = -1;
 static char g_shot_path[256];
+
+/* one render+present, callable from the EVENT path too: WM-driven
+ * resize/expose needs a fresh frame SYNCHRONOUSLY or the user sees a
+ * stale bottom-left-anchored buffer while dragging (resize glitch:
+ * "content moves with the drag / doesn't update when enlarged"). */
+static void present_frame(void) {
+    if (app_render() == 0)
+        SDL_GL_SwapWindow(g_window);
+}
 
 SDL_AppResult SDL_AppIterate(void *appstate) {
     (void)appstate;

@@ -244,6 +244,10 @@ static bool prev_left;
 
 int app_init(void) {
     camera_viewport(camera_ortho2d(camera_desc(&CAM)), VIEW_W, VIEW_H);
+    /* world (0,0) = window TOP-LEFT: pos = view center. Without
+     * this the view centers on world origin and every sprite
+     * pushed in window-px coordinates lands half a window off. */
+    camera_pos(&CAM, (float)VIEW_W * 0.5f, (float)VIEW_H * 0.5f, 0);
     camera_build(&CAM);
     ame_rp_desc d;
     if (rp_init(rp_desc_blend(rp_desc_depth(rp_desc_begin(&d), false), true),
@@ -422,6 +426,7 @@ static int ed_fixed(float dt) {
 
 void app_resize(int w, int h) {
     camera_viewport(&CAM, w, h);
+    camera_pos(&CAM, w * 0.5f, h * 0.5f, 0);
     camera_build(&CAM);
     rp_viewport(w, h);
     rp_set_camera(&CAM);
