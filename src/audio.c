@@ -10,6 +10,10 @@
 
 #include <SDL3/SDL.h>
 #include <math.h>
+#include <stdarg.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 /* --- fixed-point phase: 32.32; wraps exactly; per-binary deterministic --- */
@@ -25,6 +29,10 @@ typedef struct {
     bool     used;
     float    env;        /* current envelope 0..1 */
     uint32_t noise;      /* xorshift state for noise */
+    /* decoded PCM voice (AME_WAVE_PCM) - buffer owned by caller */
+    const float *pcm;    /* stereo interleaved */
+    int      pcm_frames;
+    int64_t  pcm_pos;
     _Atomic uint32_t env_pub; /* env * 1024, published for gameplay */
 } au_voice;
 
@@ -133,6 +141,23 @@ static bool au_pop(ame_aucmd *c) {
 
 /* --- voice management (logic thread) --------------------------------------- */
 
+int audio_new_decoded(const float *pcm_stereo, int frames, bool loop) {
+    if (!pcm_stereo || frames <= 0)
+        return -1;
+    ame_synth_cfg cfg = { 0 };
+    cfg.wave = AME_WAVE_PCM;
+    cfg.gain = 1.0f;
+    cfg.pan = 0.0f;
+    cfg.loop = loop;
+    int id = audio_new_synth(&cfg);
+    if (id >= 0) {
+        S.v[id].pcm = pcm_stereo;
+        S.v[id].pcm_frames = frames;
+        S.v[id].pcm_pos = 0;
+    }
+    return id;
+}
+
 int audio_new_synth(const ame_synth_cfg *cfg) {
     /* find a free slot: prefer never-used, else a stopped voice */
     int free_idx = -1, stopped = -1;
@@ -216,6 +241,8 @@ static inline float au_wave_sample(au_voice *v) {
         return (frac < 0.5f ? frac * 4.0f - 1.0f : 3.0f - frac * 4.0f) * 0.9f;
     case AME_WAVE_NOISE:
         return ((float)(int32_t)au_noise(&v->noise) / 2147483648.0f) * 0.5f;
+    case AME_WAVE_PCM:
+        return 0.0f; /* handled inline in the mixer loop (stereo read) */
     }
     return 0.0f;
 }
@@ -283,7 +310,31 @@ void audio_render(float *out, int frames) {
             v->env = env;
             atomic_store_explicit(&v->env_pub, (uint32_t)(env * 1024.0f),
                                   memory_order_relaxed);
-            float s = au_wave_sample(v) * env * v->cfg.gain;
+            float s;
+            if (v->cfg.wave == AME_WAVE_PCM) {
+                /* decoded sample: stereo passthrough (envelope-free;
+                 * natural end or loop - audio.txt DECODED source) */
+                if (v->pcm_pos >= v->pcm_frames) {
+                    if (!v->cfg.loop) {
+                        v->playing = false;
+                        continue;
+                    }
+                    v->pcm_pos = 0;
+                }
+                s = v->pcm[(size_t)v->pcm_pos * 2] * v->cfg.gain;
+                float sr = v->pcm[(size_t)v->pcm_pos * 2 + 1] * v->cfg.gain;
+                v->pcm_pos++;
+                float pan2 = ame_clampf(v->cfg.pan, -1.0f, 1.0f)
+                           * 0.7853981634f;
+                float pl = cosf(pan2) - sinf(pan2);
+                float pr = cosf(pan2) + sinf(pan2);
+                mix_l += s * pl;
+                mix_r += sr * pr;
+                atomic_store_explicit(&v->env_pub, 1024u,
+                                      memory_order_relaxed);
+                continue;
+            }
+            s = au_wave_sample(v) * env * v->cfg.gain;
             /* constant-power pan */
             float pan = ame_clampf(v->cfg.pan, -1.0f, 1.0f) * 0.7853981634f; /* pi/4 scale */
             float l = cosf(pan) - sinf(pan);
@@ -309,4 +360,67 @@ void audio_render(float *out, int frames) {
             out[f] = (mix_l + mix_r) * 0.5f;
         }
     }
+}
+
+/* --- decoded samples: dependency-free 16-bit PCM wav reader ---------------- */
+
+float *audio_load_wav(const char *path, int *frames_out) {
+    if (!path || !frames_out)
+        return NULL;
+    *frames_out = 0;
+    FILE *f = fopen(path, "rb");
+    if (!f)
+        return NULL;
+    uint8_t hdr[44];
+    if (fread(hdr, 1, sizeof hdr, f) != sizeof hdr
+        || memcmp(hdr, "RIFF", 4) != 0 || memcmp(hdr + 8, "WAVE", 4) != 0) {
+        fclose(f);
+        return NULL;
+    }
+    uint16_t fmt = (uint16_t)(hdr[20] | (hdr[21] << 8));   /* 1 = PCM  */
+    uint16_t channels = (uint16_t)(hdr[22] | (hdr[23] << 8));
+    uint32_t rate = (uint32_t)(hdr[24] | (hdr[25] << 8) | (hdr[26] << 16)
+                               | ((uint32_t)hdr[27] << 24));
+    uint16_t bits = (uint16_t)(hdr[34] | (hdr[35] << 8));
+    if (fmt != 1 /* PCM */ || (channels != 1 && channels != 2)
+        || bits != 16 || rate == 0) {
+        fclose(f);
+        return NULL; /* only plain 16-bit PCM mono/stereo, like v0 needs */
+    }
+    uint32_t data_bytes = (uint32_t)(hdr[40] | (hdr[41] << 8)
+                                     | (hdr[42] << 16)
+                                     | ((uint32_t)hdr[43] << 24));
+    if (data_bytes == 0 || data_bytes > (64u << 20)) {
+        fclose(f);
+        return NULL;
+    }
+    size_t samples = data_bytes / 2; /* total 16-bit samples */
+    int frames = (int)(samples / channels);
+    int16_t *raw = malloc(data_bytes);
+    if (!raw) {
+        fclose(f);
+        return NULL;
+    }
+    if (fread(raw, 1, data_bytes, f) != data_bytes) {
+        free(raw);
+        fclose(f);
+        return NULL;
+    }
+    fclose(f);
+    float *out = malloc((size_t)frames * 2 * sizeof(float));
+    if (!out) {
+        free(raw);
+        return NULL;
+    }
+    for (int i = 0; i < frames; i++) {
+        float l = (float)raw[i * channels] / 32768.0f;
+        float r = channels == 2 ? (float)raw[i * channels + 1] / 32768.0f : l;
+        out[i * 2] = l;
+        out[i * 2 + 1] = r;
+    }
+    free(raw);
+    (void)rate; /* the mixer runs at its own rate; resampling is a
+                 * later-stage codec concern (Stage 3) */
+    *frames_out = frames;
+    return out;
 }

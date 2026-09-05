@@ -27,7 +27,10 @@ typedef enum {
     AME_WAVE_SQUARE,
     AME_WAVE_SAW,
     AME_WAVE_TRIANGLE,
-    AME_WAVE_NOISE
+    AME_WAVE_NOISE,
+    AME_WAVE_PCM /* decoded-sample voice: reads a PCM buffer (setup
+                   layer: the buffer is loaded ONCE and owned by the
+                   caller; the mixer only reads it - audio.txt) */
 } ame_wave;
 
 /* synth patch — fixed struct, no allocation (two-layer rule: setup data) */
@@ -71,6 +74,13 @@ void audio_detach_sdl(void);
 /* --- voices (logic thread; published via command queue) -------------------- */
 /* create a voice slot (setup: cfg is copied); returns id or -1 when full */
 int  audio_new_synth(const ame_synth_cfg *cfg);
+/* decoded sample voice: stereo interleaved float PCM, loaded once by
+ * the caller (see audio_load_wav). Returns a voice id, -1 if full. */
+int  audio_new_decoded(const float *pcm_stereo, int frames, bool loop);
+/* read a 16-bit PCM wav (mono or stereo) into NEWLY-ALLOCATED stereo
+ * interleaved float samples (setup layer: call once, free() when the
+ * voice is gone). Returns NULL on any format mismatch. */
+float *audio_load_wav(const char *path, int *frames_out);
 void audio_set(int id, const ame_synth_cfg *cfg); /* republish patch */
 void audio_play(int id);
 void audio_stop(int id);

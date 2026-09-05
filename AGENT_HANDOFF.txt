@@ -357,3 +357,41 @@ SESSION 7 ADDENDUM 2 - STAGE 2 SLICE 3: PARTICLES (single pass only):
 - shots/stage2_particles.png: autoplay frame 500 (matched cards green,
   bursts flying) - byte-reproducible via AME_FIXED_FRAME_DT=0.0166667
   AME_AUTOPLAY=1 AME_SCREENSHOT_FRAMES=500.
+
+SESSION 8 - A-MONGOOSE PARITY (user: "reach feature parity with
+original a mongoose"). Inventory from github.com/CoCkMelon/
+A-Monogoose-Engine. REJECTED per spec (not parity targets): ECS/flecs,
+Unity-like facade, scene YAML/prefabs, parent-child transform
+hierarchy, Box2D bridge (opt-in per project later).
+PARITY ITEMS LANDED THIS SESSION:
+- audio_ray.h/.c: 2D occlusion raytracer PORTED per audio.txt
+  (distance rolloff + air absorption dB/m + per-shape materials
+  transmission_loss_db/mono_collapse + occlusion_db fallback +
+  constant-power pan; presets AIR/STEEL/WOOD/CONCRETE/DRYWALL).
+  Key change vs A-Mongoose: occlusion counts each shape ONCE via
+  per-shape segment tests (nearest-hit marching re-counts a thin wall
+  entry+exit+inside); materials live in a fixed table keyed by shape
+  id - ame_audio_ray_reset() MUST pair with ame_geo_reset (stale ids
+  keep materials otherwise). ame_audio_spatial_gains = cheap no-ray
+  path (audio.txt "plain spatial helpers").
+- audio: AME_WAVE_PCM decoded voices (stereo interleaved float buffer
+  owned by caller, loop or one-shot) + audio_load_wav (16-bit PCM
+  mono/stereo RIFF; offsets: 20=fmt tag,22=channels,24=rate,34=bits
+  - do NOT conflate fmt/channels). audio.txt DECODED scope, no
+  streaming.
+- tilemap.h/.c: Tiled .tmj (JSON) parity port (orthogonal, right-down,
+  int layers, single tileset, FIXED pools no malloc): minimal JSON
+  subset parser + ame_tilemap_draw pushing one quad per non-zero gid
+  into the ONE rp batch (atlas UVs when a tileset atlas is passed,
+  stable gid tints on white otherwise).
+- test_render_2d (ame::2d + AME_2D define!): CLOSES the render.txt
+  CHECK line "2D build renders 1000 sprites in a handful of draw
+  calls with a pixel-perfect camera" - 1036 quads in 1 draw call;
+  +0.9px camera move = byte-identical frame (snap), +1.0px changes;
+  viewport cycle stable. PITFALLS: test TUs linking ame::2d MUST
+  -DAME_2D=1 (struct layout ABI differs between dims!); remember
+  rp_set_gl_loader BEFORE rp_init (-2).
+REMAINING PARITY: dialogue (libfyaml runtime + bake-to-C +
+determinism test, dialogue.txt), mesh import (Assimp build-time tool
+-> C + rp_push_mesh per-object world matrix, levels.txt), opus decode
+(Stage 3 codecs).
