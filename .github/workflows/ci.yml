@@ -141,3 +141,22 @@ jobs:
             libegl1 libgl1-mesa-dri libgles2
       - name: smoke (unpack, dep audit, headless PNG, seed replay)
         run: tools/smoke.sh dist/ame-next-stage0-linux-amd64.tar.gz
+
+  lean:
+    name: lean 4 (kernel-checked model: no sorry, axioms logged)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: elan + toolchain (pinned by lean-toolchain)
+        run: |
+          curl -sSfL https://elan.lean-lang.org/elan-init.sh | sh -s -- -y --default-toolchain none
+          echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
+      - name: lake build (all theorems kernel-checked)
+        run: lake build
+        working-directory: lean
+      - name: axiom disclosure (must show only native_decide deps)
+        run: |
+          echo '#print axioms Ame.Shader.shadow_term_off' > /tmp/ax.lean
+          echo '#print axioms Ame.Text.pen_insert' >> /tmp/ax.lean
+          lake env lean /tmp/ax.lean
+        working-directory: lean

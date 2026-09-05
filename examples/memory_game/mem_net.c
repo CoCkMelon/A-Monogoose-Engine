@@ -30,6 +30,11 @@ int mem_net_listen(uint16_t port) {
     struct sockaddr_in a;
     memset(&a, 0, sizeof a);
     a.sin_family = AF_INET;
+    /* SECURITY SCOPE (audit note): binds INADDR_ANY with NO auth or
+     * rate limiting - anyone on the LAN can claim a player slot. This
+     * is deliberate for LAN/loopback play (spec: network is Stage 1);
+     * a join token is the documented next step before any exposure
+     * beyond a trusted LAN. Do not port-forward this server. */
     a.sin_addr.s_addr = htonl(INADDR_ANY); /* loopback CI + LAN alike */
     a.sin_port = htons(port);
     if (bind(fd, (struct sockaddr *)&a, sizeof a) < 0 || listen(fd, 4) < 0) {
@@ -176,6 +181,26 @@ int mem_net_rx_step(mem_net_rx *rx, int fd, mem_msgv *out) {
 
 /* payload: cols,rows,count,phase,turn,score0,score1,winner + per card
  * pair,state,matched,angle(f32 bits; same-host loopback, documented) */
+/* Wire floats are LITTLE-ENDIAN byte-serialised (audit fix, port of
+ * the sibling branch's codec): a host-endian memcpy would silently
+ * corrupt card angles on mixed-endian peers. The float is bit-cast to
+ * uint32 IN MEMORY (host), then SERIALIZED as explicit LE bytes. */
+static void put_f32_le(uint8_t *p, float v) {
+    uint32_t b;
+    memcpy(&b, &v, 4);
+    p[0] = (uint8_t)(b);
+    p[1] = (uint8_t)(b >> 8);
+    p[2] = (uint8_t)(b >> 16);
+    p[3] = (uint8_t)(b >> 24);
+}
+static float get_f32_le(const uint8_t *p) {
+    uint32_t b = (uint32_t)p[0] | ((uint32_t)p[1] << 8)
+               | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
+    float v;
+    memcpy(&v, &b, 4);
+    return v;
+}
+
 void mem_net_encode_state(const mem_game *g, uint8_t *out, uint16_t *len) {
     out[0] = (uint8_t)g->cols;
     out[1] = (uint8_t)g->rows;
@@ -194,7 +219,7 @@ void mem_net_encode_state(const mem_game *g, uint8_t *out, uint16_t *len) {
             : g->card[i].pair;
         p[1] = g->card[i].state;
         p[2] = g->card[i].matched;
-        memcpy(p + 3, &g->card[i].angle, 4);
+        put_f32_le(p + 3, g->card[i].angle);
     }
     *len = (uint16_t)(8 + g->count * 7);
 }
@@ -203,6 +228,8 @@ static void decode_state(mem_game *g, const uint8_t *in, uint16_t len) {
     int count = in[2];
     if (count < 0 || count > MEM_MAX_CARDS || (uint16_t)(8 + count * 7) != len)
         return; /* refuse malformed */
+    if (in[3] > MEM_PHASE_OVER)
+        return; /* audit fix: refuse undefined phase (hostile server) */
     mem_reset(g, in[0] > 0 ? in[0] : 4, in[1] > 0 ? in[1] : 4, 1);
     g->count = count;
     g->phase = (mem_phase)in[3];
@@ -213,10 +240,15 @@ static void decode_state(mem_game *g, const uint8_t *in, uint16_t len) {
     g->resolved = (g->phase == MEM_PHASE_RESOLVE);
     for (int i = 0; i < count; i++) {
         const uint8_t *p = in + 8 + i * 7;
+        int pair_max = count / 2;
+        if (p[0] != MEM_PAIR_HIDDEN && p[0] >= pair_max)
+            return; /* audit fix: pair id out of range -> garbage frame */
+        if (p[1] > MEM_CARD_CLOSING)
+            return; /* audit fix: refuse undefined card state */
         g->card[i].pair = p[0];
-        g->card[i].state = p[1];
-        g->card[i].matched = p[2];
-        memcpy(&g->card[i].angle, p + 3, 4);
+        g->card[i].state = (mem_card_state)p[1];
+        g->card[i].matched = p[2] ? 1 : 0;
+        g->card[i].angle = get_f32_le(p + 3);
     }
 }
 

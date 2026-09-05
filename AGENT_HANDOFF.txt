@@ -898,3 +898,41 @@ not from a replica of its logic.
 Lean: Ame/Text.lean += penOf/pen_prefix/pen_insert (the two-ways
 algebraic core: inserting cannot move the pen; List.take_append_of_
 le_length). Suite 19/19 (editor_geom added).
+
+SESSION 18 - AUDIT RESPONSE (user attached A-Monogoose-Engine-BRANCHES-
+AUDIT.md; their snapshot was c196c15 = pre-f56774a for the caret, but
+treat their report as ground truth until they confirm).
+
+CARET: full-position live sweep (3 texts x all caret positions, offscreen
++NOFLIP): predicted A.x == measured bar for EVERY position incl
+multi-line + Cyrillic (detector must scan the caret's OWN line band -
+line 2/3 initially misread as BAD). Current HEAD caret is pixel-exact
+here. If the user still sees it wrong on a real window, next step is
+THEIR receipt: AME_ED_TRACE=1 shows A/B per 30 frames; AME_SHOT_PPM
+works on real windows too (default flip, no NOFLIP).
+
+AUDIT FIXES LANDED (all verified):
+- P0 bake_font leak (broke ASan builds out-of-the-box, auditor
+  reproduced twice): stbtt_FreeBitmap per glyph + free(atlas)+free
+  (data) at exit AND on the atlas-full error path. Fresh ASan build
+  now completes with detect_leaks=1 (ninja rc 0), atlas output
+  byte-identical (goldens safe). ASan ctest 19/19.
+- Wire floats: host-endian memcpy -> explicit LE codec (put_f32_le/
+  get_f32_le, B's pattern per audit rec 1); encode+decode updated.
+- decode_state validates: phase <= MEM_PHASE_OVER, card state <=
+  MEM_CARD_CLOSING, pair id < count/2 (or HIDDEN) - hostile/buggy
+  server can no longer push undefined enum states.
+- README drift: 11 -> 19 tests.
+- ci.yml: new lean job (elan + lake build = KERNEL-checked, plus
+  #print axioms disclosure for shadow_term_off + pen_insert) - audit
+  rec 4 (grep-only "no sorry" was weak).
+- mem_net listen: security-scope comment (INADDR_ANY, no auth/token;
+  do not port-forward) - audit Low item documented.
+NOT ported (with reason): B's test_gen pattern - our atlas is baked
+at BUILD time every configure (no committed generated code to drift);
+audit's own verification covers it differently.
+
+Audit positives worth remembering: "by a wide margin the healthiest
+code in this repository"; A recommended as go-forward core; port from
+B: endian codec (DONE), selftest-paths CTest pattern (n/a - no
+hardcoded paths), test_gen (n/a).

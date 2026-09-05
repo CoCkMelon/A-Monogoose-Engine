@@ -25,7 +25,7 @@ Clone with submodules (`git clone --recurse-submodules <url>`); plain clones are
 
 ```sh
 cmake -S . -B build -GNinja && ninja -C build      # -Werror clean by default
-ctest --test-dir build                             # 11 tests incl. online loopback
+ctest --test-dir build                             # 19 tests incl. online loopback, editor caret contract
 ```
 
 Needs: CMake ≥3.16, Ninja, SDL3 dev, EGL/GLES dev (`libsdl3-dev libegl1

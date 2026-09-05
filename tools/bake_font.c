@@ -96,8 +96,9 @@ int main(int argc, char **argv) {
                                                           &gw, &gh, &xoff, &yoff);
             int advance, lsb;
             stbtt_GetCodepointHMetrics(&info, (int)cp, &advance, &lsb);
-            if (gw == 0 || gh == 0) {
+            if (gw == 0 || gh == 0 || !bmp) {
                 /* space & friends: metrics only, no atlas cell */
+                stbtt_FreeBitmap(bmp, NULL);
                 if (cp == ' ') {
                     fprintf(out_c, "    { 0x%X, 0,0,0,0, 0,0, %.2ff },\n",
                             cp, advance * scale);
@@ -114,11 +115,15 @@ int main(int argc, char **argv) {
             }
             if (cy + gh + 1 > ATLAS_H) {
                 fprintf(stderr, "atlas full at U+%04X\n", cp);
+                stbtt_FreeBitmap(bmp, NULL);
+                free(atlas);
+                free(data);
                 return 1;
             }
             for (int yy = 0; yy < gh; yy++)
                 memcpy(atlas + (size_t)(cy + yy) * ATLAS_W + (size_t)cx,
                        bmp + (size_t)yy * (size_t)gw, (size_t)gw);
+            stbtt_FreeBitmap(bmp, NULL); /* audit fix: was leaked per glyph */
             if (gh > row_h) row_h = gh;
             fprintf(out_c, "    { 0x%X, %d,%d,%d,%d, %d,%d, %.2ff },\n",
                     cp, cx, cy, gw, gh, xoff, yoff, advance * scale);
@@ -138,6 +143,10 @@ int main(int argc, char **argv) {
 
     fclose(out_c);
     fclose(out_h);
+    /* audit fix (P0): this tool runs at BUILD time - a leak here fails
+     * the whole ASan build under LSan (ninja exit 1). Free everything. */
+    free(atlas);
+    free(data);
     printf("baked %d glyphs at %dpx -> font_atlas.c/h (line_h=%.1f ascent=%.1f)\n",
            written, px, line_h, ascent_px);
     return 0;
