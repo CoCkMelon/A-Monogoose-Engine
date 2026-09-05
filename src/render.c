@@ -13,6 +13,17 @@
 /* GL function table (loaded via injected getter)                      */
 /* ------------------------------------------------------------------ */
 #define AME_GL_FUNCS(X)                                                        \
+    X(GETINTEGERV, GetIntegerv) \
+    X(GENFRAMEBUFFERS, GenFramebuffers) X(BINDFRAMEBUFFER, BindFramebuffer) \
+    X(FRAMEBUFFERTEXTURE2D, FramebufferTexture2D) X(CHECKFRAMEBUFFERSTATUS,  \
+                                                    CheckFramebufferStatus) \
+    X(GENRENDERBUFFERS, GenRenderbuffers) X(BINDRENDERBUFFER, BindRenderbuffer) \
+    X(RENDERBUFFERSTORAGE, RenderbufferStorage)                              \
+    X(FRAMEBUFFERRENDERBUFFER, FramebufferRenderbuffer) X(DRAWARRAYS,        \
+                                                          DrawArrays)       \
+    X(DELETEFRAMEBUFFERS, DeleteFramebuffers)                                \
+    X(DELETERENDERBUFFERS, DeleteRenderbuffers) \
+    X(UNIFORM3FV, Uniform3fv)       X(UNIFORM1F, Uniform1f) \
     X(CREATESHADER, CreateShader)   X(SHADERSOURCE, ShaderSource)              \
     X(COMPILESHADER, CompileShader) X(GETSHADERIV, GetShaderiv)                 \
     X(GETSHADERINFOLOG, GetShaderInfoLog) X(CREATEPROGRAM, CreateProgram)       \
@@ -71,7 +82,8 @@ typedef struct {
     float uv[2];
     uint8_t col[4];
     float layer;
-} rp_vertex; /* 40 bytes */
+    float lit; /* 1 = shaded by the forward lights, 0 = unlit (UI) */
+} rp_vertex; /* 44 bytes */
 
 typedef struct {
     rp_vertex *verts;
@@ -97,6 +109,21 @@ typedef struct {
     int vw, vh;
     GLuint prog;
     GLint u_vp, u_tex;
+    GLint u_ldir, u_lcol, u_lamb, u_ppos, u_pcol, u_prange;
+    /* Stage 2 forward lighting (defaults = the v0 unlit look) */
+    float l_dir[3], l_col[3], l_amb[3];
+    float p_pos[3], p_col[3], p_range;
+    /* Stage 2: offscreen scene target + post pass */
+    GLuint scene_fbo, scene_tex, scene_depth_rb;
+    GLint present_fbo; /* FB bound at begin_frame: the compose target
+                        * (0 with SDL; a user FBO when embedded) */
+    int scene_w, scene_h;
+    GLuint post_vao, post_vbo, post_prog;
+    GLint u_ptex, u_ptint, u_pvig;
+    float post_tint[3], post_vig;
+    /* per-push stamps (like a tint: set, push, unset) */
+    float stamp_nrm[3];
+    float stamp_lit;
     GLuint vao, vbo, ibo;
     rp_batch batch;
     GLuint tex[RP_TEX_MAX];
@@ -111,14 +138,29 @@ static rp_state S;
 #define VS_BODY                                                      \
     "in vec3 a_pos;\n"                                                   \
     "in vec3 a_nrm;\n"                                                   \
+    "in float a_lit;\n"                                                  \
     "in vec2 a_uv;\n"                                                    \
     "in vec4 a_col;\n"                                                   \
     "uniform mat4 u_vp;\n"                                               \
+    "uniform vec3 u_ldir;\n"                                             \
+    "uniform vec3 u_lcol;\n"                                             \
+    "uniform vec3 u_lamb;\n"                                             \
+    "uniform vec3 u_ppos;\n"                                             \
+    "uniform vec3 u_pcol;\n"                                             \
+    "uniform float u_prange;\n"                                          \
     "out vec2 v_uv;\n"                                                   \
     "out vec4 v_col;\n"                                                  \
     "void main() {\n"                                                    \
     "    v_uv = a_uv;\n"                                                 \
-    "    v_col = a_col;\n"                                               \
+    "    vec3 n = normalize(a_nrm);\n"                                   \
+    "    vec3 light = u_lamb + u_lcol * max(dot(n, -u_ldir), 0.0);\n"    \
+    "    if (u_prange > 0.0) {\n"                                        \
+    "        vec3 d3 = u_ppos - a_pos;\n"                                \
+    "        float att = max(0.0, 1.0 - length(d3) / u_prange);\n"       \
+    "        light += u_pcol * (max(dot(n, normalize(d3)), 0.0)\n"       \
+    "                          * att * att);\n"                          \
+    "    }\n"                                                            \
+    "    v_col = a_col * vec4(mix(vec3(1.0), light, a_lit), 1.0);\n"     \
     "    gl_Position = u_vp * vec4(a_pos, 1.0);\n"                       \
     "}\n"
 
@@ -130,6 +172,31 @@ static rp_state S;
     "void main() {\n"                                                    \
     "    o_col = texture(u_tex, v_uv) * v_col;\n"                        \
     "}\n"
+
+/* Stage 2 post pass: one fullscreen triangle, no depth, no blend.
+ * uv = pos*0.5+0.5 maps NDC(-1,-1)->(0,0)=scene texel lower-left, so
+ * the compose is pixel-exact with the direct path at identity. */
+#define POST_VS                                                       \
+    "in vec2 a_pos;\n"                                                \
+    "out vec2 v_uv;\n"                                                \
+    "void main() {\n"                                                 \
+    "    v_uv = a_pos * 0.5 + 0.5;\n"                                 \
+    "    gl_Position = vec4(a_pos, 0.0, 1.0);\n"                      \
+    "}\n"
+
+#define POST_FS                                                       \
+    "in vec2 v_uv;\n"                                                 \
+    "uniform sampler2D u_tex;\n"                                      \
+    "uniform vec3 u_tint;\n"                                          \
+    "uniform float u_vig;\n"                                          \
+    "out vec4 o_col;\n"                                               \
+    "void main() {\n"                                                 \
+    "    vec2 d = v_uv - vec2(0.5);\n"                                \
+    "    float f = 1.0 - u_vig * min(1.0, 2.0 * dot(d, d));\n"        \
+    "    vec4 s = texture(u_tex, v_uv);\n"                        \
+    "    o_col = vec4(s.rgb * u_tint * f, s.a);\n"                  \
+    "}\n"
+
 
 
 
@@ -161,6 +228,7 @@ ame_rp_desc *rp_desc_begin(ame_rp_desc *d) {
 ame_rp_desc *rp_desc_depth(ame_rp_desc *d, bool on)  { d->depth_test = on; return d; }
 ame_rp_desc *rp_desc_blend(ame_rp_desc *d, bool on)  { d->blend = on; return d; }
 ame_rp_desc *rp_desc_gles(ame_rp_desc *d, bool on)   { d->gles = on; return d; }
+ame_rp_desc *rp_desc_post(ame_rp_desc *d, bool on)   { d->post = on; return d; }
 ame_rp_desc *rp_desc_clear(ame_rp_desc *d, float r, float g, float b, float a) {
     d->clear[0] = r; d->clear[1] = g; d->clear[2] = b; d->clear[3] = a;
     return d;
@@ -183,6 +251,55 @@ static void rp_free_batch(void) {
     memset(&S.batch, 0, sizeof S.batch);
 }
 
+/* --- Stage 2: offscreen scene target + post compose ------------------------ */
+
+static void scene_target_free(void) {
+    if (S.scene_tex) glDeleteTextures(1, &S.scene_tex);
+    if (S.scene_depth_rb) glDeleteRenderbuffers(1, &S.scene_depth_rb);
+    if (S.scene_fbo) glDeleteFramebuffers(1, &S.scene_fbo);
+    S.scene_fbo = S.scene_tex = S.scene_depth_rb = 0;
+    S.scene_w = S.scene_h = 0;
+}
+
+static bool scene_target_ensure(int w, int h) {
+    if (S.scene_fbo && S.scene_w == w && S.scene_h == h)
+        return true;
+    GLint prev_fb;
+    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &prev_fb);
+    scene_target_free();
+    glGenFramebuffers(1, &S.scene_fbo);
+    glGenTextures(1, &S.scene_tex);
+    glBindTexture(GL_TEXTURE_2D, S.scene_tex);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, w, h, 0, GL_RGBA,
+                 GL_UNSIGNED_BYTE, NULL);
+    if (S.desc.depth_test) {
+        glGenRenderbuffers(1, &S.scene_depth_rb);
+        glBindRenderbuffer(GL_RENDERBUFFER, S.scene_depth_rb);
+        glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, w, h);
+    }
+    glBindFramebuffer(GL_FRAMEBUFFER, S.scene_fbo);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                           GL_TEXTURE_2D, S.scene_tex, 0);
+    if (S.desc.depth_test)
+        glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
+                                  GL_RENDERBUFFER, S.scene_depth_rb);
+    if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+        glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)prev_fb);
+        scene_target_free();
+        return false;
+    }
+    /* restore the caller's binding (0 = SDL window; a host FBO when
+     * embedded) - rp_begin_frame captures it as the compose target */
+    glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)prev_fb);
+    S.scene_w = w;
+    S.scene_h = h;
+    return true;
+}
+
 int rp_init(const ame_rp_desc *desc, const ame_camera *cam, int w, int h) {
     if (S.inited)
         rp_shutdown();
@@ -195,6 +312,16 @@ int rp_init(const ame_rp_desc *desc, const ame_camera *cam, int w, int h) {
     S.cam = *cam;
     S.vw = w;
     S.vh = h;
+
+    /* Stage 2 lighting defaults: v0 unlit look, identity normal */
+    S.stamp_nrm[0] = 0; S.stamp_nrm[1] = 0; S.stamp_nrm[2] = 1;
+    S.stamp_lit = 0;
+    memset(S.l_dir, 0, sizeof S.l_dir);
+    memset(S.l_col, 0, sizeof S.l_col);
+    memset(S.l_amb, 0, sizeof S.l_amb);
+    memset(S.p_pos, 0, sizeof S.p_pos);
+    memset(S.p_col, 0, sizeof S.p_col);
+    S.p_range = 0;
 
     const char *vs = desc->gles
         ? "#version 300 es\nprecision highp float;\n" VS_BODY
@@ -212,6 +339,7 @@ int rp_init(const ame_rp_desc *desc, const ame_camera *cam, int w, int h) {
     glAttachShader(S.prog, fsh);
     glBindAttribLocation(S.prog, 0, "a_pos");
     glBindAttribLocation(S.prog, 1, "a_nrm");
+    glBindAttribLocation(S.prog, 4, "a_lit");
     glBindAttribLocation(S.prog, 2, "a_uv");
     glBindAttribLocation(S.prog, 3, "a_col");
     glLinkProgram(S.prog);
@@ -226,6 +354,12 @@ int rp_init(const ame_rp_desc *desc, const ame_camera *cam, int w, int h) {
     glUseProgram(S.prog);
     S.u_vp = glGetUniformLocation(S.prog, "u_vp");
     S.u_tex = glGetUniformLocation(S.prog, "u_tex");
+    S.u_ldir = glGetUniformLocation(S.prog, "u_ldir");
+    S.u_lcol = glGetUniformLocation(S.prog, "u_lcol");
+    S.u_lamb = glGetUniformLocation(S.prog, "u_lamb");
+    S.u_ppos = glGetUniformLocation(S.prog, "u_ppos");
+    S.u_pcol = glGetUniformLocation(S.prog, "u_pcol");
+    S.u_prange = glGetUniformLocation(S.prog, "u_prange");
 
     /* batch buffers: allocated ONCE (setup), rewritten in place (hot) */
     S.batch.quad_cap = desc->max_quads;
@@ -275,6 +409,9 @@ int rp_init(const ame_rp_desc *desc, const ame_camera *cam, int w, int h) {
     glEnableVertexAttribArray(2);
     glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, (GLsizei)stride,
                           (void *)offsetof(rp_vertex, uv));
+    glEnableVertexAttribArray(4);
+    glVertexAttribPointer(4, 1, GL_FLOAT, GL_FALSE, (GLsizei)stride,
+                          (void *)offsetof(rp_vertex, lit));
     glEnableVertexAttribArray(3);
     glVertexAttribPointer(3, 4, GL_UNSIGNED_BYTE, GL_TRUE, (GLsizei)stride,
                           (void *)offsetof(rp_vertex, col));
@@ -298,6 +435,48 @@ int rp_init(const ame_rp_desc *desc, const ame_camera *cam, int w, int h) {
     if (rp_load_texture(white, 1, 1, 4, true) < 0)
         return -6;
 
+    if (desc->post) {
+        const char *pvs = desc->gles
+            ? "#version 300 es\nprecision highp float;\n" POST_VS
+            : "#version 330 core\n" POST_VS;
+        const char *pfs = desc->gles
+            ? "#version 300 es\nprecision mediump float;\n" POST_FS
+            : "#version 330 core\n" POST_FS;
+        GLuint v = compile(GL_VERTEX_SHADER, pvs);
+        GLuint f = compile(GL_FRAGMENT_SHADER, pfs);
+        if (!v || !f)
+            return -7;
+        S.post_prog = glCreateProgram();
+        glAttachShader(S.post_prog, v);
+        glAttachShader(S.post_prog, f);
+        glBindAttribLocation(S.post_prog, 0, "a_pos");
+        glLinkProgram(S.post_prog);
+        glGetProgramiv(S.post_prog, GL_LINK_STATUS, &ok);
+        if (!ok) {
+            char log[512];
+            glGetProgramInfoLog(S.post_prog, sizeof log, NULL, log);
+            LOGD("ame rp: post link error: %s", log);
+            return -8;
+        }
+        S.u_ptex = glGetUniformLocation(S.post_prog, "u_tex");
+        S.u_ptint = glGetUniformLocation(S.post_prog, "u_tint");
+        S.u_pvig = glGetUniformLocation(S.post_prog, "u_vig");
+        /* fullscreen triangle: 3 verts cover the NDC quad exactly */
+        static const float tri[6] = { -1, -1, 3, -1, -1, 3 };
+        glGenVertexArrays(1, &S.post_vao);
+        glBindVertexArray(S.post_vao);
+        glGenBuffers(1, &S.post_vbo);
+        glBindBuffer(GL_ARRAY_BUFFER, S.post_vbo);
+        glBufferData(GL_ARRAY_BUFFER, sizeof tri, tri, GL_STATIC_DRAW);
+        glEnableVertexAttribArray(0);
+        glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 8, (void *)0);
+        glBindVertexArray(0);
+        S.post_tint[0] = S.post_tint[1] = S.post_tint[2] = 1;
+        S.post_vig = 0;
+        if (!scene_target_ensure(w, h))
+            return -9;
+    }
+
     rp_viewport(w, h);
     rp_set_camera(cam);
     S.inited = true;
@@ -315,6 +494,10 @@ void rp_shutdown(void) {
     if (S.ibo) glDeleteBuffers(1, &S.ibo);
     if (S.vao) glDeleteVertexArrays(1, &S.vao);
     if (S.prog) glDeleteProgram(S.prog);
+    scene_target_free();
+    if (S.post_prog) glDeleteProgram(S.post_prog);
+    if (S.post_vbo) glDeleteBuffers(1, &S.post_vbo);
+    if (S.post_vao) glDeleteVertexArrays(1, &S.post_vao);
     rp_free_batch();
     memset(&S, 0, sizeof S);
 }
@@ -393,7 +576,10 @@ static bool push_quad_common(int tex,
         v[i].pos[0] = ps[i][0];
         v[i].pos[1] = ps[i][1];
         v[i].pos[2] = ps[i][2];
-        v[i].nrm[0] = 0; v[i].nrm[1] = 0; v[i].nrm[2] = 1; /* unlit v0 */
+        v[i].nrm[0] = S.stamp_nrm[0];
+        v[i].nrm[1] = S.stamp_nrm[1];
+        v[i].nrm[2] = S.stamp_nrm[2];
+        v[i].lit = S.stamp_lit;
         v[i].uv[0] = uvs[i * 2];
         v[i].uv[1] = uvs[i * 2 + 1];
         v[i].col[0] = col_byte(tint[0]);
@@ -438,6 +624,14 @@ void rp_begin_frame(void) {
     S.batch.quad_count = 0;
     S.draws = 0;
     S.quads = 0;
+    if (S.desc.post) {
+        /* Stage 2: draw the frame OFFSCREEN, compose in rp_end_frame
+         * into whatever target the app had bound (0 with an SDL
+         * window; an embedding test/host FBO otherwise) */
+        glGetIntegerv(GL_FRAMEBUFFER_BINDING, &S.present_fbo);
+        scene_target_ensure(S.vw, S.vh);
+        glBindFramebuffer(GL_FRAMEBUFFER, S.scene_fbo);
+    }
     glClearColor(S.desc.clear[0], S.desc.clear[1], S.desc.clear[2],
                  S.desc.clear[3]);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
@@ -445,9 +639,22 @@ void rp_begin_frame(void) {
 
 void rp_end_frame(void) {
     int n = S.batch.quad_count;
-    if (n == 0)
-        return;
+    if (n == 0 && !S.desc.post)
+        return; /* nothing to do; BUT with post on we must still compose
+                 * (an empty frame is the clear color + effects, and the
+                 * scene target must NEVER stay bound past this call:
+                 * the next begin_frame would capture IT as the compose
+                 * target and feed the frame back into itself) */
 
+    /* forward lights (single pass; defaults keep the unlit look) */
+    glUniform3fv(S.u_ldir, 1, S.l_dir);
+    glUniform3fv(S.u_lcol, 1, S.l_col);
+    glUniform3fv(S.u_lamb, 1, S.l_amb);
+    glUniform3fv(S.u_ppos, 1, S.p_pos);
+    glUniform3fv(S.u_pcol, 1, S.p_col);
+    glUniform1f(S.u_prange, S.p_range);
+
+    if (n > 0) {
     /* counting sort quads by key = tex * RP_LAYERS + layer (stable) */
     int buckets = S.batch.bucket_count;
     memset(S.batch.bucket_head, 0xFF, sizeof(uint32_t) * (size_t)buckets);
@@ -512,7 +719,44 @@ void rp_end_frame(void) {
         S.draws++;
         i = j;
     }
+    }
     S.quads = n;
+    if (S.desc.post) {
+        /* compose: back to the default framebuffer, no depth, no blend;
+         * the fullscreen triangle is exactly the offscreen image at
+         * identity settings (u_tint=1, u_vig=0) */
+        glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)S.present_fbo);
+        glViewport(0, 0, S.vw, S.vh);
+        glDisable(GL_DEPTH_TEST);
+        glDisable(GL_BLEND);
+        glUseProgram(S.post_prog);
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, S.scene_tex);
+        glUniform1i(S.u_ptex, 0);
+        glUniform3fv(S.u_ptint, 1, S.post_tint);
+        glUniform1f(S.u_pvig, S.post_vig);
+        glBindVertexArray(S.post_vao);
+        glDrawArrays(GL_TRIANGLES, 0, 3);
+        glBindVertexArray(0);
+        /* restore pipeline state for the next begin_frame */
+        glUseProgram(S.prog);
+        if (S.desc.depth_test)
+            glEnable(GL_DEPTH_TEST);
+        if (S.desc.blend)
+            glEnable(GL_BLEND);
+    }
+}
+
+/* --- Stage 2: post pass uniforms ----------------------------------------- */
+
+void rp_post_tint(float r, float g, float b) {
+    S.post_tint[0] = r;
+    S.post_tint[1] = g;
+    S.post_tint[2] = b;
+}
+
+void rp_post_vignette(float strength) {
+    S.post_vig = strength < 0 ? 0 : strength;
 }
 
 void rp_screen_origin(float *ox, float *oy) {
@@ -541,3 +785,44 @@ bool rp_read_pixels(uint8_t *rgba_out, int w, int h) {
 
 int rp_draw_calls_last_frame(void) { return S.draws; }
 int rp_quads_last_frame(void)      { return S.quads; }
+
+/* --- Stage 2: forward lighting API ---------------------------------------- */
+
+void rp_set_lit(int on) {
+    S.stamp_lit = on ? 1.0f : 0.0f;
+}
+
+void rp_set_normal(float nx, float ny, float nz) {
+    float l = sqrtf(nx * nx + ny * ny + nz * nz);
+    if (l > 1e-12f) {
+        S.stamp_nrm[0] = nx / l;
+        S.stamp_nrm[1] = ny / l;
+        S.stamp_nrm[2] = nz / l;
+    }
+}
+
+void rp_lighting(const float dir[3], const float col[3], const float amb[3]) {
+    float l = sqrtf(dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2]);
+    if (l > 1e-12f) {
+        S.l_dir[0] = dir[0] / l;
+        S.l_dir[1] = dir[1] / l;
+        S.l_dir[2] = dir[2] / l;
+    }
+    S.l_col[0] = col[0]; S.l_col[1] = col[1]; S.l_col[2] = col[2];
+    S.l_amb[0] = amb[0]; S.l_amb[1] = amb[1]; S.l_amb[2] = amb[2];
+}
+
+void rp_point_light(const float pos[3], const float col[3], float range) {
+    S.p_pos[0] = pos[0]; S.p_pos[1] = pos[1]; S.p_pos[2] = pos[2];
+    S.p_col[0] = col[0]; S.p_col[1] = col[1]; S.p_col[2] = col[2];
+    S.p_range = range;
+}
+
+void rp_lighting_off(void) {
+    memset(S.l_dir, 0, sizeof S.l_dir);
+    memset(S.l_col, 0, sizeof S.l_col);
+    memset(S.l_amb, 0, sizeof S.l_amb);
+    memset(S.p_pos, 0, sizeof S.p_pos);
+    memset(S.p_col, 0, sizeof S.p_col);
+    S.p_range = 0;
+}

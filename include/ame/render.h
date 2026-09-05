@@ -25,6 +25,7 @@ typedef struct {
     bool  depth_test;
     bool  blend;
     bool  gles;          /* GLSL 300 es vs 330 core (context flavor) */
+    bool  post;          /* Stage 2: offscreen scene target + post pass */
     float clear[4];
     int   max_quads;     /* batch capacity */
 } ame_rp_desc;
@@ -33,6 +34,7 @@ ame_rp_desc *rp_desc_begin(ame_rp_desc *d);
 ame_rp_desc *rp_desc_depth(ame_rp_desc *d, bool on);
 ame_rp_desc *rp_desc_blend(ame_rp_desc *d, bool on);
 ame_rp_desc *rp_desc_gles(ame_rp_desc *d, bool on);
+ame_rp_desc *rp_desc_post(ame_rp_desc *d, bool on);
 ame_rp_desc *rp_desc_clear(ame_rp_desc *d, float r, float g, float b, float a);
 ame_rp_desc *rp_desc_max_quads(ame_rp_desc *d, int n);
 
@@ -80,6 +82,33 @@ int  rp_white_texture(void); /* 1x1 white, always id 0 */
  * Screen-anchored drawing (UI text) adds this so (0,0) means the window
  * corner, no matter where the camera center sits. */
 void rp_screen_origin(float *ox, float *oy);
+
+/* --- Stage 2: forward lighting in the ONE shader (single pass) -------
+ * Geometry is lit only when pushed between rp_set_lit(1) and
+ * rp_set_lit(0); UI/text/billboards stay unlit and byte-identical.
+ * rp_set_normal stamps the normal used by the Lambert term (per-push,
+ * like a tint). Defaults (lit=0, no lights) reproduce the v0 unlit
+ * look exactly. dir = the direction the light TRAVELS. range <= 0
+ * disables the point light. */
+void rp_set_lit(int on);
+void rp_set_normal(float nx, float ny, float nz);
+void rp_lighting(const float dir[3], const float col[3], const float amb[3]);
+void rp_point_light(const float pos[3], const float col[3], float range);
+void rp_lighting_off(void);
+
+/* --- Stage 2: post pass (THE MULTIPASS DECISION, made) -----------------
+ * render.txt deferred multipass until a real need; Stage 2 is it.
+ * DECISION: the ONE geometry program/batch is unchanged - when post
+ * is on, the frame renders into an offscreen RGBA8 scene target
+ * (same clear, same depth config) and a tiny second program (one
+ * fullscreen triangle, no depth, no blend) composes it into the
+ * default framebuffer with: tint multiply + radial vignette + (later
+ * effects chained here). Identity settings (tint 1, vignette 0) are
+ * PIXEL-EXACT with the direct path (test-proven) - post is a pure
+ * add-on, never a second renderer. Effects are cheap uniforms, so
+ * they may be set per frame. */
+void rp_post_tint(float r, float g, float b);
+void rp_post_vignette(float strength); /* 0 = off .. ~0.5 strong */
 
 /* screenshot for golden tests: RGBA8 bottom-up rows flipped to top-down */
 bool rp_read_pixels(uint8_t *rgba_out, int w, int h);

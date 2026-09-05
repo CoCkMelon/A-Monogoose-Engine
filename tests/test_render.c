@@ -227,6 +227,118 @@ int main(void) {
     uint32_t h2 = hash_frame();
     UT_ASSERT(h1 == h2);
 
+    UT_CASE("Stage 2 lighting: lit differs by facing; unlit unchanged");
+    {
+        /* baseline: unlit frame AFTER setting lights must equal the
+         * pre-lighting hash (lit=0 ignores the uniforms entirely) */
+        float ldir[3] = { 0, -1, 0 }, lcol[3] = { 1, 1, 1 };
+        float lamb[3] = { 0.1f, 0.1f, 0.1f };
+        rp_lighting(ldir, lcol, lamb);
+        rp_begin_frame();
+        rp_push_quad(rp_white_texture(), t0, t1, t2, t3, 0, 0, 1, 1,
+                     ttint, 0);
+        rp_push_quad(rp_white_texture(), c0[0], c0[1], c0[2], c0[3], 0, 0,
+                     1, 1, red, 10);
+        rp_push_quad(rp_white_texture(), c1[0], c1[1], c1[2], c1[3], 0, 0,
+                     1, 1, blue, 10);
+        text_draw_world(&hello, pose, tint_w, 20);
+        rp_end_frame();
+        UT_ASSERT(hash_frame() == h1); /* unlit: byte-identical */
+
+        long lum(bool face_up) {
+            rp_begin_frame();
+            rp_push_quad(rp_white_texture(), t0, t1, t2, t3, 0, 0, 1, 1,
+                         ttint, 0);
+            rp_set_lit(1);
+            rp_set_normal(0, face_up ? 1.0f : -1.0f, 0);
+            rp_push_quad(rp_white_texture(), c0[0], c0[1], c0[2], c0[3],
+                         0, 0, 1, 1, red, 10);
+            rp_set_lit(0);
+            rp_push_quad(rp_white_texture(), c1[0], c1[1], c1[2], c1[3],
+                         0, 0, 1, 1, blue, 10);
+            text_draw_world(&hello, pose, tint_w, 20);
+            rp_end_frame();
+            rp_read_pixels(px, W, H);
+            long sum = 0;
+            for (int i = 0; i < W * H * 4; i += 4)
+                sum += px[i] + px[i + 1] + px[i + 2];
+            return sum;
+        }
+        long up = lum(true), down = lum(false);
+        printf("    lum facing=%ld away=%ld\n", up, down);
+        UT_ASSERTF(up > down, "facing light must be brighter (%ld vs %ld)",
+                   up, down);
+        /* the delta is the red card's ~330px flipping from ~full tint
+         * (~420/px) to ambient (~39/px): >> any rounding noise */
+        UT_ASSERTF(up - down > 50000L,
+                   "delta must reflect the lit card (%ld)", up - down);
+        rp_lighting_off();
+    }
+
+    UT_CASE("Stage 2 post: offscreen round trip is pixel-exact");
+    {
+        rp_shutdown();
+        int rc = rp_init(
+            rp_desc_post(
+                rp_desc_clear(rp_desc_begin(&d), 0.10f, 0.12f, 0.16f, 1.0f),
+                true),
+            &cam3, W, H);
+        UT_ASSERTF(rc == 0, "post rp_init rc=%d", rc);
+        UT_ASSERT(text_init(true) >= 0); /* re-register the atlas */
+        rp_begin_frame();
+        rp_push_quad(rp_white_texture(), t0, t1, t2, t3, 0, 0, 1, 1, ttint, 0);
+        rp_push_quad(rp_white_texture(), c0[0], c0[1], c0[2], c0[3], 0, 0, 1, 1,
+                     red, 10);
+        rp_push_quad(rp_white_texture(), c1[0], c1[1], c1[2], c1[3], 0, 0, 1, 1,
+                     blue, 10);
+        text_draw_world(&hello, pose, tint_w, 20);
+        rp_end_frame();
+        UT_ASSERTF(hash_frame() == h1,
+                   "identity post (tint=1,vig=0) must equal the direct path");
+
+        /* resize the target away and back: resources recreate, no leak,
+         * image unchanged at the original size */
+        rp_viewport(W / 2, H / 2);
+        rp_begin_frame();
+        rp_end_frame();
+        rp_viewport(W, H);
+        rp_begin_frame();
+        rp_push_quad(rp_white_texture(), t0, t1, t2, t3, 0, 0, 1, 1, ttint, 0);
+        rp_push_quad(rp_white_texture(), c0[0], c0[1], c0[2], c0[3], 0, 0, 1, 1,
+                     red, 10);
+        rp_push_quad(rp_white_texture(), c1[0], c1[1], c1[2], c1[3], 0, 0, 1, 1,
+                     blue, 10);
+        text_draw_world(&hello, pose, tint_w, 20);
+        rp_end_frame();
+        UT_ASSERTF(hash_frame() == h1, "resize cycle must not change pixels");
+
+        /* vignette: corners darken, the center is untouched */
+        rp_post_vignette(0.45f);
+        rp_begin_frame();
+        rp_push_quad(rp_white_texture(), t0, t1, t2, t3, 0, 0, 1, 1, ttint, 0);
+        rp_push_quad(rp_white_texture(), c0[0], c0[1], c0[2], c0[3], 0, 0, 1, 1,
+                     red, 10);
+        rp_push_quad(rp_white_texture(), c1[0], c1[1], c1[2], c1[3], 0, 0, 1, 1,
+                     blue, 10);
+        text_draw_world(&hello, pose, tint_w, 20);
+        rp_end_frame();
+        rp_read_pixels(px, W, H);
+        int cc = ((H / 2) * W + W / 2) * 4;          /* center */
+        int corner = (2 * W + 2) * 4;                /* top-left  */
+        long l_c = px[cc] + px[cc + 1] + px[cc + 2];
+        long l_k = px[corner] + px[corner + 1] + px[corner + 2];
+        printf("    vignette center=%ld corner=%ld\n", l_c, l_k);
+        UT_ASSERTF(l_k < l_c, "corner (%ld) must be darker than center (%ld)",
+                   l_k, l_c);
+        rp_post_vignette(0);
+        rp_shutdown();
+        rc = rp_init(
+            rp_desc_clear(rp_desc_begin(&d), 0.10f, 0.12f, 0.16f, 1.0f),
+            &cam3, W, H);
+        UT_ASSERTF(rc == 0, "restore direct rp_init rc=%d", rc);
+        UT_ASSERT(text_init(true) >= 0);
+    }
+
     UT_CASE("output not the clear color (something drew)");
     rp_read_pixels(px, W, H);
     /* project the red card CENTER through the camera to find its pixel */

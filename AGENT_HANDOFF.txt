@@ -248,3 +248,81 @@ SESSION 6 - STAGE 1 ONLINE (server-authoritative Memory) IMPLEMENTED:
   changes needed. mem_server builds with the default target (pure
   POSIX + sim; AME_3D define satisfies ame.h; _POSIX_C_SOURCE
   200809L needed under -std=c2x for sigaction/clock_gettime).
+
+SESSION 6 ADDENDUM - ANTI-PEEP PROTOCOL + POLISH:
+- mem_net: STATE now withholds pairs of cards whose state is DOWN
+  (MEM_PAIR_HIDDEN 0xFF); open/matched/closing cards are public (a flip
+  showed them - exactly what an honest player knows). OPENED carries
+  the true pair in field c; the mirror sets it before its animation
+  reaches RESOLVE (TCP ordering + flip duration guarantee it), so the
+  deterministic mirror still computes match/no-match exactly. SDL
+  client needed NO change (label draw already bounds-checked pair).
+- test_mem_net: policy is now HONEST-MEMORY (uses only revealed pairs)
+  - doubles as the compliance proof (game completes with hidden pairs
+  end-to-end); mirrors step at 4x (cosmetic pacing) -> suite ~7s;
+  asserts 16/16 pairs hidden on a fresh board and hidden pairs in a
+  rejoin snapshot.
+- mem_server seed now mixes time ^ MONOTONIC nanos ^ games++<<13
+  (time(NULL)^const repeated boards within one second - spotted via
+  two identical 3:5 games in the test log).
+- Repo root README.md added (build/test/run local+online/headless/
+  env vars/layout/status table).
+
+SESSION 7 - STAGE 2 SLICE 1: FORWARD LIGHTING (the 3D path stops
+being unlit; render.txt still SINGLE PASS - the multipass decision
+stays deferred until a real need, e.g. shadows):
+- render.h/.c: ONE shader gains u_ldir/u_lcol/u_lamb + point light
+  (u_ppos/u_pcol/u_prange, range<=0 off). Per-VERTEX lit flag (new
+  `lit` float channel, attrib 4) so world geometry and unlit UI share
+  the single batch: rp_set_lit(1)/rp_set_normal stamp subsequent
+  pushes (tint-style), text/billboards stay unlit and BYTE-IDENTICAL
+  (proven: unlit frame hash equal before/after setting lights).
+  Defaults reproduce v0 exactly. Loader needed UNIFORM3FV/UNIFORM1F
+  X-entries. mix(vec3(1),light,a_lit) keeps ES3/desktop shared GLSL.
+- Game: warm key light + cool ambient + soft point light over the
+  table; cards lit via the VISIBLE face normal (flip catches the
+  light; |cos| trick selects the camera-facing side); table lit;
+  cone cursor now engine-lit amber/bronze (manual shading removed).
+- test_render: lighting case - unlit frame identical after setting
+  lights; lit quad facing vs away differs by the card's full-tint
+  delta (absolute margin > 50000: the card is only ~330px on screen;
+  a percentage-of-frame assert was wrong).
+- Lean: Ame.Shader.max0/shadeTerm/shade_backface (backface == ambient
+  exactly; standard axioms only). Rat order lemmas: neg_le_neg +
+  neg_zero (no zero_lt_one in core - skipped the fully-facing
+  variant).
+- Stage 2 next: materials/particles, shadow pass (the actual
+  multipass decision), assimp mesh loading.
+
+SESSION 7 ADDENDUM - STAGE 2 SLICE 2: THE MULTIPASS DECISION + POST:
+- Made the deferred multipass decision (render.txt): ONE geometry
+  program/batch unchanged; rp_desc_post(on) renders each frame into an
+  offscreen RGBA8+D24 scene target, then a tiny fullscreen-triangle
+  program (no depth/blend) composes it back with tint*vignette.
+  Identity settings are PIXEL-EXACT with the direct path (ctest).
+- HARD-WON LESSONS (all bit me here):
+  * rp_end_frame EARLY-RETURNED on an empty batch - with post on that
+    left the scene FBO bound; the next begin_frame then captured the
+    SCENE TARGET as its compose target (frame fed back into itself;
+    everything after rendered into a deleted FB). Compose now ALWAYS
+    runs when post is on.
+  * The compose target is NOT "framebuffer 0": under the surfaceless
+    EGL test harness (and embedded hosts) the app draws into a
+    user FBO. begin_frame now records GL_FRAMEBUFFER_BINDING and the
+    compose returns to THAT.
+  * scene_target_ensure must RESTORE the previous binding (it bound 0
+    at the end of setup, so the first begin_frame captured 0).
+  * The compose shader originally forced alpha=1; glyph-edge alpha
+    from blending differs => NOT pixel-exact. Pass scene alpha
+    through (s.a).
+  * rp_shutdown+rp_init orphans the font atlas id: text_init(true)
+    must re-register after every re-init in tests.
+  * The AME_GL_FUNCS X-macro: an inserted entry line with no trailing
+    backslash TERMINATES the macro (hit THREE times; loader entries
+    must end in " \\").
+- test_render post cases: identity == direct hash, resize cycle
+  (halve/restore) keeps resources correct, vignette corners darken
+  (center 193 vs corner 56 lum). Game: rp_desc_post + vignette 0.28
+  (deterministic across runs); shots/stage2_post_vignette.png.
+- Loader additions: FBO/renderbuffer fns, DRAWARRAYS, GETINTEGERV,
+  UNIFORM3FV/UNIFORM1F. rp_viewport grows/shrinks the scene target.

@@ -154,8 +154,22 @@ int app_init(void) {
     camera_build(&CAM);
 
     ame_rp_desc d;
-    rp_init(rp_desc_clear(rp_desc_begin(&d), 0.07f, 0.08f, 0.12f, 1.0f),
+    rp_init(rp_desc_post(
+                rp_desc_clear(rp_desc_begin(&d), 0.07f, 0.08f, 0.12f, 1.0f),
+                true),
             &CAM, 1280, 720);
+    rp_post_vignette(0.28f); /* subtle Stage 2 post: focus the table */
+
+    /* Stage 2 forward lighting: warm key light from the player's upper
+     * left, cool ambient fill, a soft point light over the table. The
+     * label text/billboards stay UNLIT (default stamp) for clarity. */
+    float ldir[3] = { -0.35f, -0.9f, -0.25f };
+    float lcol[3] = { 1.00f, 0.95f, 0.85f };
+    float lamb[3] = { 0.42f, 0.44f, 0.52f };
+    rp_lighting(ldir, lcol, lamb);
+    float ppos[3] = { 0.0f, 2.6f, 0.0f };
+    float pcol[3] = { 0.22f, 0.20f, 0.16f };
+    rp_point_light(ppos, pcol, 6.5f);
 
     if (text_init(true) >= 0) {
         char buf[16];
@@ -437,7 +451,14 @@ static void card_quad(const mem_snap *s, int i, float layer) {
         tint[1] = tint[1] * 0.6f + 0.4f;
         tint[2] = tint[2] * 0.6f + 0.4f;
     }
+    /* lit by the engine: the visible side's normal turns toward the
+     * key light as the card flips, so the face catches light naturally */
+    float ny = ca >= 0 ? ca : -ca;
+    float nz = ca >= 0 ? sa : -sa;
+    rp_set_lit(1);
+    rp_set_normal(0.0f, ny, nz);
     rp_push_quad(rp_white_texture(), q0, q1, q2, q3, 0, 0, 1, 1, tint, layer);
+    rp_set_lit(0);
 }
 
 /* pose mapping text layout space onto the card's flipping face.
@@ -498,8 +519,6 @@ static void draw_cursor(const mem_snap *s) {
     float ch = hot ? 0.30f : 0.20f;   /* cone height */
     ame_v3 apex = ame_v3_add(p, ame_v3_(0, 0.02f, 0));
     ame_v3 bc   = ame_v3_add(apex, ame_v3_(0, ch, 0));
-    /* fixed key light for cheap per-face shading (unlit shader) */
-    ame_v3 L = ame_v3_norm(ame_v3_(0.35f, 0.9f, 0.25f));
     const int N = 8;
     for (int k = 0; k < N; k++) {
         float a0 = (float)k       * (2.0f * (float)AME_PI / N);
@@ -508,15 +527,17 @@ static void draw_cursor(const mem_snap *s) {
         ame_v3 b1 = ame_v3_add(bc, ame_v3_(cosf(a1) * r, 0, sinf(a1) * r));
         ame_v3 n = ame_v3_norm(ame_v3_cross(ame_v3_sub(b0, apex),
                                             ame_v3_sub(b1, apex)));
-        float lam = ame_v3_dot(n, L);
-        float shade = 0.45f + 0.55f * (lam > 0 ? lam : 0);
+        /* engine-lit: amber when hot, dark bronze when idle */
         float tint[4];
-        if (hot) { tint[0] = shade;            tint[1] = shade * 0.92f; tint[2] = shade * 0.55f; tint[3] = 1; }
-        else     { tint[0] = shade;            tint[1] = shade * 0.78f; tint[2] = shade * 0.25f; tint[3] = 1; }
+        if (hot) { tint[0] = 1.0f; tint[1] = 0.75f; tint[2] = 0.30f; tint[3] = 1; }
+        else     { tint[0] = 0.9f; tint[1] = 0.75f; tint[2] = 0.55f; tint[3] = 1; }
         float q0[3] = { apex.x, apex.y, apex.z };
         float q1[3] = { b0.x, b0.y, b0.z };
         float q2[3] = { b1.x, b1.y, b1.z };
+        rp_set_lit(1);
+        rp_set_normal(n.x, n.y, n.z);
         rp_push_tri(rp_white_texture(), q0, q1, q2, 0, 0, 1, 1, tint, 40);
+        rp_set_lit(0);
     }
 }
 
@@ -543,8 +564,11 @@ int app_render(void) {
     float t2[3] = { tw * 0.5f, 0, td * 0.5f };
     float t3[3] = { -tw * 0.5f, 0, td * 0.5f };
     float table_tint[4] = { 0.16f, 0.19f, 0.26f, 1.0f };
+    rp_set_lit(1);
+    rp_set_normal(0.0f, 1.0f, 0.0f);
     rp_push_quad(rp_white_texture(), t0, t1, t2, t3, 0, 0, 1, 1,
                  table_tint, 0);
+    rp_set_lit(0);
 
     for (int i = 0; i < s->count; i++)
         card_quad(s, i, 10);

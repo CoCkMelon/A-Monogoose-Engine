@@ -1,86 +1,99 @@
 # ame-next
 
-A small, fast, data-oriented game engine written in **one C23 core**, targeting
-**2D and 3D from the same code** and four platforms (POSIX desktop, Windows,
-Android, web/Emscripten) via SDL3 + OpenGL (ES).
+A game engine in one C23 core — **2D and 3D from a single codebase** —
+built to the spec in `docs/` (the spec decides). Anchor game: a
+**competitive Memory** (4×4 pairs, strict two-player alternation, two
+opens per turn, turn passes on every resolve, most matches wins)
+with real 3D flipping card panels and in-scene billboard UI, served by
+the same single-pass renderer.
 
-This is the clean-slate successor to
-[A-Monogoose-Engine](https://github.com/CoCkMelon/A-Monogoose-Engine)
-(C/C++ + Flecs ECS + a Unity-style facade). Those two layers are exactly what
-**does not exist** here: no ECS, no GameObject/Component wrapper — the plain
-C API *is* the engine. Full design rules: [docs/principles.txt](docs/principles.txt),
-architecture per module: [docs/](docs/) (README.txt is the master spec).
+## Status
 
-## The one rule
+| Stage | What | State |
+|---|---|---|
+| 0 | local game, headless screenshots, packaged unit + clean-machine smoke | **done** |
+| 1 | server-authoritative **online** Memory over TCP (loopback-tested) | **done** |
+| 2 | advanced rendering: forward lighting ✓, offscreen + post pass ✓ (particles, shadows next) | in progress |
+| — | Lean 4 formal model (geometry/picking/shader contracts + game rules) | done, `lean/` |
+| 2+ | advanced rendering, richer 3D, ports | roadmap (`docs/README.txt`) |
 
-Two kinds of object (docs/principles.txt):
+## Build & test (POSIX, GCC 14+ or Clang 19+)
 
-- **SETUP** objects (render pass, camera, audio patch): fluent builder — takes
-  a pointer, mutates, returns the same pointer for chaining. Setup-time only.
-- **HOT** state (entities, cards, bullets): fixed static pools, plain arrays,
-  plain functions. Never builders. No allocation in the loop.
+```sh
+cmake -S . -B build -GNinja && ninja -C build      # -Werror clean by default
+ctest --test-dir build                             # 11 tests incl. online loopback
+```
+
+Needs: CMake ≥3.16, Ninja, SDL3 dev, EGL/GLES dev (`libsdl3-dev libegl1
+libgl1-mesa-dri libgles-dev` on Debian/Ubuntu).
+
+## Play
+
+**Local hot-seat** (two players share the mouse):
+
+```sh
+./build/examples/memory_game/memory_game
+```
+
+**Online, server-authoritative** (two machines or two windows):
+
+```sh
+./build/examples/memory_game/mem_server 7777        # authoritative sim
+AME_SERVER=127.0.0.1:7777 ./build/examples/memory_game/memory_game   # player 1
+AME_SERVER=127.0.0.1:7777 ./build/examples/memory_game/memory_game   # player 2
+```
+
+The server owns the game; clients are thin views sending card-open
+intents. Never-opened pairs are **hidden on the wire** (anti-peek); a
+dropped opponent pauses the game on their turn and a rejoining client
+resumes from a full snapshot; click after `WIN` for a voted rematch.
+
+### Environment
+
+| Var | Effect |
+|---|---|
+| `AME_SERVER=host:port` | online mode (falls back to local if unreachable) |
+| `AME_SEED=0x…` | local: replay a specific shuffle (deterministic) |
+| `AME_SCREENSHOT=path.png` | write a PNG after N frames, then exit |
+| `AME_SCREENSHOT_FRAMES=n` | N (default 5) |
+| `AME_FAKE_MOUSE=x,y` | headless hover checks |
+| `AME_WINDOW_W/H` | window size |
+| `MEM_TIME_SCALE=k` | server: authoritative pacing (tests) |
+| `MEM_IDLE_EXIT=s` | server: exit when nobody is connected |
+
+## Headless / CI
+
+```sh
+SDL_VIDEODRIVER=offscreen SDL_AUDIO_DRIVER=dummy LIBGL_ALWAYS_SOFTWARE=1 \
+  AME_SCREENSHOT=shot.png ./build/examples/memory_game/memory_game
+```
+
+`tools/pack.sh` builds the release **unit** (static SDL3 where the
+distro has it, otherwise a full `$ORIGIN/lib` bundle) and
+`tools/smoke.sh` proves it on a clean machine: dependency audit, PNG
+check, and same-seed ⇒ byte-identical screenshots. CI runs both
+(`package` + `clean-smoke` jobs).
+
+## The multipass decision (Stage 2, made)
+
+`docs/render.txt` deferred multipass until a real need; Stage 2 is it.
+**Decision:** the ONE geometry program/batch is untouched — with post
+enabled (`rp_desc_post`), each frame renders into an offscreen RGBA8
+scene target (same clear/depth) and a tiny second program composes it
+into the presentation target with a cheap effect chain (tint,
+vignette; identity settings are pixel-exact with the direct path —
+test-proven). The compose renders into whatever framebuffer was bound
+at `rp_begin_frame` (the SDL window, or a host FBO when embedded).
+Offscreen targets for shadows/etc. build on this machinery.
 
 ## Layout
 
 ```
-include/ame/    public headers (extern "C"), one per module
-src/            engine implementation (pure C23; one .c owns each module's state)
-examples/       games + demos, each with its own CMakeLists (A-Mongoose style)
-  memory_game/  THE FIRST GAME: hot-seat Memory with 3D flipping card panels
-tests/          utest suites: math, pool, geometry (2D+3D), input, audio,
-                text layout, memory sim (golden replay), golden render (GL)
-tools/          build-time host tools (bake_font: ttf -> C arrays atlas)
-generated/      build-time generated sources (font atlas)
-third_party/    stb (headers), asyncinput (raw input backend, bundled)
-docs/           the engine spec (principles, data, loop, render, ...)
-assets/         fonts etc.
+include/ame/  engine headers (math, pool, events, camera, render, text, …)
+src/          engine core (C23; per-dimension build via AME_2D/AME_3D)
+examples/memory_game/  the FIRST GAME (own CMakeLists) + mem_server
+tests/        ctest suites (logic, geometry, camera, text, render, net)
+tools/        bake_font, pack.sh, smoke.sh
+lean/         Lean 4 model (pure core, no mathlib, zero sorry)
+docs/         THE SPEC (README.txt first)
 ```
-
-## Build & run (desktop)
-
-```
-cmake -S . -B build -G Ninja -DCMAKE_C_COMPILER=clang-19
-cmake --build build
-ctest --test-dir build --output-on-failure
-./build/examples/memory_game/memory_game
-```
-
-Requires: clang-19+ (or gcc-15+) for C23, SDL3, EGL+GL (Mesa works).
-
-Headless (no display — CI / servers):
-
-```
-SDL_VIDEODRIVER=offscreen SDL_AUDIO_DRIVER=dummy \
-AME_SCREENSHOT=shot.png ./build/examples/memory_game/memory_game
-```
-
-## Modules (v0)
-
-| module | spec | status |
-|---|---|---|
-| pools (handles + deferred despawn) | docs/data.txt | done, tested |
-| geometry/collision queries (BVH-ish grid broadphase, 2D+3D from one core) | docs/physics.txt | done, tested both dims |
-| events (deferred ring, discrete gameplay events) | docs/events.txt | done, tested |
-| input (actions/bindings/edges over atomics; SDL or asyncinput at compile time) | docs/input.txt | done, tested (SDL backend live; asyncinput backend compiled in variant) |
-| audio (deterministic synth, SPSC cmd queue, SDL stream) | docs/audio.txt | done, golden-hash tested |
-| text (baked glyph atlas, tags, wrap, world/UI draw, one layout engine 2D+3D) | docs/text.txt | done, tested |
-| render (ONE program, single pass, batched quads, injected GL loader) | docs/render.txt | done, golden render test headless |
-| camera (one module; 2D pixel-perfect ortho / 3D persp via AME_2D/AME_3D) | docs/loop.txt | done, tested |
-| app bootstrap (SDL3 callbacks, split threads, 1000 Hz fixed logic step) | docs/loop.txt | done (desktop); web/Android shims: see handoff |
-
-Deferred to later stages (per spec): networking (Stage 1), multipass/lighting
-(Stage 2), runtime codecs (Stage 3), RT (Stage 4), libfyaml dialogue/save/
-settings (not needed by the first game slice).
-
-## Tests
-
-`ctest` runs: math, pool, geometry (built in BOTH dimensions), input edges,
-audio determinism (golden mix hash), text layout, memory-game sim (full
-scripted games, determinism replay), and a **golden render** test that builds
-a real GL context on EGL surfaceless + llvmpipe, draws the scene, and asserts
-pixel content + frame-to-frame determinism — no display needed.
-
-## License
-
-GPL-3.0 (matching the A-Monogoose line). Third-party libs keep their own
-licenses (stb: public domain/MIT, asyncinput: see third_party/asyncinput).
