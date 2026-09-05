@@ -127,7 +127,17 @@ static inline ame_m4 ame_m4_rot_x(float rad) {
 /* Right-handed look-at view matrix (eye -> target). */
 static inline ame_m4 ame_m4_look_at(ame_v3 eye, ame_v3 at, ame_v3 up) {
     ame_v3 f = ame_v3_norm(ame_v3_sub(at, eye));
-    ame_v3 s = ame_v3_norm(ame_v3_cross(f, up));
+    /* audit fix: f parallel to up (looking straight down/up with a
+     * world-up convention) zeroed the cross product and produced a
+     * degenerate view matrix (nothing rendered). Substitute a fallback
+     * axis; every NON-degenerate case is bit-identical to before (the
+     * guard only fires where the old result was zeros). */
+    ame_v3 cr = ame_v3_cross(f, up);
+    if (cr.x * cr.x + cr.y * cr.y + cr.z * cr.z < 1e-8f) {
+        up = fabsf(f.z) < 0.9f ? ame_v3_(0, 0, 1) : ame_v3_(0, 1, 0);
+        cr = ame_v3_cross(f, up);
+    }
+    ame_v3 s = ame_v3_norm(cr);
     ame_v3 u = ame_v3_cross(s, f);
     ame_m4 r = ame_m4_identity();
     r.m[0] =  s.x; r.m[4] =  s.y; r.m[8]  =  s.z;

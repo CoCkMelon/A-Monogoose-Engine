@@ -747,11 +747,11 @@ void rp_end_frame(void) {
     }
 }
 
-int rp_push_mesh(int tex, const ame_mesh_vert *verts,
+int rp_push_mesh(int tex, const ame_mesh_vert *verts, int vert_count,
                  const unsigned int *idx, int idx_count,
                  const float *xform_or_null, const float tint[4],
                  float layer) {
-    if (!verts || !idx || idx_count < 3)
+    if (!verts || !idx || idx_count < 3 || vert_count <= 0)
         return 0;
     if (tex < 0 || tex >= S.tex_count)
         tex = 0;
@@ -761,6 +761,11 @@ int rp_push_mesh(int tex, const ame_mesh_vert *verts,
         if (S.batch.quad_count >= S.batch.quad_cap)
             break; /* assert/drop: never silent overflow */
         unsigned int ix[3] = { idx[i], idx[i + 1], idx[i + 2] };
+        /* audit fix: a malformed baked asset (out-of-range index) must
+         * not read past the vertex array - skip the bad triangle */
+        if (ix[0] >= (unsigned)vert_count || ix[1] >= (unsigned)vert_count
+            || ix[2] >= (unsigned)vert_count)
+            continue;
         int q = S.batch.quad_count++;
         rp_vertex *v = &S.batch.verts[q * 4];
         for (int k = 0; k < 4; k++) {

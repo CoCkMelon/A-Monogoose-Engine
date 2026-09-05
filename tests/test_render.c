@@ -371,6 +371,36 @@ int main(void) {
      * Render glyph 'F' (strongly asymmetric) big on an ortho screen and
      * correlate the pixels with the atlas bitmap: direct must beat the
      * horizontally-flipped hypothesis. Catches any L-R mirroring. */
+    UT_CASE("particles survive a straight-down camera (basis guard)");
+    {
+        ame_camera down;
+        camera_viewport(camera_pos(camera_persp3d(camera_desc(&down)),
+                                   0, 4, 0), W, H);
+        camera_look(&down, 0, 0, 0); /* f = (0,-1,0) PARALLEL to up */
+        camera_fov_deg(&down, 50.0f);
+        camera_depth_range(&down, 0.1f, 100.0f);
+        camera_build(&down);
+        rp_set_camera(&down);
+        ame_particles *pt = &(ame_particles){ 0 };
+        pt_reset(pt);
+        uint8_t c0[4] = { 255, 255, 255, 255 }, c1[4] = { 255, 255, 255, 0 };
+        for (int i = 0; i < 24; i++)
+            pt_spawn(pt, -0.6f + 0.1f * i, 0.5f + 0.02f * i, 0, 0, 0, 0,
+                     1.0f, 0.14f, 0.14f, c0, c1);
+        rp_begin_frame();
+        pt_draw(pt, &down, rp_white_texture(), 30);
+        rp_end_frame();
+        rp_read_pixels(px, W, H);
+        int bright = 0;
+        for (long i = 0; i < W * H; i++)
+            if (px[i * 4] > 200 && px[i * 4 + 1] > 200
+                && px[i * 4 + 2] > 200)
+                bright++;
+        printf("    straight-down camera: %d bright px\n", bright);
+        UT_ASSERTF(bright > 100, "billboards vanished (degenerate basis)");
+        rp_set_camera(&cam3); /* restore */
+    }
+
     UT_CASE("Stage 2 mesh: Assimp-baked cube under world matrices");
     {
 #include "assets/baked_cube.h"
@@ -384,12 +414,12 @@ int main(void) {
         rp_set_lit(1);
         int tris = rp_push_mesh(rp_white_texture(),
                                 (const ame_mesh_vert *)baked_cube_verts,
-                                baked_cube_idx, baked_cube_idx_count, id,
-                                tint, 5);
+                                baked_cube_vert_count, baked_cube_idx,
+                                baked_cube_idx_count, id, tint, 5);
         int tris2 = rp_push_mesh(rp_white_texture(),
                                  (const ame_mesh_vert *)baked_cube_verts,
-                                 baked_cube_idx, baked_cube_idx_count, mv,
-                                 tint, 5);
+                                 baked_cube_vert_count, baked_cube_idx,
+                                 baked_cube_idx_count, mv, tint, 5);
         rp_set_lit(0);
         rp_end_frame();
         UT_ASSERTF(tris == baked_cube_idx_count / 3 && tris2 == tris,
@@ -401,10 +431,12 @@ int main(void) {
         rp_begin_frame();
         rp_set_lit(1);
         rp_push_mesh(rp_white_texture(),
-                     (const ame_mesh_vert *)baked_cube_verts, baked_cube_idx,
+                     (const ame_mesh_vert *)baked_cube_verts,
+                     baked_cube_vert_count, baked_cube_idx,
                      baked_cube_idx_count, id, tint, 5);
         rp_push_mesh(rp_white_texture(),
-                     (const ame_mesh_vert *)baked_cube_verts, baked_cube_idx,
+                     (const ame_mesh_vert *)baked_cube_verts,
+                     baked_cube_vert_count, baked_cube_idx,
                      baked_cube_idx_count, mv, tint, 5);
         rp_set_lit(0);
         rp_end_frame();

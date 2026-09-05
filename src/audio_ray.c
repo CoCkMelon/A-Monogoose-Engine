@@ -97,11 +97,28 @@ bool ame_audio_ray_compute(const ame_audio_ray_cfg *cfg, float *out_l,
         r.d[0] = dx / dist;
         r.d[1] = dy / dist;
         r.tmax = dist;
-        int n = ame_geo_static_count();
+        /* audit fix: candidate shapes come from the broadphase (the
+         * segment's AABB) and each is tested EXACTLY by its own kind -
+         * spheres were previously occluded by their bounding BOX,
+         * over-charging transmission loss near corners */
+        ame_aabb seg_box;
+        {
+            float lo[2], hi[2];
+            lo[0] = r.o[0] < cfg->source[0] ? r.o[0] : cfg->source[0];
+            hi[0] = r.o[0] < cfg->source[0] ? cfg->source[0] : r.o[0];
+            lo[1] = r.o[1] < cfg->source[1] ? r.o[1] : cfg->source[1];
+            hi[1] = r.o[1] < cfg->source[1] ? cfg->source[1] : r.o[1];
+            seg_box.c[0] = 0.5f * (lo[0] + hi[0]);
+            seg_box.c[1] = 0.5f * (lo[1] + hi[1]);
+            seg_box.h[0] = 0.5f * (hi[0] - lo[0]);
+            seg_box.h[1] = 0.5f * (hi[1] - lo[1]);
+        }
+        int cand[AME_GEO_MAX_HITS];
+        int n = ame_geo_overlap_world(seg_box, cand);
         ame_hit h;
-        for (int shape = 0; shape < n; shape++) {
-            ame_aabb b = ame_geo_static_aabb(shape);
-            if (!ame_geo_ray_aabb(r, b, &h) || h.t >= dist * 0.999f)
+        for (int ci = 0; ci < n; ci++) {
+            int shape = cand[ci];
+            if (!ame_geo_ray_shape(shape, r, &h) || h.t >= dist * 0.999f)
                 continue; /* not crossed by the segment */
             float add_db = 0.0f, mono = 0.0f;
             if (shape < AME_AURAY_SHAPES && g_mat_set[shape]) {

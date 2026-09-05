@@ -125,6 +125,24 @@ bool ame_geo_ray_aabb(ame_ray r, ame_aabb b, ame_hit *out) {
         if (tmin > tmax)
             return false;
     }
+    if (tmin <= 0.0f) {
+        /* ray starts inside (or on) the box: no entry face exists.
+         * Deterministic embedded normal: the dominant travel axis,
+         * opposing the direction (the face being headed toward). */
+        int ax = 0;
+        float best = -1.0f;
+        for (int i = 0; i < AME_DIM; i++) {
+            float a = fabsf(r.d[i]);
+            if (a > best) {
+                best = a;
+                ax = i;
+            }
+        }
+        for (int i = 0; i < AME_DIM; i++)
+            nmin[i] = 0.0f;
+        nmin[ax] = r.d[ax] > 0.0f ? -1.0f : 1.0f;
+        tmin = 0.0f;
+    }
     out->t = tmin;
     for (int i = 0; i < AME_DIM; i++) {
         out->p[i] = r.o[i] + r.d[i] * tmin;
@@ -136,21 +154,30 @@ bool ame_geo_ray_aabb(ame_ray r, ame_aabb b, ame_hit *out) {
 }
 
 bool ame_geo_ray_sphere(ame_ray r, ame_sphere s, ame_hit *out) {
+    /* full quadratic in t (t in |d| units, matching ray_aabb):
+     *    |o + t d - c|^2 = r^2  ->  a t^2 + 2b t + c = 0
+     * with a = d.d (NOT assumed 1 - the old code silently required a
+     * unit direction and returned wrong t for any other length) */
     float oc[AME_DIM];
-    float b = 0.0f, c = 0.0f;
+    float a = 0.0f, b = 0.0f, c = 0.0f;
     for (int i = 0; i < AME_DIM; i++) {
         oc[i] = r.o[i] - s.c[i];
+        a += r.d[i] * r.d[i];
         b += oc[i] * r.d[i];
         c += oc[i] * oc[i];
     }
     c -= s.r * s.r;
+    if (a < 1e-12f)
+        return false; /* zero-length direction cannot hit */
+    b /= a;
+    c /= a;
     float disc = b * b - c;
     if (disc < 0.0f)
         return false;
     float sq = sqrtf(disc);
     float t = -b - sq;
     if (t < 0.0f)
-        t = -b + sq;
+        t = -b + sq; /* starts inside: report the EXIT (t in front) */
     if (t < 0.0f || t > r.tmax)
         return false;
     out->t = t;
@@ -166,6 +193,162 @@ bool ame_geo_ray_sphere(ame_ray r, ame_sphere s, ame_hit *out) {
         for (int i = 0; i < AME_DIM; i++) out->n[i] /= len;
     out->shape = -1;
     out->flags = 0;
+    return true;
+}
+
+/* --- distance queries --------------------------------------------------- */
+
+float ame_geo_point_aabb_dist2(const float p[AME_DIM], ame_aabb b) {
+    float q, d2 = 0.0f;
+    for (int i = 0; i < AME_DIM; i++) {
+        if (p[i] < b.c[i] - b.h[i])
+            q = b.c[i] - b.h[i] - p[i];
+        else if (p[i] > b.c[i] + b.h[i])
+            q = p[i] - b.c[i] - b.h[i];
+        else
+            continue; /* inside on this axis contributes 0 */
+        d2 += q * q;
+    }
+    return d2;
+}
+
+float ame_geo_point_sphere_dist(const float p[AME_DIM], ame_sphere s) {
+    return ame_geo_dist(p, s.c) - s.r;
+}
+
+/* --- capsule ------------------------------------------------------------ */
+
+float ame_geo_capsule_point_dist2(ame_capsule c, const float p[AME_DIM]) {
+    float out[AME_DIM];
+    float d2 = ame_geo_seg_closest_pt(c.seg, p, out);
+    float dr = sqrtf(d2) - c.r;
+    return dr > 0.0f ? dr * dr : 0.0f; /* inside the capsule: 0 */
+}
+
+bool ame_geo_capsule_overlap_sphere(ame_capsule c, ame_sphere s) {
+    float out[AME_DIM];
+    float d2 = ame_geo_seg_closest_pt(c.seg, s.c, out);
+    float rr = c.r + s.r;
+    return d2 <= rr * rr;
+}
+
+bool ame_geo_capsule_overlap_aabb(ame_capsule c, ame_aabb b) {
+    /* dist2(segment, box) is CONVEX along the segment -> golden-section
+     * search converges to the true minimum (deterministic, ~machine
+     * precision in 48 steps, no allocation). */
+    const float gr = 0.6180339887498949f; /* 1/phi */
+    float t0 = 0.0f, t1 = 1.0f;
+    float d0 = ame_geo_point_aabb_dist2(c.seg.a, b);
+    if (d0 == 0.0f)
+        return true;
+    float d1 = ame_geo_point_aabb_dist2(c.seg.b, b);
+    if (d1 == 0.0f)
+        return true;
+    float span = t1 - t0;
+    float tm = t0 + span * (1.0f - gr);
+    float tM = t0 + span * gr;
+    float dm = 0.0f;
+    for (int it = 0; it < 48; it++) {
+        float pm[AME_DIM], pM[AME_DIM];
+        for (int i = 0; i < AME_DIM; i++) {
+            pm[i] = c.seg.a[i] + (c.seg.b[i] - c.seg.a[i]) * tm;
+            pM[i] = c.seg.a[i] + (c.seg.b[i] - c.seg.a[i]) * tM;
+        }
+        dm = ame_geo_point_aabb_dist2(pm, b);
+        float dM = ame_geo_point_aabb_dist2(pM, b);
+        if (dm < dM) {
+            t1 = tM;
+            tM = tm;
+            tm = t0 + (t1 - t0) * (1.0f - gr);
+        } else {
+            t0 = tm;
+            tm = tM;
+            tM = t0 + (t1 - t0) * gr;
+        }
+        if (t1 - t0 < 1e-6f)
+            break;
+    }
+    return dm <= c.r * c.r || d0 <= c.r * c.r || d1 <= c.r * c.r;
+}
+
+/* --- oriented box -------------------------------------------------------- */
+
+ame_obb ame_geo_obb_from_aabb(ame_aabb b) {
+    ame_obb o;
+    o.c[0] = b.c[0];
+    o.c[1] = b.c[1];
+    o.h[0] = b.h[0];
+    o.h[1] = b.h[1];
+#if AME_DIM == 3
+    o.c[2] = b.c[2];
+    o.h[2] = b.h[2];
+#endif
+    for (int i = 0; i < AME_DIM; i++)
+        for (int j = 0; j < AME_DIM; j++)
+            o.u[i][j] = i == j ? 1.0f : 0.0f;
+    return o;
+}
+
+bool ame_geo_point_in_obb(const float p[AME_DIM], ame_obb o) {
+    for (int i = 0; i < AME_DIM; i++) {
+        float local_i = 0.0f; /* (p - c) . u[i] */
+        for (int j = 0; j < AME_DIM; j++)
+            local_i += (p[j] - o.c[j]) * o.u[i][j];
+        if (local_i < -o.h[i] || local_i > o.h[i])
+            return false;
+    }
+    return true;
+}
+
+bool ame_geo_obb_overlap(ame_obb a, ame_obb b) {
+    /* separating axis test over: A axes, B axes, (3D) crosses */
+    float d[AME_DIM];
+    for (int j = 0; j < AME_DIM; j++)
+        d[j] = b.c[j] - a.c[j];
+    float axes[2 * AME_DIM + AME_DIM * AME_DIM][AME_DIM];
+    int n = 0;
+    for (int i = 0; i < AME_DIM; i++) {
+        for (int j = 0; j < AME_DIM; j++)
+            axes[n][j] = a.u[i][j];
+        n++;
+        for (int j = 0; j < AME_DIM; j++)
+            axes[n][j] = b.u[i][j];
+        n++;
+    }
+#if AME_DIM == 3
+    for (int i = 0; i < 3; i++)
+        for (int k = 0; k < 3; k++) {
+            float cr[3];
+            for (int j = 0; j < 3; j++)
+                cr[j] = a.u[i][(j + 1) % 3] * b.u[k][(j + 2) % 3]
+                      - a.u[i][(j + 2) % 3] * b.u[k][(j + 1) % 3];
+            float len = 0.0f;
+            for (int j = 0; j < 3; j++)
+                len += cr[j] * cr[j];
+            if (len < 1e-10f)
+                continue; /* parallel axes: covered by the base axes */
+            for (int j = 0; j < 3; j++)
+                axes[n][j] = cr[j];
+            n++;
+        }
+#endif
+    for (int k = 0; k < n; k++) {
+        float ra = 0.0f, rb = 0.0f, dist = 0.0f;
+        for (int j = 0; j < AME_DIM; j++)
+            dist += d[j] * axes[k][j];
+        for (int i = 0; i < AME_DIM; i++) {
+            float pi = 0.0f;
+            for (int j = 0; j < AME_DIM; j++)
+                pi += axes[k][j] * a.u[i][j];
+            ra += a.h[i] * fabsf(pi);
+            float qi = 0.0f;
+            for (int j = 0; j < AME_DIM; j++)
+                qi += axes[k][j] * b.u[i][j];
+            rb += b.h[i] * fabsf(qi);
+        }
+        if (fabsf(dist) > ra + rb)
+            return false; /* separating axis found */
+    }
     return true;
 }
 
@@ -240,6 +423,99 @@ ame_aabb ame_geo_static_aabb(int i) {
 }
 
 int ame_geo_static_count(void) { return W.count; }
+
+bool ame_geo_ray_shape(int shape, ame_ray r, ame_hit *out) {
+    if (!out || shape < 0 || shape >= W.count)
+        return false;
+    ame_gshape *s = &W.shapes[shape];
+    bool hit = s->is_sphere ? ame_geo_ray_sphere(r, s->sph, out)
+                            : ame_geo_ray_aabb(r, s->box, out);
+    if (hit) {
+        out->shape = shape;
+        out->flags = s->flags;
+    }
+    return hit;
+}
+
+int ame_geo_add_mesh_proxies(const float *verts, int vert_count,
+                             int vstride_bytes, int cells_per_axis) {
+    if (!verts || vert_count <= 0 || vstride_bytes < (int)(AME_DIM * sizeof(float))
+        || cells_per_axis < 1)
+        return 0;
+    /* bound the cloud */
+    float mn[AME_DIM], mx[AME_DIM];
+    for (int i = 0; i < AME_DIM; i++) {
+        mn[i] = 1e30f;
+        mx[i] = -1e30f;
+    }
+    for (int v = 0; v < vert_count; v++) {
+        const float *p = (const float *)((const uint8_t *)verts
+                                         + (size_t)v * (size_t)vstride_bytes);
+        for (int i = 0; i < AME_DIM; i++) {
+            if (p[i] < mn[i])
+                mn[i] = p[i];
+            if (p[i] > mx[i])
+                mx[i] = p[i];
+        }
+    }
+    float ext[AME_DIM];
+    for (int i = 0; i < AME_DIM; i++)
+        ext[i] = mx[i] - mn[i] + 1e-4f;
+    /* per-cell min/max scratch (fixed budget, no malloc) */
+    if (cells_per_axis > 16)
+        cells_per_axis = 16;
+    static float cell_mn[16 * 16 * 16][AME_DIM];
+    static float cell_mx[16 * 16 * 16][AME_DIM];
+    static bool cell_used[16 * 16 * 16];
+    int total = 1;
+    int dims[3] = { cells_per_axis, 1, 1 };
+#if AME_DIM == 3
+    dims[1] = cells_per_axis;
+    dims[2] = cells_per_axis;
+    total = cells_per_axis * cells_per_axis * cells_per_axis;
+#else
+    total = cells_per_axis * cells_per_axis;
+#endif
+    memset(cell_used, 0, (size_t)total * sizeof(bool));
+    for (int v = 0; v < vert_count; v++) {
+        const float *p = (const float *)((const uint8_t *)verts
+                                         + (size_t)v * (size_t)vstride_bytes);
+        int cell = 0, stride = 1;
+        for (int i = AME_DIM - 1; i >= 0; i--) {
+            int gi = (int)((p[i] - mn[i]) / ext[i] * dims[i]);
+            gi = gi < 0 ? 0 : (gi > dims[i] - 1 ? dims[i] - 1 : gi);
+            cell += gi * stride;
+            stride *= dims[i];
+        }
+        if (!cell_used[cell]) {
+            cell_used[cell] = true;
+            for (int i = 0; i < AME_DIM; i++) {
+                cell_mn[cell][i] = p[i];
+                cell_mx[cell][i] = p[i];
+            }
+        } else {
+            for (int i = 0; i < AME_DIM; i++) {
+                if (p[i] < cell_mn[cell][i])
+                    cell_mn[cell][i] = p[i];
+                if (p[i] > cell_mx[cell][i])
+                    cell_mx[cell][i] = p[i];
+            }
+        }
+    }
+    int added = 0;
+    for (int cell = 0; cell < total && W.count < AME_GEO_MAX_STATIC; cell++) {
+        if (!cell_used[cell])
+            continue;
+        ame_aabb b;
+        for (int i = 0; i < AME_DIM; i++) {
+            b.c[i] = 0.5f * (cell_mn[cell][i] + cell_mx[cell][i]);
+            b.h[i] = 0.5f * (cell_mx[cell][i] - cell_mn[cell][i]);
+        }
+        if (ame_geo_add_aabb(b, AME_GEO_FLAG_SOLID) >= 0)
+            added++;
+    }
+    return added;
+}
 
 void ame_geo_rebuild_broadphase(void) {
     ame_aabb b = {0};
@@ -320,6 +596,18 @@ bool ame_geo_raycast(ame_ray r, ame_hit *best) {
         ray_box.c[i] = (lo + hi) * 0.5f;
         ray_box.h[i] = (hi - lo) * 0.5f;
     }
+    /* audit fix: a ray whose AABB misses the WORLD bounds cannot hit any
+     * shape (shapes live inside the bounds) - skip instead of letting the
+     * clamped cell walk test edge cells that exact tests must reject */
+    {
+        ame_aabb wb;
+        for (int i = 0; i < AME_DIM; i++) {
+            wb.c[i] = 0.5f * (W.world_min[i] + W.world_max[i]);
+            wb.h[i] = 0.5f * (W.world_max[i] - W.world_min[i]);
+        }
+        if (!ame_geo_aabb_overlap(ray_box, wb))
+            return false;
+    }
     int lo[3], hi[3];
     for (int k = 0; k < 3; k++) {
         if (k >= AME_DIM) { lo[k] = hi[k] = 0; continue; }
@@ -374,6 +662,15 @@ int ame_geo_overlap_world(ame_aabb box, int out_indices[AME_GEO_MAX_HITS]) {
     int n = 0;
     if (W.count == 0)
         return 0;
+    {
+        ame_aabb wb;
+        for (int i = 0; i < AME_DIM; i++) {
+            wb.c[i] = 0.5f * (W.world_min[i] + W.world_max[i]);
+            wb.h[i] = 0.5f * (W.world_max[i] - W.world_min[i]);
+        }
+        if (!ame_geo_aabb_overlap(box, wb))
+            return 0;
+    }
     int lo[3], hi[3];
     for (int k = 0; k < 3; k++) {
         if (k >= AME_DIM) { lo[k] = hi[k] = 0; continue; }

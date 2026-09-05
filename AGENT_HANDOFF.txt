@@ -432,3 +432,42 @@ SESSION 8 ADDENDUM - PARITY 2/3 AND 3/3 (dialogue + mesh import):
   hierarchy, Box2D-as-core. ame-next is AHEAD: 3D, lighting, post,
   particles, online server-authoritative game, Lean model, packaging.
   Remaining: opus decode (Stage 3 codecs).
+
+SESSION 9 - AUDIT + GEOMETRY LIB IMPROVEMENTS:
+AUDIT (full suite under ASan+UBSan = clean; 7 bugs found by probes +
+review, ALL fixed + regression-tested):
+- ame_geo_ray_sphere assumed |d|=1 (t wrong for any other length,
+  contradicting the header's own "|d| scales tmax" contract) -> full
+  quadratic in a=d.d; t now in |d| units like ray_aabb.
+- ame_geo_ray_aabb from inside -> ZERO normal (garbage for lighting/
+  reflection) -> deterministic embedded normal (dominant travel axis,
+  opposing direction).
+- ame_m4_look_at with f parallel to up (straight down/up) -> zero
+  right axis -> degenerate view matrix, NOTHING rendered (found via
+  the particle test; the billboard guard alone was not enough).
+  Guard substitutes a fallback up; non-degenerate cases bit-identical
+  (golden unchanged). Particles' camera basis got the same guard.
+- audio_load_wav trusted a canonical 44-byte header -> any file with
+  a LIST/INFO chunk parsed garbage (frames=1 of 4) -> proper RIFF
+  chunk walk (word-aligned skips, fmt size >= 16).
+- audio_ray occluded SPHERES by their bounding box (over-charging
+  loss near corners) -> candidates from the broadphase (overlap_world
+  on the segment AABB) + exact ame_geo_ray_shape per shape.
+- rp_push_mesh read OOB on malformed baked indices -> vert_count
+  parameter + skip bad triangles (API change; test updated).
+- raycast/overlap_world: rays/boxes fully outside the world bounds
+  walked clamped edge cells (exact tests rejected them; pure waste)
+  -> AABB-vs-world-bounds early-out.
+GEOMETRY ADDITIONS (all spec physics.txt "INCLUDED" items now exist):
+- distance: point_aabb_dist2 (0 inside), point_sphere_dist (signed).
+- capsule (spec shape): overlap sphere/aabb (golden-section over the
+  convex segment-box distance), point dist2.
+- OBB (spec shape): obb_from_aabb, point_in_obb, obb_overlap SAT
+  (2D 4 axes; 3D 15 incl. cross products, parallel axes skipped).
+- ame_geo_add_mesh_proxies: mesh -> per-cell AABB proxies ("mesh
+  approximated by primitives"; also feeds the future RT broadphase).
+- ame_geo_ray_shape(i): exact dispatch per shape kind.
+Tests: test_geometry +8 cases in BOTH dims (62+58 checks), audio_ray
++2 (sphere exactness 0-loss near-miss / 18dB dead-center; LIST wav),
+render +1 (straight-down camera particles). rp_push_mesh signature
+now (tex, verts, vert_count, idx, idx_count, xform, tint, layer).

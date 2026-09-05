@@ -119,7 +119,7 @@ typedef struct {
     float uv[2];
 } ame_mesh_vert;
 
-int rp_push_mesh(int tex, const ame_mesh_vert *verts,
+int rp_push_mesh(int tex, const ame_mesh_vert *verts, int vert_count,
                  const unsigned int *idx, int idx_count,
                  const float *xform_or_null, const float tint[4],
                  float layer);

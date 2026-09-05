@@ -371,26 +371,56 @@ float *audio_load_wav(const char *path, int *frames_out) {
     FILE *f = fopen(path, "rb");
     if (!f)
         return NULL;
-    uint8_t hdr[44];
-    if (fread(hdr, 1, sizeof hdr, f) != sizeof hdr
-        || memcmp(hdr, "RIFF", 4) != 0 || memcmp(hdr + 8, "WAVE", 4) != 0) {
+    uint8_t rhdr[12];
+    if (fread(rhdr, 1, sizeof rhdr, f) != sizeof rhdr
+        || memcmp(rhdr, "RIFF", 4) != 0 || memcmp(rhdr + 8, "WAVE", 4) != 0) {
         fclose(f);
         return NULL;
     }
-    uint16_t fmt = (uint16_t)(hdr[20] | (hdr[21] << 8));   /* 1 = PCM  */
-    uint16_t channels = (uint16_t)(hdr[22] | (hdr[23] << 8));
-    uint32_t rate = (uint32_t)(hdr[24] | (hdr[25] << 8) | (hdr[26] << 16)
-                               | ((uint32_t)hdr[27] << 24));
-    uint16_t bits = (uint16_t)(hdr[34] | (hdr[35] << 8));
+    /* audit fix: WALK the RIFF chunks instead of trusting a canonical
+     * 44-byte layout - files with a LIST/INFO chunk between fmt and
+     * data parsed garbage before (wrong length, wrong samples) */
+    uint16_t fmt = 0, channels = 0, bits = 0;
+    uint32_t rate = 0, data_bytes = 0;
+    long data_at = -1;
+    for (;;) {
+        uint8_t ch[8];
+        size_t got = fread(ch, 1, sizeof ch, f);
+        if (got != sizeof ch)
+            break;
+        uint32_t sz = (uint32_t)(ch[4] | (ch[5] << 8) | (ch[6] << 16)
+                                 | ((uint32_t)ch[7] << 24));
+        if (!memcmp(ch, "fmt ", 4) && sz >= 16 && sz <= 64) {
+            uint8_t fmtb[64] = { 0 };
+            if (fread(fmtb, 1, sz, f) != sz) {
+                fclose(f);
+                return NULL;
+            }
+            fmt = (uint16_t)(fmtb[0] | (fmtb[1] << 8));
+            channels = (uint16_t)(fmtb[2] | (fmtb[3] << 8));
+            rate = (uint32_t)(fmtb[4] | (fmtb[5] << 8) | (fmtb[6] << 16)
+                              | ((uint32_t)fmtb[7] << 24));
+            bits = (uint16_t)(fmtb[14] | (fmtb[15] << 8));
+            if (sz & 1)
+                fgetc(f); /* chunks are word-aligned */
+            continue;
+        }
+        if (!memcmp(ch, "data", 4)) {
+            data_bytes = sz;
+            data_at = ftell(f);
+            break;
+        }
+        /* skip unknown chunk (word-aligned) */
+        if (fseek(f, (long)sz + (sz & 1), SEEK_CUR) != 0)
+            break;
+    }
     if (fmt != 1 /* PCM */ || (channels != 1 && channels != 2)
-        || bits != 16 || rate == 0) {
+        || bits != 16 || rate == 0 || data_at < 0 || data_bytes == 0
+        || data_bytes > (64u << 20)) {
         fclose(f);
         return NULL; /* only plain 16-bit PCM mono/stereo, like v0 needs */
     }
-    uint32_t data_bytes = (uint32_t)(hdr[40] | (hdr[41] << 8)
-                                     | (hdr[42] << 16)
-                                     | ((uint32_t)hdr[43] << 24));
-    if (data_bytes == 0 || data_bytes > (64u << 20)) {
+    if (fseek(f, data_at, SEEK_SET) != 0) {
         fclose(f);
         return NULL;
     }

@@ -65,9 +65,15 @@ void pt_step(ame_particles *p, float dt,
 
 int pt_draw(const ame_particles *p, const ame_camera *cam,
             int tex, float layer) {
-    /* billboard basis from the camera (right/up in world space) */
+    /* billboard basis from the camera (right/up in world space).
+     * audit fix: looking straight down/up makes f PARALLEL to up ->
+     * cross = 0 -> every billboard degenerates to a point (particles
+     * silently vanish). Fall back to a world axis. */
     ame_v3 f = ame_v3_norm(ame_v3_sub(cam->look, cam->pos));
-    ame_v3 r = ame_v3_norm(ame_v3_cross(f, cam->up));
+    ame_v3 cr = ame_v3_cross(f, cam->up);
+    if (cr.x * cr.x + cr.y * cr.y + cr.z * cr.z < 1e-8f)
+        cr = ame_v3_(1, 0, 0);
+    ame_v3 r = ame_v3_norm(cr);
     ame_v3 u = ame_v3_cross(r, f);
     int drawn = 0;
     for (int i = 0; i < p->count; i++) {

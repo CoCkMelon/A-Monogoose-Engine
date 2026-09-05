@@ -113,6 +113,83 @@ int main(void) {
         UT_ASSERT(l > 0.1f);          /* but still audible */
     }
 
+    UT_CASE("sphere occluders are tested EXACTLY, not as boxes");
+    {
+        ame_geo_reset();
+        ame_audio_ray_reset();
+        /* a PILLAR (sphere r=0.5 at x=2): the ray passes 0.7 above the
+         * center - through the bounding BOX corner, missing the ball */
+        ame_sphere sph = { .c = { 2, 0 }, .r = 0.5f };
+        int id = ame_geo_add_sphere(sph, 0);
+        ame_geo_rebuild_broadphase();
+        ame_audio_ray_material(id, &AME_MAT_CONCRETE);
+        ame_audio_ray_cfg c = { { 0, 0.7f }, { 4, 0.7f }, 1, 20, 0.0f,
+                                0.0f };
+        float l, r, base_l, base_r;
+        ame_audio_ray_compute(&c, &l, &r);
+        ame_geo_reset();
+        ame_geo_rebuild_broadphase();
+        ame_audio_ray_compute(&c, &base_l, &base_r);
+        UT_ASSERT_NEAR(l, base_l, 1e-4f); /* no loss: it MISSED */
+        UT_ASSERT_NEAR(r, base_r, 1e-4f);
+        /* dead-center still occludes */
+        ame_geo_reset();
+        ame_audio_ray_reset();
+        id = ame_geo_add_sphere(((ame_sphere){ .c = { 2, 0 }, .r = 0.5f }),
+                                0);
+        ame_geo_rebuild_broadphase();
+        ame_audio_ray_material(id, &AME_MAT_CONCRETE);
+        ame_audio_ray_cfg c2 = { { 0, 0 }, { 4, 0 }, 1, 20, 0.0f, 0.0f };
+        ame_audio_ray_compute(&c2, &l, &r);
+        float loss = 20.0f * log10f((base_l + base_r) / (l + r));
+        printf("    sphere dead-center loss=%.2f dB (want 18)\n", loss);
+        UT_ASSERT_NEAR(loss, 18.0f, 0.3f);
+    }
+
+    UT_CASE("wav with a LIST chunk still parses (RIFF walk)");
+    {
+        /* non-canonical layout: LIST/INFO chunk between fmt and data */
+        FILE *f = fopen("/tmp/ame_list.wav", "wb");
+        UT_ASSERT(f != NULL);
+        unsigned char fmt[] = {
+            1, 0, 2, 0, 0x80, 0xbb, 0, 0, 0x00, 0xee, 0x02, 0, 4, 0,
+            16, 0
+        };
+        long data_len = 4 * 4;
+        fwrite("RIFF", 1, 4, f);
+        int32_t sz = 4 + 8 + 16 + 8 + 4 + 8 + data_len;
+        fwrite(&sz, 4, 1, f);
+        fwrite("WAVE", 1, 4, f);
+        fwrite("fmt ", 1, 4, f);
+        int32_t fsz = 16;
+        fwrite(&fsz, 4, 1, f);
+        fwrite(fmt, 1, 16, f);
+        fwrite("LIST", 1, 4, f);
+        int32_t lsz = 4;
+        fwrite(&lsz, 4, 1, f);
+        fwrite("INFO", 1, 4, f);
+        fwrite("data", 1, 4, f);
+        int32_t dsz = (int32_t)data_len;
+        fwrite(&dsz, 4, 1, f);
+        for (int i = 0; i < 4; i++) {
+            int16_t a = (int16_t)(i * 1000), b = (int16_t)(-i * 1000);
+            fwrite(&a, 2, 1, f);
+            fwrite(&b, 2, 1, f);
+        }
+        fclose(f);
+        int frames = 0;
+        float *pcm = audio_load_wav("/tmp/ame_list.wav", &frames);
+        UT_ASSERTF(pcm != NULL, "LIST-chunk wav failed to parse");
+        UT_ASSERTF(frames == 4, "frames=%d (want 4)", frames);
+        if (pcm) {
+            /* frames are (0,0),(1000,-1000),(2000,-2000),(3000,-3000):
+             * pcm[4] = frame 2 left = 2000/32768 */
+            UT_ASSERT_NEAR(pcm[4], 2000.0f / 32768.0f, 0.0001f);
+            UT_ASSERT_NEAR(pcm[6], 3000.0f / 32768.0f, 0.0001f);
+            free(pcm);
+        }
+    }
+
     UT_CASE("air absorption is linear in distance");
     {
         ame_geo_reset();
