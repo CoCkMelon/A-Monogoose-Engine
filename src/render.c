@@ -45,7 +45,9 @@
     X(READPIXELS, ReadPixels)       X(GETERROR, GetError)                       \
     X(GETSTRING, GetString)         X(DELETETEXTURES, DeleteTextures)           \
     X(DELETEBUFFERS, DeleteBuffers) X(DELETEVERTEXARRAYS, DeleteVertexArrays)   \
-    X(DELETEPROGRAM, DeleteProgram) X(PIXELSTOREI, PixelStorei)
+    X(DELETEPROGRAM, DeleteProgram) X(PIXELSTOREI, PixelStorei)           \
+    X(COLORMASK, ColorMask)       X(DRAWBUFFER, DrawBuffer)               \
+    X(DRAWBUFFERS, DrawBuffers)
 
 /* NAME is the Khronos UPPERCASE token, fn the exported glFunction name */
 #define AME_GL_DECL(NAME, fn) static PFNGL##NAME##PROC gl##fn;
@@ -121,6 +123,14 @@ typedef struct {
     GLuint post_vao, post_vbo, post_prog;
     GLint u_ptex, u_ptint, u_pvig;
     float post_tint[3], post_vig;
+    /* Stage 2: directional shadow map (depth-only second draw of the
+     * SAME batch through the SAME program; casters = lit geometry) */
+    GLuint shadow_fbo, shadow_tex;
+    int shadow_res;
+    bool shadow_on;
+    float sh_dir[3], sh_center[3], sh_extent;
+    ame_m4 svp;
+    GLint u_svp, u_stex, u_shadow_amt, u_stexel, u_shadow_pass;
     /* per-push stamps (like a tint: set, push, unset) */
     float stamp_nrm[3];
     float stamp_lit;
@@ -133,6 +143,10 @@ typedef struct {
 } rp_state;
 
 static rp_state S;
+
+/* forward: shadow target lifecycle (defined with the Stage 2 pass) */
+static bool shadow_target_ensure(void);
+static void shadow_target_free(void);
 
 /* shader body shared by desktop GL and GLES (version prepended) */
 #define VS_BODY                                                      \
@@ -148,12 +162,18 @@ static rp_state S;
     "uniform vec3 u_ppos;\n"                                             \
     "uniform vec3 u_pcol;\n"                                             \
     "uniform float u_prange;\n"                                          \
+    "uniform mat4 u_svp;\n"                                               \
+    "uniform float u_shadow_pass;\n"                                      \
     "out vec2 v_uv;\n"                                                   \
     "out vec4 v_col;\n"                                                  \
+    "out vec4 v_shadow;\n"                                               \
+    "out vec3 v_diff;\n"                                                 \
+    "out vec2 v_ndl_lit;\n"                                              \
     "void main() {\n"                                                    \
     "    v_uv = a_uv;\n"                                                 \
     "    vec3 n = normalize(a_nrm);\n"                                   \
-    "    vec3 light = u_lamb + u_lcol * max(dot(n, -u_ldir), 0.0);\n"    \
+    "    float ndl = max(dot(n, -u_ldir), 0.0);\n"                       \
+    "    vec3 light = u_lamb + u_lcol * ndl;\n"                          \
     "    if (u_prange > 0.0) {\n"                                        \
     "        vec3 d3 = u_ppos - a_pos;\n"                                \
     "        float att = max(0.0, 1.0 - length(d3) / u_prange);\n"       \
@@ -161,16 +181,52 @@ static rp_state S;
     "                          * att * att);\n"                          \
     "    }\n"                                                            \
     "    v_col = a_col * vec4(mix(vec3(1.0), light, a_lit), 1.0);\n"     \
-    "    gl_Position = u_vp * vec4(a_pos, 1.0);\n"                       \
+    "    /* shadow varyings: light-space pos + the DIFFUSE part (what a\n"  \
+    "     * shadow may remove; ambient/point stay) + bias inputs */\n"     \
+    "    v_shadow = u_svp * vec4(a_pos, 1.0);\n"                          \
+    "    v_diff = a_col.rgb * (u_lcol * ndl * a_lit);\n"                  \
+    "    v_ndl_lit = vec2(ndl, a_lit);\n"                                 \
+    "    if (u_shadow_pass > 0.5 && a_lit < 0.5)\n"                       \
+    "        gl_Position = vec4(2.0, 2.0, 2.0, 1.0); /* unlit=UI: no cast */\n" \
+    "    else\n"                                                          \
+    "        gl_Position = u_vp * vec4(a_pos, 1.0);\n"                    \
     "}\n"
 
 #define FS_BODY                                                      \
     "uniform sampler2D u_tex;\n"                                         \
+    "uniform sampler2D u_stex;\n"                          \
+    "uniform float u_shadow_amt;\n"                                       \
+    "uniform float u_stexel;\n"                                          \
     "in vec2 v_uv;\n"                                                    \
     "in vec4 v_col;\n"                                                   \
+    "in vec4 v_shadow;\n"                                               \
+    "in vec3 v_diff;\n"                                                 \
+    "in vec2 v_ndl_lit;\n"                                              \
     "out vec4 o_col;\n"                                                  \
     "void main() {\n"                                                    \
-    "    o_col = texture(u_tex, v_uv) * v_col;\n"                        \
+    "    vec4 c = texture(u_tex, v_uv) * v_col;\n"                       \
+    "    /* branchless shadow: amt = 0 subtracts exactly 0.0, so the\n"  \
+    "     * one-pass output stays BIT-IDENTICAL when shadows are off.\n" \
+    "     * Plain sampler2D depth reads + manual compare: shadow\n"      \
+    "     * samplers poison fragments on llvmpipe even unsampled. */\n"  \
+    "    vec3 sc = v_shadow.xyz / v_shadow.w * 0.5 + 0.5;\n"             \
+    "    float sh = 1.0;\n"                                              \
+    "    if (u_shadow_amt > 0.5 && v_ndl_lit.y > 0.0 &&\n"               \
+    "        sc.x > 0.0 && sc.x < 1.0 && sc.y > 0.0 &&\n"                \
+    "        sc.y < 1.0 && sc.z > 0.0 && sc.z < 1.0) {\n"                \
+    "        float bias = mix(0.0025, 0.0005,\n"                         \
+    "                          clamp(v_ndl_lit.x, 0.0, 1.0));\n"         \
+    "        sh = 0.0;\n"                                                \
+    "        for (int dy = -1; dy <= 1; dy++)\n"                          \
+    "            for (int dx = -1; dx <= 1; dx++) {\n"                    \
+    "                float d = texture(u_stex, sc.xy +\n"                \
+    "                    vec2(float(dx), float(dy)) * u_stexel).r;\n"    \
+    "                sh += (sc.z - bias) <= d ? 1.0 : 0.0;\n"            \
+    "            }\n"                                                    \
+    "        sh /= 9.0;\n"                                               \
+    "    }\n"                                                            \
+    "    c.rgb = c.rgb - v_diff * (1.0 - sh) * u_shadow_amt;\n"          \
+    "    o_col = c;\n"                                                   \
     "}\n"
 
 /* Stage 2 post pass: one fullscreen triangle, no depth, no blend.
@@ -209,7 +265,6 @@ static GLuint compile(GLenum type, const char *src) {
     if (!ok) {
         char log[512];
         glGetShaderInfoLog(sh, sizeof log, NULL, log);
-        LOGD("ame rp: shader error: %s", log);
         return 0;
     }
     return sh;
@@ -290,6 +345,7 @@ static bool scene_target_ensure(int w, int h) {
     if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
         glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)prev_fb);
         scene_target_free();
+    shadow_target_free();
         return false;
     }
     /* restore the caller's binding (0 = SDL window; a host FBO when
@@ -327,7 +383,9 @@ int rp_init(const ame_rp_desc *desc, const ame_camera *cam, int w, int h) {
         ? "#version 300 es\nprecision highp float;\n" VS_BODY
         : "#version 330 core\n" VS_BODY;
     const char *fs = desc->gles
-        ? "#version 300 es\nprecision mediump float;\n" FS_BODY
+        ? "#version 300 es\nprecision highp float;\n" FS_BODY
+        /* highp: shadow depth compare needs the mantissa (desktop GL
+         * ignores precision qualifiers - goldens unaffected) */
         : "#version 330 core\n" FS_BODY;
 
     GLuint vsh = compile(GL_VERTEX_SHADER, vs);
@@ -360,6 +418,17 @@ int rp_init(const ame_rp_desc *desc, const ame_camera *cam, int w, int h) {
     S.u_ppos = glGetUniformLocation(S.prog, "u_ppos");
     S.u_pcol = glGetUniformLocation(S.prog, "u_pcol");
     S.u_prange = glGetUniformLocation(S.prog, "u_prange");
+    S.u_svp = glGetUniformLocation(S.prog, "u_svp");
+    S.u_stex = glGetUniformLocation(S.prog, "u_stex");
+    S.u_shadow_amt = glGetUniformLocation(S.prog, "u_shadow_amt");
+    S.u_stexel = glGetUniformLocation(S.prog, "u_stexel");
+    S.u_shadow_pass = glGetUniformLocation(S.prog, "u_shadow_pass");
+    glUseProgram(S.prog);
+    glUniform1f(S.u_shadow_amt, 0.0f);
+    glUniform1f(S.u_shadow_pass, 0.0f);
+    glUniform1f(S.u_stexel, 1.0f / 2048.0f);
+    glUniformMatrix4fv(S.u_svp, 1, GL_FALSE,
+                       ame_m4_identity().m); /* no NaN before first rp_shadow */
 
     /* batch buffers: allocated ONCE (setup), rewritten in place (hot) */
     S.batch.quad_cap = desc->max_quads;
@@ -435,6 +504,16 @@ int rp_init(const ame_rp_desc *desc, const ame_camera *cam, int w, int h) {
     if (rp_load_texture(white, 1, 1, 4, true) < 0)
         return -6;
 
+    /* Stage 2 shadows: create the depth target eagerly so sampler unit
+     * 1 always holds a complete depth texture (an unsatisfied shadow
+     * sampler makes fragments undefined on llvmpipe). */
+    if (!shadow_target_ensure())
+        return -12;
+    glUseProgram(S.prog);
+    glUniform1i(S.u_stex, 1);
+    glUniformMatrix4fv(S.u_svp, 1, GL_FALSE,
+                       ame_m4_identity().m);
+
     if (desc->post) {
         const char *pvs = desc->gles
             ? "#version 300 es\nprecision highp float;\n" POST_VS
@@ -495,6 +574,7 @@ void rp_shutdown(void) {
     if (S.vao) glDeleteVertexArrays(1, &S.vao);
     if (S.prog) glDeleteProgram(S.prog);
     scene_target_free();
+    shadow_target_free();
     if (S.post_prog) glDeleteProgram(S.post_prog);
     if (S.post_vbo) glDeleteBuffers(1, &S.post_vbo);
     if (S.post_vao) glDeleteVertexArrays(1, &S.post_vao);
@@ -618,6 +698,91 @@ void rp_push_sprite(int tex, float x, float y, float w, float h,
     push_quad_common(tex, p0, p1, p2, p3, u0, v0, u1, v1, tint, layer);
 }
 
+
+/* --- Stage 2: directional shadow target (depth-only FBO) ------------------ */
+static bool shadow_target_ensure(void) {
+    if (S.shadow_fbo)
+        return true;
+    S.shadow_res = 2048;
+    /* save ALL state we touch; restore before returning (this runs at
+     * init AND mid-frame from the shadow pass). The depth texture is
+     * created and left bound on unit 1 ONLY - unit 0 (the sprite sheet
+     * unit) is never touched: binding a depth texture on unit 0 broke
+     * every later lit draw on llvmpipe (probed the hard way). */
+    GLint prev_fb, prev_active;
+    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &prev_fb);
+    glGetIntegerv(GL_ACTIVE_TEXTURE, &prev_active);
+    glGenTextures(1, &S.shadow_tex);
+    glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_2D, S.shadow_tex);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT24, S.shadow_res,
+                 S.shadow_res, 0, GL_DEPTH_COMPONENT, GL_UNSIGNED_INT, NULL);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    /* plain depth reads; the FS compares manually (shadow samplers
+     * poison fragments on llvmpipe even when never sampled) */
+    glGenFramebuffers(1, &S.shadow_fbo);
+    glBindFramebuffer(GL_FRAMEBUFFER, S.shadow_fbo);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
+                           GL_TEXTURE_2D, S.shadow_tex, 0);
+    /* depth-only: no color attachment may be written */
+    if (S.desc.gles) {
+        GLenum none_buf = GL_NONE;
+        glDrawBuffers(1, &none_buf);
+    } else {
+        glDrawBuffer(GL_NONE);
+    }
+    GLenum st = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+    if (st != GL_FRAMEBUFFER_COMPLETE) {
+        LOGD("ame rp: shadow fbo incomplete 0x%x", (unsigned)st);
+        glDeleteFramebuffers(1, &S.shadow_fbo);
+        glDeleteTextures(1, &S.shadow_tex);
+        S.shadow_fbo = S.shadow_tex = 0;
+        glActiveTexture(GL_TEXTURE1);
+        glBindTexture(GL_TEXTURE_2D, 0);
+        glActiveTexture(prev_active);
+        glBindFramebuffer(GL_FRAMEBUFFER, prev_fb);
+        return false;
+    }
+    glBindFramebuffer(GL_FRAMEBUFFER, prev_fb);
+    glActiveTexture(prev_active);
+    return true;
+}
+
+static void shadow_target_free(void) {
+    if (S.shadow_fbo)
+        glDeleteFramebuffers(1, &S.shadow_fbo);
+    if (S.shadow_tex)
+        glDeleteTextures(1, &S.shadow_tex);
+    S.shadow_fbo = S.shadow_tex = 0;
+}
+
+void rp_shadow(const float dir[3], const float center[3], float extent) {
+    if (!dir || !center || extent <= 0.0f) {
+        S.shadow_on = false;
+        return;
+    }
+    /* light travels dir; the shadow camera sits opposite, looks along
+     * dir through center, ortho box side 2*extent (look_at fallback
+     * rule handles straight-down lights: pick z-up then) */
+    ame_v3 d = ame_v3_norm(ame_v3_(dir[0], dir[1], dir[2]));
+    ame_v3 c = ame_v3_(center[0], center[1], center[2]);
+    ame_v3 up = fabsf(d.y) > 0.99f ? ame_v3_(0, 0, 1) : ame_v3_(0, 1, 0);
+    ame_v3 eye = ame_v3_sub(c, ame_v3_scale(d, extent));
+    ame_m4 view = ame_m4_look_at(eye, c, up);
+    ame_m4 proj = ame_m4_ortho(-extent, extent, -extent, extent,
+                               0.05f * extent, 3.0f * extent);
+    S.svp = ame_m4_mul(proj, view);
+    S.sh_dir[0] = d.x; S.sh_dir[1] = d.y; S.sh_dir[2] = d.z;
+    S.sh_center[0] = c.x; S.sh_center[1] = c.y; S.sh_center[2] = c.z;
+    S.sh_extent = extent;
+    S.shadow_on = true;
+}
+
+void rp_shadow_off(void) { S.shadow_on = false; }
+
 /* --- frame ------------------------------------------------------------------- */
 
 void rp_begin_frame(void) {
@@ -706,19 +871,55 @@ void rp_end_frame(void) {
     glUniform1i(S.u_tex, 0);
     glActiveTexture(GL_TEXTURE0);
 
-    /* draw ranges grouped by texture (pages sorted by id ascending) */
-    int i = 0;
-    while (i < n) {
-        int tex = S.batch.q_tex[order[i]];
-        int j = i;
-        while (j < n && S.batch.q_tex[order[j]] == tex)
-            j++;
-        glBindTexture(GL_TEXTURE_2D, S.tex[tex]);
-        glDrawElements(GL_TRIANGLES, (j - i) * 6, GL_UNSIGNED_INT,
-                       (void *)(sizeof(uint32_t) * 6 * (size_t)i));
-        S.draws++;
-        i = j;
+#define RP_DRAW_RANGES()                                                   \
+    do {                                                                   \
+        int i = 0;                                                         \
+        while (i < n) {                                                    \
+            int tex = S.batch.q_tex[order[i]];                             \
+            int j = i;                                                     \
+            while (j < n && S.batch.q_tex[order[j]] == tex)                \
+                j++;                                                       \
+            glBindTexture(GL_TEXTURE_2D, S.tex[tex]);                      \
+            glDrawElements(GL_TRIANGLES, (j - i) * 6, GL_UNSIGNED_INT,     \
+                           (void *)(sizeof(uint32_t) * 6 * (size_t)i));    \
+            S.draws++;                                                     \
+            i = j;                                                         \
+        }                                                                  \
+    } while (0)
+
+    if (S.shadow_on && n > 0 && shadow_target_ensure()) {
+        /* DEPTH PASS: the same uploaded batch through the light VP;
+         * unlit (UI) vertices collapse outside clip = never cast */
+        GLint prev_fb;
+        glGetIntegerv(GL_FRAMEBUFFER_BINDING, &prev_fb);
+        glBindFramebuffer(GL_FRAMEBUFFER, S.shadow_fbo);
+        glViewport(0, 0, S.shadow_res, S.shadow_res);
+        glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
+        glDisable(GL_BLEND);
+        glEnable(GL_DEPTH_TEST);
+        glClear(GL_DEPTH_BUFFER_BIT);
+        glUniformMatrix4fv(S.u_vp, 1, GL_FALSE, S.svp.m);
+        glUniform1f(S.u_shadow_pass, 1.0f);
+        RP_DRAW_RANGES();
+        glUniform1f(S.u_shadow_pass, 0.0f);
+        glUniformMatrix4fv(S.u_vp, 1, GL_FALSE, S.cam.vp.m);
+        glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+        if (S.desc.blend)
+            glEnable(GL_BLEND);
+        if (!S.desc.depth_test)
+            glDisable(GL_DEPTH_TEST);
+        glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)prev_fb);
+        glViewport(0, 0, S.vw, S.vh);
+        /* main pass: shadow term armed (unit 1 bound for life at init) */
+        glUniform1f(S.u_shadow_amt, 1.0f);
+        glUniformMatrix4fv(S.u_svp, 1, GL_FALSE, S.svp.m);
+        glUniform1f(S.u_stexel, 1.0f / (float)S.shadow_res);
+    } else {
+        glUniform1f(S.u_shadow_amt, 0.0f);
     }
+    /* draw ranges grouped by texture (pages sorted by id ascending) */
+    RP_DRAW_RANGES();
+#undef RP_DRAW_RANGES
     }
     S.quads = n;
     if (S.desc.post) {

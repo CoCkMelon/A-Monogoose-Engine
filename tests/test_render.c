@@ -276,6 +276,73 @@ int main(void) {
         rp_lighting_off();
     }
 
+    UT_CASE("Stage 2 shadow: caster darkens ground; outside bit-exact");
+    {
+        float ldir[3] = { 0, -1, 0 }, lcol[3] = { 1, 1, 1 };
+        float lamb[3] = { 0.15f, 0.15f, 0.15f };
+        rp_lighting(ldir, lcol, lamb);
+        float gtint[4] = { 0.55f, 0.55f, 0.55f, 1 };
+        float g0[3] = { -4, 0, -4 }, g1[3] = { 4, 0, -4 };
+        float g2[3] = { 4, 0, 4 }, g3[3] = { -4, 0, 4 };
+        float cs[4][3] = { { 0.0f, 1.2f, -0.1f }, { 1.0f, 1.2f, -0.1f },
+                           { 1.0f, 1.2f, 0.9f }, { 0.0f, 1.2f, 0.9f } };
+        float ctint[4] = { 0.8f, 0.7f, 0.3f, 1 };
+        /* sample under the caster (shadowed) and at a far corner (not) */
+        float ux, uy, fx, fy;
+        proj3(&cam3, ame_v3_(0.5f, 0.0f, 0.4f), &ux, &uy);
+        proj3(&cam3, ame_v3_(-3.2f, 0.0f, -3.2f), &fx, &fy);
+        int iu = (int)ux, iuy = (int)uy, ifx = (int)fx, ify = (int)fy;
+#define RP_LUM(X, Y)                                                          \
+    ((long)px[((Y) * W + (X)) * 4] + px[((Y) * W + (X)) * 4 + 1] +            \
+        px[((Y) * W + (X)) * 4 + 2])
+        rp_begin_frame();
+        rp_set_lit(1);
+        rp_set_normal(0, 1, 0);
+        rp_push_quad(rp_white_texture(), g0, g1, g2, g3, 0, 0, 1, 1, gtint, 0);
+        rp_push_quad(rp_white_texture(), cs[0], cs[1], cs[2], cs[3],
+                     0, 0, 1, 1, ctint, 10);
+        rp_set_lit(0);
+        rp_end_frame();
+        rp_read_pixels(px, W, H);
+        long a_under = RP_LUM(iu, iuy), a_far = RP_LUM(ifx, ify);
+
+        /* same scene WITH the shadow pass (light travels straight down) */
+        rp_shadow(ldir, (float[3]){ 0, 0, 0 }, 5.0f);
+        rp_begin_frame();
+        rp_set_lit(1);
+        rp_set_normal(0, 1, 0);
+        rp_push_quad(rp_white_texture(), g0, g1, g2, g3, 0, 0, 1, 1, gtint, 0);
+        rp_push_quad(rp_white_texture(), cs[0], cs[1], cs[2], cs[3],
+                     0, 0, 1, 1, ctint, 10);
+        rp_set_lit(0);
+        rp_end_frame();
+        uint32_t hs1 = hash_frame();
+        rp_read_pixels(px, W, H);
+        long b_under = RP_LUM(iu, iuy), b_far = RP_LUM(ifx, ify);
+        rp_begin_frame();
+        rp_set_lit(1);
+        rp_set_normal(0, 1, 0);
+        rp_push_quad(rp_white_texture(), g0, g1, g2, g3, 0, 0, 1, 1, gtint, 0);
+        rp_push_quad(rp_white_texture(), cs[0], cs[1], cs[2], cs[3],
+                     0, 0, 1, 1, ctint, 10);
+        rp_set_lit(0);
+        rp_end_frame();
+        uint32_t hs2 = hash_frame();
+#undef RP_LUM
+        UT_ASSERTF(b_under < a_under - 40L,
+                   "shadowed ground must darken (%ld -> %ld)", a_under,
+                   b_under);
+        UT_ASSERTF(b_far == a_far,
+                   "outside the shadow must stay bit-exact (%ld vs %ld)",
+                   a_far, b_far);
+        UT_ASSERT(hs1 == hs2); /* deterministic shadow render */
+        printf("    shadow: ground %ld -> %ld, outside %ld == %ld,"
+               " hash 0x%08x\n",
+               a_under, b_under, a_far, b_far, hs1);
+        rp_shadow_off();
+        rp_lighting_off();
+    }
+
     UT_CASE("Stage 2 post: offscreen round trip is pixel-exact");
     {
         rp_shutdown();

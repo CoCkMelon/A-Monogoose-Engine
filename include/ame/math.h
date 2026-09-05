@@ -232,6 +232,22 @@ static inline ame_m4 ame_m4_ortho_px(float w, float h, float zn, float zf) {
     return r;
 }
 
+/* Symmetric-box orthographic projection, gl-matrix/cglm convention
+ * (column-major, NDC [-1,1], camera looks down -z). The shadow pass
+ * builds its light view-projection with this; cglm oracle-tested
+ * against glm_ortho. */
+static inline ame_m4 ame_m4_ortho(float l, float r, float b, float t,
+                                  float zn, float zf) {
+    ame_m4 o = ame_m4_identity();
+    o.m[0]  =  2.0f / (r - l);
+    o.m[5]  =  2.0f / (t - b);
+    o.m[10] = -2.0f / (zf - zn);
+    o.m[12] = -(r + l) / (r - l);
+    o.m[13] = -(t + b) / (t - b);
+    o.m[14] = -(zf + zn) / (zf - zn);
+    return o;
+}
+
 /* General 4x4 inverse (adjugate method, gl-matrix formula). Column-major.
  * Returns identity when singular. Unit-tested: M * inv(M) == I. */
 static inline ame_m4 ame_m4_inverse(ame_m4 m) {

@@ -124,6 +124,19 @@ int rp_push_mesh(int tex, const ame_mesh_vert *verts, int vert_count,
                  const float *xform_or_null, const float tint[4],
                  float layer);
 
+/* --- Stage 2: directional shadow map (the second pass) ------------------
+ * rp_shadow() enables a shadow for THIS frame: the already-pushed batch
+ * is drawn once more, depth-only, through an ortho light camera (dir =
+ * the direction the light TRAVELS - same convention as rp_lighting;
+ * ortho box side 2*extent centered at center). CASTERS are the lit
+ * geometry (rp_set_lit); unlit UI/text never casts and never receives.
+ * The main pass removes only the DIFFUSE direct term inside shadow
+ * (3x3 PCF, slope-scaled bias); ambient/point light stay. With shadows
+ * off - or on unlit pixels - output is BIT-IDENTICAL to the one-pass
+ * path (the shader subtracts v_diff*(1-shadow), i.e. zero). */
+void rp_shadow(const float dir[3], const float center[3], float extent);
+void rp_shadow_off(void);
+
 void rp_post_tint(float r, float g, float b);
 void rp_post_vignette(float strength); /* 0 = off .. ~0.5 strong */
 

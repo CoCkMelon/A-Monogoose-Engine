@@ -179,6 +179,11 @@ int app_init(void) {
     float pcol[3] = { 0.22f, 0.20f, 0.16f };
     rp_point_light(ppos, pcol, 6.5f);
 
+    /* Stage 2 shadows: the key light casts the cards onto the table.
+     * Same travel direction as ldir; ortho box centered on the table,
+     * generous enough that the whole board resolves in the 2048 map. */
+    rp_shadow(ldir, (float[3]){ 0.0f, 0.0f, 0.0f }, 5.0f);
+
     if (text_init(true) >= 0) {
         char buf[16];
         pair_layout_count = (GRID_COLS * GRID_ROWS) / 2;

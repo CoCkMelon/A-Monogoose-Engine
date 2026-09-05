@@ -61,11 +61,22 @@ def Mat4.persp (t a zn zf : Rat) : Mat4 :=
    ⟨0, 0, (2 * zf * zn) / (zn + -zf), 0⟩⟩
 
 /-- ame_m4_ortho_px (x right, y DOWN, 1 unit = 1 px at zoom 1). -/
+
 def Mat4.orthoPx (w h zn zf : Rat) : Mat4 :=
   ⟨⟨2 / w, 0, 0, 0⟩,
    ⟨0, -2 / h, 0, 0⟩,
    ⟨0, 0, 1 / (zf + -zn), 0⟩,
    ⟨-1, 1, -zn / (zf + -zn), 1⟩⟩
+/-- Symmetric-box orthographic projection, gl-matrix/cglm convention
+    (NDC [-1,1], camera looks down -z). ame_m4_ortho in include/ame/math.h
+    is the C twin; the shadow pass builds its light view-projection with
+    it (Stage 2). -/
+def Mat4.ortho (l r b t zn zf : Rat) : Mat4 :=
+  ⟨⟨2/(r-l), 0, 0, 0⟩,
+   ⟨0, 2/(t-b), 0, 0⟩,
+   ⟨0, 0, -2/(zf-zn), 0⟩,
+   ⟨-(r+l)/(r-l), -(t+b)/(t-b), -(zf+zn)/(zf-zn), 1⟩⟩
+
 
 /-- ame_m4_look_at. The C version normalizes `f = norm(look-eye)`,
     `s = norm(cross f up)`, `u = cross s f` internally; the model takes the

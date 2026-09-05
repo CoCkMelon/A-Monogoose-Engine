@@ -279,4 +279,62 @@ theorem shade_backface {n dir : V3} {amb col : Rat}
     rwa [Rat.neg_zero] at hn
   rw [shadeTerm, max0_eq_zero hle, Rat.mul_zero, Rat.add_zero]
 
+
+/-! ## Stage 2: shadow-map coordinates (the second pass)
+
+The shadow pass renders the lit batch through a light view-projection
+`svp = ortho(-e,e,-e,e,zn,zf) * lookAt(...)` and the main-pass shader
+maps clip space into depth-map space:
+`sc = (clip.xyz / clip.w) * 0.5 + 0.5` (u_svp in src/render.c).
+The theorems below pin the C code's contracts with closed-form Rat
+computations (pure Lean core: `decide`, no mathlib):
+
+1. shadow_term_off: amt = 0 (shadows off) leaves the color EXACTLY
+   unchanged - the rational core of the byte-identical contract.
+2. ndc_map endpoints: the mapping sends the NDC box faces exactly onto
+   the map borders (no gap, no wrap).
+3. shadow_coord_test_rig: for the ACTUAL rig of tests/test_render.c's
+   shadow case (light at (0,5,0) looking straight down, ortho +-5,
+   zn=1/4, zf=15), the ground sample (0.5, 0, 0.4) lands strictly
+   inside the map (the guard passes) - the same point the C test
+   samples through proj3. -/
+
+/-- Light-space to depth-map coordinates: the FS's sc. -/
+def shadowCoord (svp : Mat4) (p : V3) : Rat × Rat × Rat :=
+  let c := svp.mulv ⟨p.x, p.y, p.z, 1⟩
+  ⟨c.x/c.w * 2/4 + 2/4, c.y/c.w * 2/4 + 2/4, c.z/c.w * 2/4 + 2/4⟩
+
+/-- The final color line: `c.rgb - v_diff * (1 - sh) * u_shadow_amt`. -/
+def shadowTerm (c diff sh amt : Rat) : Rat := c - diff * (1 - sh) * amt
+
+/-- amt = 0 (shadows off) leaves the color EXACTLY unchanged. -/
+theorem shadow_term_off (c diff sh : Rat) : shadowTerm c diff sh 0 = c := by
+  rw [shadowTerm, Rat.mul_zero, Rat.sub_eq_add_neg, Rat.neg_zero,
+      Rat.add_zero]
+
+/-- The NDC -> map mapping touches the borders exactly. -/
+theorem ndc_map_lo : (-1 : Rat) * 2/4 + 2/4 = 0 := by native_decide
+theorem ndc_map_hi : ( 1 : Rat) * 2/4 + 2/4 = 1 := by native_decide
+
+/-- The test rig's light view-projection (mirror of rp_shadow's
+    construction for the straight-down case: up := +z, eye 5 above). -/
+def testRigVp : Mat4 :=
+  (Mat4.ortho (-5) 5 (-5) 5 (1/4) 15).mul
+    (Mat4.lookAt ⟨0, -1, 0⟩ ⟨-1, 0, 0⟩ ⟨0, 0, 1⟩ ⟨0, 5, 0⟩)
+
+/-- The C test's ground sample lands strictly inside the depth map:
+    every guard term passes, no texel is skipped or sampled outside. -/
+theorem shadow_coord_test_rig :
+    let s := shadowCoord testRigVp ⟨5/10, 0, 4/10⟩
+    0 < s.1 ∧ s.1 < 1 ∧ 0 < s.2.1 ∧ s.2.1 < 1 ∧ 0 < s.2.2 ∧ s.2.2 < 1 := by
+  native_decide
+
+/-- And the shadowed occlusion ORDER: the caster (0.5, 1.2, 0.4) has a
+    strictly SMALLER map z than the ground below it - exactly the
+    `LEQUAL fails => shadowed` comparison the FS performs by hand. -/
+theorem shadow_caster_nearer_test_rig :
+    (shadowCoord testRigVp ⟨5/10, 12/10, 4/10⟩).2.2
+      < (shadowCoord testRigVp ⟨5/10, 0, 4/10⟩).2.2 := by
+  native_decide
+
 end Ame.Shader

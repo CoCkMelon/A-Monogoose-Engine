@@ -591,3 +591,63 @@ reinstall (see ci.yml apt list) when a new session cannot build.
 NOTES: test count is now 17 (snap). ci.yml has a 5th job (tsan).
 坑: python-generated C patches double macro backslashes; git stash +
 parallel commands race (ASan configure once saw stashed sources).
+
+SESSION 12 - STAGE 2 SHADOW MAPS (the named exit item after the
+external-review fixes). One renderer, one shader, SECOND PASS of the
+same uploaded batch - no second renderer (render.txt honored).
+
+API (include/ame/render.h):
+- rp_shadow(dir, center, extent): arm per frame (or once - state
+  persists like rp_lighting). dir = direction the light TRAVELS;
+  light ortho box side 2*extent centered at center; look_at fallback
+  picks z-up for straight-down lights. rp_shadow_off() disarms.
+- Casters = lit geometry (rp_set_lit stamps); unlit UI/text never
+  casts (VS collapses a_lit<0.5 verts in the depth pass) and never
+  receives (shadow term multiplied into the lit term only).
+- 2048x2048 DEPTH_COMPONENT24 map, 3x3 PCF, slope-scaled bias
+  (mix 0.0025..0.0005 by ndl). Shadow removes ONLY the diffuse direct
+  term (subtractive); ambient + point light stay.
+
+BIT-EXACTNESS (the standing contract): the FS line is
+  c.rgb = c.rgb - v_diff * (1 - sh) * u_shadow_amt
+with amt = 0 for non-shadow frames -> subtracts exactly 0.0 -> output
+byte-identical to the one-pass path (test_render: outside-shadow
+pixels byte-equal; existing goldens unchanged; quiet golden identical
+to the c89b3db build). Lean (Ame/Shader.lean): shadow_term_off proves
+amt=0 == unchanged; shadow_coord_test_rig / caster_nearer prove the
+test rig's map coverage + occlusion order by kernel computation.
+Mat4.ortho added to Ame/M4.lean (twin of the cglm-oracle-tested
+ame_m4_ortho in math.h).
+
+THE WAR STORY (two llvmpipe traps, both probed standalone in /tmp):
+1. SAMPLER2DSHADOW POISONS FRAGMENTS on llvmpipe when the bound depth
+   texture is invalid - AND we could not even get a uniform-gated
+   branch to fire reliably on the engine program (branchless rewrite
+   sidestepped it). FIX: plain sampler2D depth reads + manual
+   comparison in the shader (portable everywhere), branchless amt
+   multiply, shadow target created EAGERLY at rp_init (unit 1 always
+   holds a complete depth texture).
+2. THE DEEP ONE: shadow_target_ensure originally bound the depth
+   texture on the ACTIVE UNIT (unit 0!) - the sprite-sheet unit. From
+   that moment EVERY lit draw rendered black (unlit frames looked
+   fine at first glance; a 483->483 test chase through scanlines,
+   uniform readbacks, glGetError, a standalone EGL probe and 6
+   bisect steps found it). RULE now in the code comment: shadow
+   texture work happens on UNIT 1 ONLY; ensure() saves/restores FBO
+   + active unit.
+
+GAME: memory_game arms rp_shadow(ldir, table center, 5.0) at init.
+Quiet golden (frame 5) BYTE-IDENTICAL (face-down flat cards hide
+their own shadows). Autoplay-500 golden RE-BAKED deliberately
+(shots/stage2_particles.png: standing card casts a thin dark band,
+~279 px delta -120); shots/stage2_shadows.png added (frame 120).
+
+VERIFY (GCC 14): ctest 17/17 normal + ASan/UBSan + examples-off;
+asyncinput variant builds; TSan zero reports over full autoplay game
+(screenshot byte-identical to the new golden); fresh default-config
+build -Werror clean; lean lake build green.
+
+REMAINING for Stage 2 exit: MATERIALS. Then opus decode (parity).
+Lean note: pure core only (no mathlib): no linarith/norm_num in
+proofs; closed numerics via native_decide; Rat lemma names verified
+via #check probes.

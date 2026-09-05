@@ -61,6 +61,17 @@ int main(void) {
             }
 
             ame_m4 ab = ame_m4_mul(a, b);
+            {   /* ortho vs cglm (gl-matrix convention, NDC [-1,1]) */
+                ame_m4 o = ame_m4_ortho(-2.5f, 3.5f, -1.5f, 2.5f, 0.1f, 10.0f);
+                mat4 co;
+                glm_ortho(-2.5f, 3.5f, -1.5f, 2.5f, 0.1f, 10.0f, co);
+                UT_ASSERTF(mat4_close(o, co, 1e-6f), "m4_ortho mismatch iter %d", iter);
+                ame_m4 mul_o = ame_m4_mul(o, a);
+                mat4 cmul_o;
+                glm_mat4_mul(co, ca, cmul_o);
+                UT_ASSERTF(mat4_close(mul_o, cmul_o, 1e-4f),
+                           "m4_ortho*mul mismatch iter %d", iter);
+            }
             glm_mat4_mul(ca, cb, cdest);
             UT_ASSERTF(mat4_close(ab, cdest, 1e-4f),
                        "m4_mul mismatch iter %d", iter);
