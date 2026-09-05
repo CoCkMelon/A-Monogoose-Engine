@@ -1,6 +1,14 @@
 /* dialogue: the tight YAML format (dialogue.txt) - runtime parse,
  * walker semantics (parity with A-Monogoose's runtime), and the
  * baked-vs-runtime determinism rule. Requires libfyaml. */
+/* libfyaml >= 1.0 inlines posix_memalign() in libfyaml-align.h; strict
+ * -std=c2x hides that POSIX declaration on glibc (same class as the
+ * asyncinput clock_gettime fix). Request the declarations BEFORE any
+ * libc header is pulled in. */
+#if !defined(_DEFAULT_SOURCE)
+#define _DEFAULT_SOURCE 1
+#endif
+
 #include <stdio.h>
 #include <string.h>
 

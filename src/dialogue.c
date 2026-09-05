@@ -1,6 +1,14 @@
 /* ame-next — dialogue: libfyaml parser for the tight format
  * (docs/dialogue.txt) + the runtime walker. Runtime path DEFAULT;
  * tools/dlg2c.c bakes the same YAML to C (determinism-tested). */
+/* libfyaml >= 1.0 inlines posix_memalign() in libfyaml-align.h; strict
+ * -std=c2x hides that POSIX declaration on glibc (same class as the
+ * asyncinput clock_gettime fix). Request the declarations BEFORE any
+ * libc header is pulled in. */
+#if !defined(_DEFAULT_SOURCE)
+#define _DEFAULT_SOURCE 1
+#endif
+
 #include "ame/dialogue.h"
 
 #include <stdarg.h>

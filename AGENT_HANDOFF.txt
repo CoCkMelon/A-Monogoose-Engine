@@ -768,3 +768,15 @@ example_parent_child, prefab_smoke, flecs_scene, flecs_script_scene,
 multithreaded_scripts, obj_loading, physics_test, rhythm_game,
 kenney_pixel-platformer, unitylike_{minimal,audio_example,box2d_car,
 pixel_platformer,platformer_ecs,scene_hierarchy_test}.
+
+SESSION 14b - USER BUILD FIX: libfyaml >= 1.0 under strict -std=c2x.
+Their gcc hit "implicit declaration of posix_memalign" INSIDE
+/usr/include/libfyaml/libfyaml-align.h (fy_align_alloc is static
+inline there). Sandbox has libfyaml 0.8 (no such header) - could not
+reproduce locally; fix is the standard idiom anyway. Added the
+_DEFAULT_SOURCE request guard BEFORE all includes (in-source, we own
+the files - CMake define was for vendored asyncinput only) in:
+src/dialogue.c, tools/dlg2c.c, tests/test_dialogue.c. Fresh default
+build -Werror clean, 18/18. 坑: sandbox libfyaml 0.8 vs user >= 1.0
+- optional-dep code must compile under BOTH; strict-c2x POSIX hiding
+ now fixed at THREE sites total (asyncinput, dialogue trio).
