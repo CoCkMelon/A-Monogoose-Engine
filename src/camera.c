@@ -1,81 +1,140 @@
 #include "ame/camera.h"
-#include <string.h>
-#include <math.h>
 
-static void ortho_top_left(float l, float r, float t, float b, float n, float f, float* m)
+static void camera_rebuild(ame_camera *c)
 {
-    // Column-major
-    memset(m, 0, sizeof(float)*16);
-    m[0] = 2.0f/(r-l);
-    m[5] = 2.0f/(t-b);
-    m[10] = -2.0f/(f-n);
-    m[12] = -(r+l)/(r-l);
-    m[13] = -(t+b)/(t-b);
-    m[14] = -(f+n)/(f-n);
-    m[15] = 1.0f;
+    if (c->projection_mode == AME_CAM_PERSP) {
+        float aspect = c->aspect;
+        if (aspect < 0.05f) aspect = 0.05f;
+        c->projection = m4_perspective(c->fov_y, aspect, c->near_z, c->far_z);
+        c->view = m4_look_at(c->eye, c->target, c->up);
+    } else {
+        c->projection = m4_ortho(c->left, c->right, c->bottom, c->top,
+                                 c->near_z, c->far_z);
+        c->view = m4_look_down_z(c->eye_z);
+    }
+    c->view_projection = m4_mul(c->projection, c->view);
 }
 
-void ame_camera_init(AmeCamera* cam)
+ame_camera *ame_camera_reset(ame_camera *c)
 {
-    if (!cam) return;
-    cam->x = 0.0f;
-    cam->y = 0.0f;
-    cam->zoom = 1.0f;
-    cam->rotation = 0.0f;
-    cam->target_x = 0.0f;
-    cam->target_y = 0.0f;
-    cam->viewport_w = 0;
-    cam->viewport_h = 0;
+    if (!c) return c;
+    c->left = -1.0f;
+    c->right = 1.0f;
+    c->bottom = -1.0f;
+    c->top = 1.0f;
+    c->near_z = 0.1f;
+    c->far_z = 40.0f;
+    c->eye_z = 12.0f;
+    c->projection_mode = AME_CAM_ORTHO;
+    c->fov_y = 1.04719755f; /* 60 deg */
+    c->aspect = 1.0f;
+    c->eye = v3(0, 0, 12);
+    c->target = v3(0, 0, 0);
+    c->up = v3(0, 1, 0);
+    camera_rebuild(c);
+    return c;
 }
 
-void ame_camera_set_target(AmeCamera* cam, float x, float y)
+ame_camera *ame_camera_look_z(ame_camera *c, float eye_z)
 {
-    if (!cam) return;
-    cam->target_x = x;
-    cam->target_y = y;
+    if (!c) return c;
+    c->eye_z = eye_z;
+    c->eye = v3(c->eye.x, c->eye.y, eye_z);
+    camera_rebuild(c);
+    return c;
 }
 
-void ame_camera_set_viewport(AmeCamera* cam, int w, int h)
+ame_camera *ame_camera_ortho(ame_camera *c,
+                             float left, float right,
+                             float bottom, float top,
+                             float near_z, float far_z)
 {
-    if (!cam) return;
-    cam->viewport_w = w;
-    cam->viewport_h = h;
+    if (!c) return c;
+    c->projection_mode = AME_CAM_ORTHO;
+    c->left = left;
+    c->right = right;
+    c->bottom = bottom;
+    c->top = top;
+    c->near_z = near_z;
+    c->far_z = far_z;
+    camera_rebuild(c);
+    return c;
 }
 
-void ame_camera_update(AmeCamera* cam, float dt)
+ame_camera *ame_camera_fit_height(ame_camera *c, float aspect, float half_height)
 {
-    if (!cam) return;
-    int vw = cam->viewport_w > 0 ? cam->viewport_w : 0;
-    int vh = cam->viewport_h > 0 ? cam->viewport_h : 0;
-    float half_w = (vw > 0 ? (float)vw : 0.0f) / (cam->zoom > 0 ? cam->zoom : 1.0f) * 0.5f;
-    float half_h = (vh > 0 ? (float)vh : 0.0f) / (cam->zoom > 0 ? cam->zoom : 1.0f) * 0.5f;
-
-    // Desired top-left so that target appears centered
-    float desired_x = cam->target_x - half_w;
-    float desired_y = cam->target_y - half_h;
-
-    // Critically damped spring towards desired top-left (simple smoothing)
-    const float stiffness = 10.0f; // higher = snappier
-    float dx = desired_x - cam->x;
-    float dy = desired_y - cam->y;
-    cam->x += dx * fminf(stiffness * dt, 1.0f);
-    cam->y += dy * fminf(stiffness * dt, 1.0f);
+    if (!c) return c;
+    if (aspect < 0.05f) aspect = 0.05f;
+    if (half_height < 0.05f) half_height = 0.05f;
+    c->aspect = aspect;
+    c->bottom = -half_height;
+    c->top = half_height;
+    c->left = -half_height * aspect;
+    c->right = half_height * aspect;
+    camera_rebuild(c);
+    return c;
 }
 
-void ame_camera_make_pixel_perfect(float cam_x, float cam_y, int win_w, int win_h, int zoom, float* m_out)
+ame_camera *ame_camera_perspective(ame_camera *c, float fov_y_degrees,
+                                   float aspect, float near_z, float far_z)
 {
-    if (zoom < 1) zoom = 1;
-    // Interpret cam_x, cam_y as TOP-LEFT in world pixels (consistent with ame_camera_update)
-    // Snap top-left to integer pixels
-    float left = floorf(cam_x + 0.5f);
-    float top  = floorf(cam_y + 0.5f);
+    if (!c) return c;
+    c->projection_mode = AME_CAM_PERSP;
+    if (fov_y_degrees < 1.0f) fov_y_degrees = 1.0f;
+    if (fov_y_degrees > 179.0f) fov_y_degrees = 179.0f;
+    c->fov_y = fov_y_degrees * 0.01745329252f;
+    c->aspect = (aspect < 0.05f) ? 0.05f : aspect;
+    c->near_z = near_z;
+    c->far_z = far_z;
+    camera_rebuild(c);
+    return c;
+}
 
-    float view_w = (float)win_w / (float)zoom;
-    float view_h = (float)win_h / (float)zoom;
+ame_camera *ame_camera_look_at(ame_camera *c, vec3 eye, vec3 target, vec3 up)
+{
+    if (!c) return c;
+    c->eye = eye;
+    c->target = target;
+    c->up = up;
+    c->eye_z = eye.z;
+    camera_rebuild(c);
+    return c;
+}
 
-    float right  = left + view_w;
-    float bottom = top  + view_h;
+void ame_camera_bounds(const ame_camera *c,
+                       float *left, float *right,
+                       float *bottom, float *top)
+{
+    if (!c) return;
+    if (left) *left = c->left;
+    if (right) *right = c->right;
+    if (bottom) *bottom = c->bottom;
+    if (top) *top = c->top;
+}
 
-    // Top-left origin orthographic matrix
-    ortho_top_left(left, right, top, bottom, -1.0f, 1.0f, m_out);
+const float *ame_camera_vp(const ame_camera *c)
+{
+    return c ? c->view_projection.m : NULL;
+}
+
+void ame_camera_center_xy(ame_camera *c, float cx, float cy)
+{
+    if (!c) return;
+    if (c->projection_mode == AME_CAM_PERSP) {
+        float dz = c->target.z - c->eye.z;
+        c->eye.x = cx;
+        c->eye.y = cy;
+        c->target.x = cx;
+        c->target.y = cy;
+        c->target.z = c->eye.z + dz;
+        camera_rebuild(c);
+        return;
+    }
+    float hw = (c->right - c->left) * 0.5f;
+    float hh = (c->top - c->bottom) * 0.5f;
+    c->left = cx - hw;
+    c->right = cx + hw;
+    c->bottom = cy - hh;
+    c->top = cy + hh;
+    camera_rebuild(c);
 }

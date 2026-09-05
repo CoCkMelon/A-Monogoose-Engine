@@ -1,0 +1,10 @@
+name = "Ame"
+version = "0.1.0"
+defaultTargets = ["Ame"]
+
+[[lean_lib]]
+name = "Ame"
+
+[[lean_exe]]
+name = "ame-gen"
+root = "AmeGen"

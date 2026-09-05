@@ -1,37 +1,14 @@
 #ifndef AME_OBJ_H
 #define AME_OBJ_H
 
+/*
+ * Wavefront OBJ → CPU mesh. No Flecs, no Box2D colliders.
+ * Supports v / vt / vn and triangle/quad faces (fan-triangulated).
+ */
 
-#include <flecs.h>
-#include <stdint.h>
+#include "ame/mesh.h"
 
-// Simple OBJ import into ECS.
-// - Creates an entity per OBJ object (o name)
-// - For names starting with CircleCollider/BoxCollider it sets Collider2D component data.
-// - Other meshes get a "Mesh" component with interleaved arrays owned by the engine.
-// Note: EdgeCollider/ChainCollider/MeshCollider are parsed but currently only logged (TODO).
+int ame_obj_parse(const char *text, ame_mesh *out);
+int ame_obj_load_file(const char *path, ame_mesh *out);
 
-// Forward declare physics world to avoid requiring physics.h here
-struct AmePhysicsWorld;
-
-typedef struct AmeObjImportConfig {
-    ecs_entity_t parent;    // optional parent entity (0 for none)
-    int create_colliders;   // when 1, infer colliders from prefixed object names
-    struct AmePhysicsWorld* physics_world; // optional: if provided, create static Box2D bodies for imported colliders
-} AmeObjImportConfig;
-
-// Return value for import. root will be a new entity grouping imported children when no parent provided.
-// If parent provided, root == parent.
-
-typedef struct AmeObjImportResult {
-    ecs_entity_t root;
-    int objects_created;
-    int meshes_created;
-    int colliders_created;
-} AmeObjImportResult;
-
-AmeObjImportResult ame_obj_import_obj(ecs_world_t* w, const char* filepath, const AmeObjImportConfig* cfg);
-
-
-#endif // AME_OBJ_H
-
+#endif

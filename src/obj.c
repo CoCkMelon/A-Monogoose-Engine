@@ -1,219 +1,201 @@
 #include "ame/obj.h"
-#include "ame/collider2d_system.h"  // Use official MeshCol2D definition
+#include "ame/log.h"
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-// Mirror façade component PODs used in C++ facade registration
-typedef struct SpriteData { uint32_t tex; float u0,v0,u1,v1; float w,h; float r,g,b,a; int visible; int sorting_layer; int order_in_layer; float z; int dirty; } SpriteData;
-typedef struct MeshData { const float* pos; const float* uv; const float* col; size_t count; } MeshData;
-// Note: Col2D and MeshCol2D are now from ame/collider2d_system.h
-typedef struct AmeTransform2D AmeTransform2D; // forward already from physics.h
+typedef struct FArr {
+    float *d;
+    int n, cap;
+} FArr;
 
-// Utility: ensure component ids by name (C side, mirror of facade names)
-static ecs_entity_t ensure_comp(ecs_world_t* w, const char* name, int size, int align) {
-    ecs_entity_t id = ecs_lookup(w, name);
-    if (id) return id;
-    ecs_component_desc_t cdp = (ecs_component_desc_t){0};
-    ecs_entity_desc_t edp = {0}; edp.name = name;
-    cdp.entity = ecs_entity_init(w, &edp);
-    cdp.type.size = size;
-    cdp.type.alignment = align;
-    return ecs_component_init(w, &cdp);
+static int farr_push3(FArr *a, float x, float y, float z)
+{
+    if (a->n + 3 > a->cap) {
+        int nc = a->cap ? a->cap * 2 : 192;
+        while (nc < a->n + 3) nc *= 2;
+        float *nd = (float *)realloc(a->d, (size_t)nc * sizeof(float));
+        if (!nd) return 0;
+        a->d = nd;
+        a->cap = nc;
+    }
+    a->d[a->n++] = x;
+    a->d[a->n++] = y;
+    a->d[a->n++] = z;
+    return 1;
 }
 
-// Minimal dynamic array for floats
-typedef struct FArr { float* data; size_t count; size_t cap; } FArr;
-static void farr_push(FArr* a, float v){ if(a->count+1>a->cap){ size_t nc=a->cap? a->cap*2:256; a->data=(float*)realloc(a->data, nc*sizeof(float)); a->cap=nc;} a->data[a->count++]=v; }
-static void farr_free(FArr* a){ free(a->data); a->data=NULL; a->count=a->cap=0; }
-
-static int starts_with(const char* s, const char* p){ return strncmp(s,p,strlen(p))==0; }
-
-#ifndef AME_USE_TINYOBJLOADER
-AmeObjImportResult ame_obj_import_obj(ecs_world_t* w, const char* filepath, const AmeObjImportConfig* cfg) {
-    AmeObjImportResult res = {0};
-    if (!w || !filepath) return res;
-    FILE* f = fopen(filepath, "rb");
-    if (!f) { fprintf(stderr, "[OBJ] Failed to open %s\n", filepath); return res; }
-
-    ecs_entity_t comp_mesh = ensure_comp(w, "Mesh", sizeof(MeshData), _Alignof(MeshData));
-    ecs_entity_t comp_col = ensure_comp(w, "Collider2D", sizeof(Col2D), _Alignof(Col2D));
-    ecs_entity_t comp_tr  = ensure_comp(w, "AmeTransform2D", sizeof(AmeTransform2D), _Alignof(AmeTransform2D));
-    ecs_entity_t comp_meshcol = ensure_comp(w, "MeshCollider2D", sizeof(MeshCol2D), _Alignof(MeshCol2D));
-
-    // Root entity grouping import if no parent provided
-    if (cfg && cfg->parent) res.root = cfg->parent; else {
-        ecs_entity_desc_t ed = {0}; ed.name = filepath; res.root = ecs_entity_init(w, &ed);
+static int farr_push2(FArr *a, float x, float y)
+{
+    if (a->n + 2 > a->cap) {
+        int nc = a->cap ? a->cap * 2 : 128;
+        while (nc < a->n + 2) nc *= 2;
+        float *nd = (float *)realloc(a->d, (size_t)nc * sizeof(float));
+        if (!nd) return 0;
+        a->d = nd;
+        a->cap = nc;
     }
+    a->d[a->n++] = x;
+    a->d[a->n++] = y;
+    return 1;
+}
 
-    // Temporary arrays for current object mesh (2D XY, TRIANGLES assumed)
-    FArr positions = {0}, uvs = {0};
-    char obj_name[128] = {0};
+static int parse_corner(const char *tok, int nv, int nvt, int nvn,
+                        int *vi, int *ti, int *ni)
+{
+    *vi = *ti = *ni = 0;
+    int v = 0, t = 0, n = 0;
+    if (sscanf(tok, "%d/%d/%d", &v, &t, &n) == 3) {
+        /* v/t/n */
+    } else if (sscanf(tok, "%d//%d", &v, &n) == 2) {
+        t = 0;
+    } else if (sscanf(tok, "%d/%d", &v, &t) == 2) {
+        n = 0;
+    } else if (sscanf(tok, "%d", &v) == 1) {
+        t = n = 0;
+    } else {
+        return 0;
+    }
+    if (v < 0) v = nv + v + 1;
+    if (t < 0) t = nvt + t + 1;
+    if (n < 0) n = nvn + n + 1;
+    *vi = v;
+    *ti = t;
+    *ni = n;
+    return v >= 1 && v <= nv;
+}
+
+int ame_obj_parse(const char *text, ame_mesh *out)
+{
+    if (!text || !out) return 0;
+    ame_mesh_reset(out);
+    FArr pos = {0}, uv = {0}, nrm = {0};
+    ame_vertex *verts = NULL;
+    unsigned *idx = NULL;
+    int nvert = 0, nidx = 0, capv = 0, capi = 0;
+    int ok = 1;
+
+    const char *p = text;
     char line[512];
-
-    // Pooled vertex data (OBJ is 3D; we'll take x,y and ignore z unless collider parsing uses it)
-    FArr vx = {0}, vy = {0}, vz = {0}, vt_u = {0}, vt_v = {0};
-
-    while (fgets(line, sizeof(line), f)) {
-        if (line[0] == 'o' && line[1] == ' ') {
-            // Start of new object: flush previous if any
-            if (positions.count > 0) {
-                // Create entity for mesh
-                ecs_entity_desc_t ed = {0}; ed.name = obj_name[0]? obj_name : NULL;
-                ecs_entity_t e = ecs_entity_init(w, &ed);
-                // attach to root
-                ecs_add_pair(w, e, EcsChildOf, res.root);
-                // set transform default
-                AmeTransform2D tr = {0}; ecs_set_id(w, e, comp_tr, sizeof tr, &tr);
-                // collider inference
-                if (cfg && cfg->create_colliders && obj_name[0]) {
-                    if (starts_with(obj_name, "CircleCollider")) {
-                        Col2D c = {1, 1,1, 0.5f, 0, 1};
-                        // Estimate radius from bbox
-                        float minx=1e9f,maxx=-1e9f,miny=1e9f,maxy=-1e9f;
-                        for(size_t i=0;i<positions.count/2;i++){ float x=positions.data[i*2+0], y=positions.data[i*2+1]; if(x<minx)minx=x; if(x>maxx)maxx=x; if(y<miny)miny=y; if(y>maxy)maxy=y; }
-                        float rx=(maxx-minx)*0.5f, ry=(maxy-miny)*0.5f; c.radius = (rx+ry)*0.5f; c.dirty=1;
-                        ecs_set_id(w, e, comp_col, sizeof c, &c); res.colliders_created++;
-                        // Place collider entity at bbox center
-                        AmeTransform2D trc = {0}; trc.x = (minx+maxx)*0.5f; trc.y = (miny+maxy)*0.5f; trc.angle = 0.0f;
-                        ecs_set_id(w, e, comp_tr, sizeof trc, &trc);
-                        // Skip adding mesh; free accumulated arrays since not transferred to ECS
-                        farr_free(&positions); farr_free(&uvs);
-                    } else if (starts_with(obj_name, "BoxCollider")) {
-                        Col2D c = {0, 1,1, 0.0f, 0, 1};
-                        float minx=1e9f,maxx=-1e9f,miny=1e9f,maxy=-1e9f;
-                        for(size_t i=0;i<positions.count/2;i++){ float x=positions.data[i*2+0], y=positions.data[i*2+1]; if(x<minx)minx=x; if(x>maxx)maxx=x; if(y<miny)miny=y; if(y>maxy)maxy=y; }
-                        c.w = (maxx-minx); c.h = (maxy-miny); c.dirty=1;
-                        ecs_set_id(w, e, comp_col, sizeof c, &c); res.colliders_created++;
-                        // Place collider entity at bbox center
-                        AmeTransform2D trc = {0}; trc.x = (minx+maxx)*0.5f; trc.y = (miny+maxy)*0.5f; trc.angle = 0.0f;
-                        ecs_set_id(w, e, comp_tr, sizeof trc, &trc);
-                        // Skip adding mesh; free accumulated arrays since not transferred to ECS
-                        farr_free(&positions); farr_free(&uvs);
-                    } else if (starts_with(obj_name, "MeshCollider")) {
-                        // Create MeshCollider2D component using triangle list in positions
-                        MeshCol2D mc = { positions.data, positions.count, 0, 1 };
-                        ecs_set_id(w, e, comp_meshcol, sizeof mc, &mc); res.colliders_created++;
-                        // Place at bbox center for convenience
-                        float minx=1e9f,maxx=-1e9f,miny=1e9f,maxy=-1e9f;
-                        for(size_t i=0;i<positions.count/2;i++){ float x=positions.data[i*2+0], y=positions.data[i*2+1]; if(x<minx)minx=x; if(x>maxx)maxx=x; if(y<miny)miny=y; if(y>maxy)maxy=y; }
-                        AmeTransform2D trc = {0}; trc.x = (minx+maxx)*0.5f; trc.y = (miny+maxy)*0.5f; trc.angle = 0.0f;
-                        ecs_set_id(w, e, comp_tr, sizeof trc, &trc);
-                        fprintf(stdout, "[OBJ] MeshCollider %llu: bbox min=(%.2f,%.2f) max=(%.2f,%.2f) center=(%.2f,%.2f)\n", 
-                               (unsigned long long)e, minx, miny, maxx, maxy, trc.x, trc.y); fflush(stdout);
-                        // Do not free positions/uvs; pointers are referenced by component
+    while (*p && ok) {
+        int i = 0;
+        while (*p && *p != '\n' && i < 511) line[i++] = *p++;
+        line[i] = 0;
+        if (*p == '\n') p++;
+        char *s = line;
+        while (*s == ' ' || *s == '\t') s++;
+        if (s[0] == 0 || s[0] == '#' || s[0] == 'o' || s[0] == 'g' || s[0] == 's' ||
+            (s[0] == 'u' && s[1] == 's'))
+            continue;
+        if (s[0] == 'v' && s[1] == ' ') {
+            float x = 0, y = 0, z = 0;
+            if (sscanf(s + 2, "%f %f %f", &x, &y, &z) < 2) continue;
+            if (!farr_push3(&pos, x, y, z)) ok = 0;
+        } else if (s[0] == 'v' && s[1] == 't') {
+            float u = 0, v = 0;
+            sscanf(s + 2, "%f %f", &u, &v);
+            if (!farr_push2(&uv, u, v)) ok = 0;
+        } else if (s[0] == 'v' && s[1] == 'n') {
+            float x = 0, y = 0, z = 1;
+            sscanf(s + 2, "%f %f %f", &x, &y, &z);
+            if (!farr_push3(&nrm, x, y, z)) ok = 0;
+        } else if (s[0] == 'f' && s[1] == ' ') {
+            int nv = pos.n / 3, nvt = uv.n / 2, nvn = nrm.n / 3;
+            char tmp[512];
+            strncpy(tmp, s + 2, sizeof(tmp) - 1);
+            tmp[sizeof(tmp) - 1] = 0;
+            int cis[16][3];
+            int nc = 0;
+            char *tok = strtok(tmp, " \t\r");
+            while (tok && nc < 16) {
+                int vi, ti, ni;
+                if (parse_corner(tok, nv, nvt, nvn, &vi, &ti, &ni)) {
+                    cis[nc][0] = vi;
+                    cis[nc][1] = ti;
+                    cis[nc][2] = ni;
+                    nc++;
+                }
+                tok = strtok(NULL, " \t\r");
+            }
+            if (nc < 3) continue;
+            for (int k = 1; k < nc - 1; k++) {
+                int tri[3] = {0, k, k + 1};
+                for (int c = 0; c < 3; c++) {
+                    int vi = cis[tri[c]][0];
+                    int ti = cis[tri[c]][1];
+                    int ni = cis[tri[c]][2];
+                    ame_vertex vtx;
+                    memset(&vtx, 0, sizeof(vtx));
+                    vtx.px = pos.d[(vi - 1) * 3 + 0];
+                    vtx.py = pos.d[(vi - 1) * 3 + 1];
+                    vtx.pz = pos.d[(vi - 1) * 3 + 2];
+                    if (ni >= 1 && ni <= nvn) {
+                        vtx.nx = nrm.d[(ni - 1) * 3 + 0];
+                        vtx.ny = nrm.d[(ni - 1) * 3 + 1];
+                        vtx.nz = nrm.d[(ni - 1) * 3 + 2];
                     } else {
-                        // Regular mesh
-                        MeshData md = { positions.data, (uvs.count==positions.count? uvs.data: NULL), NULL, positions.count/2 };
-                        ecs_set_id(w, e, comp_mesh, sizeof md, &md); res.meshes_created++;
+                        vtx.nz = 1.0f;
                     }
-                } else {
-                    MeshData md = { positions.data, (uvs.count==positions.count? uvs.data: NULL), NULL, positions.count/2 };
-                    ecs_set_id(w, e, comp_mesh, sizeof md, &md); res.meshes_created++;
-                }
-                res.objects_created++;
-                // Reset accumulators but keep allocated arrays (they are now owned by ECS via pointers)
-                positions = (FArr){0}; uvs = (FArr){0};
-                obj_name[0]=0;
-            }
-            // Parse object name
-            char* nm = line + 2; while (*nm==' '||*nm=='\t') nm++;
-            size_t len = strcspn(nm, "\r\n"); if (len >= sizeof(obj_name)) len = sizeof(obj_name)-1; strncpy(obj_name, nm, len); obj_name[len] = 0;
-        } else if (line[0] == 'v' && line[1] == ' ') {
-            float x,y,z; if (sscanf(line, "v %f %f %f", &x,&y,&z) >= 2) { farr_push(&vx,x); farr_push(&vy,y); farr_push(&vz,z); }
-        } else if (line[0] == 'v' && line[1] == 't' && (line[2]==' '||line[2]=='\t')) {
-            float u,v; if (sscanf(line, "vt %f %f", &u,&v) >= 2) { farr_push(&vt_u,u); farr_push(&vt_v,v); }
-        } else if (line[0] == 'f' && (line[1]==' '||line[1]=='\t')) {
-            // Parse face as triangles (fan). Supports formats: v, v/vt, v//vn, v/vt/vn
-            int idx[64]; int tidx[64]; int n=0;
-            char* p = line+1; int vi=0, ti=0;
-            while (*p) {
-                while (*p==' '||*p=='\t') p++;
-                if (*p=='\n' || *p=='\r' || *p=='\0') break;
-                int v_i=0, t_i=0; int have_t=0;
-                // read vertex index
-                v_i = strtol(p, &p, 10);
-                if (*p=='/') { p++; if (*p!='/') { t_i = strtol(p, &p, 10); have_t=1; } while (*p && *p!=' ' && *p!='\t') p++; }
-                idx[n]=v_i; tidx[n]= have_t? t_i : 0; n++; if (n>=64) break;
-            }
-            if (n>=3) {
-                for (int i=1;i+1<n;i++) {
-                    int tri[3] = { idx[0], idx[i], idx[i+1] };
-                    int tri_t[3] = { tidx[0], tidx[i], tidx[i+1] };
-                    for (int k=0;k<3;k++) {
-                        int vi0 = tri[k]; if (vi0<0) vi0 = (int)vx.count + 1 + vi0; // negative indices
-                        int vt0 = tri_t[k]; if (vt0<0) vt0 = (int)vt_u.count + 1 + vt0;
-                        if (vi0>=1 && (size_t)vi0<=vx.count) {
-                            float x = vx.data[vi0-1]; float y = vy.data[vi0-1];
-                            farr_push(&positions, x); farr_push(&positions, y);
-                            if (vt0>=1 && (size_t)vt0<=vt_u.count) { farr_push(&uvs, vt_u.data[vt0-1]); farr_push(&uvs, vt_v.data[vt0-1]); }
-                        }
+                    if (ti >= 1 && ti <= nvt) {
+                        vtx.u = uv.d[(ti - 1) * 2 + 0];
+                        vtx.v = uv.d[(ti - 1) * 2 + 1];
                     }
+                    vtx.r = vtx.g = vtx.b = vtx.a = 1.0f;
+                    if (nvert + 1 > capv) {
+                        int nc2 = capv ? capv * 2 : 64;
+                        ame_vertex *nv2 = (ame_vertex *)realloc(verts, (size_t)nc2 * sizeof(ame_vertex));
+                        if (!nv2) { ok = 0; break; }
+                        verts = nv2;
+                        capv = nc2;
+                    }
+                    if (nidx + 1 > capi) {
+                        int nc2 = capi ? capi * 2 : 64;
+                        unsigned *ni2 = (unsigned *)realloc(idx, (size_t)nc2 * sizeof(unsigned));
+                        if (!ni2) { ok = 0; break; }
+                        idx = ni2;
+                        capi = nc2;
+                    }
+                    idx[nidx++] = (unsigned)nvert;
+                    verts[nvert++] = vtx;
                 }
+                if (!ok) break;
             }
         }
     }
-
-    // Flush last object
-    if (positions.count > 0) {
-        ecs_entity_desc_t ed = {0}; ed.name = obj_name[0]? obj_name : NULL;
-        ecs_entity_t e = ecs_entity_init(w, &ed);
-        ecs_add_pair(w, e, EcsChildOf, res.root);
-        AmeTransform2D tr = {0}; ecs_set_id(w, e, comp_tr, sizeof tr, &tr);
-        if (cfg && cfg->create_colliders && obj_name[0]) {
-            if (starts_with(obj_name, "CircleCollider")) {
-                Col2D c = {1, 1,1, 0.5f, 0, 1};
-                float minx=1e9f,maxx=-1e9f,miny=1e9f,maxy=-1e9f;
-                for(size_t i=0;i<positions.count/2;i++){ float x=positions.data[i*2+0], y=positions.data[i*2+1]; if(x<minx)minx=x; if(x>maxx)maxx=x; if(y<miny)miny=y; if(y>maxy)maxy=y; }
-                float rx=(maxx-minx)*0.5f, ry=(maxy-miny)*0.5f; c.radius = (rx+ry)*0.5f; c.dirty=1;
-                ecs_set_id(w, e, comp_col, sizeof c, &c); res.colliders_created++;
-                // Place collider entity at bbox center
-                AmeTransform2D trc = {0}; trc.x = (minx+maxx)*0.5f; trc.y = (miny+maxy)*0.5f; trc.angle = 0.0f;
-                ecs_set_id(w, e, comp_tr, sizeof trc, &trc);
-                fprintf(stdout, "[OBJ] MeshCollider %llu: bbox min=(%.2f,%.2f) max=(%.2f,%.2f) center=(%.2f,%.2f)\n", 
-                       (unsigned long long)e, minx, miny, maxx, maxy, trc.x, trc.y); fflush(stdout);
-                // free accumulators since no mesh is attached
-                farr_free(&positions); farr_free(&uvs);
-            } else if (starts_with(obj_name, "BoxCollider")) {
-                Col2D c = {0, 1,1, 0.0f, 0, 1};
-                float minx=1e9f,maxx=-1e9f,miny=1e9f,maxy=-1e9f;
-                for(size_t i=0;i<positions.count/2;i++){ float x=positions.data[i*2+0], y=positions.data[i*2+1]; if(x<minx)minx=x; if(x>maxx)maxx=x; if(y<miny)miny=y; if(y>maxy)maxy=y; }
-                c.w = (maxx-minx); c.h = (maxy-miny); c.dirty=1;
-                ecs_set_id(w, e, comp_col, sizeof c, &c); res.colliders_created++;
-                // Place collider entity at bbox center
-                AmeTransform2D trc = {0}; trc.x = (minx+maxx)*0.5f; trc.y = (miny+maxy)*0.5f; trc.angle = 0.0f;
-                ecs_set_id(w, e, comp_tr, sizeof trc, &trc);
-                // free accumulators since no mesh is attached
-                farr_free(&positions); farr_free(&uvs);
-            } else if (starts_with(obj_name, "MeshCollider")) {
-                MeshCol2D mc = { positions.data, positions.count, 0, 1 };
-                ecs_set_id(w, e, comp_meshcol, sizeof mc, &mc); res.colliders_created++;
-                // Place at bbox center
-                float minx=1e9f,maxx=-1e9f,miny=1e9f,maxy=-1e9f;
-                for(size_t i=0;i<positions.count/2;i++){ float x=positions.data[i*2+0], y=positions.data[i*2+1]; if(x<minx)minx=x; if(x>maxx)maxx=x; if(y<miny)miny=y; if(y>maxy)maxy=y; }
-                AmeTransform2D trc = {0}; trc.x = (minx+maxx)*0.5f; trc.y = (miny+maxy)*0.5f; trc.angle = 0.0f;
-                ecs_set_id(w, e, comp_tr, sizeof trc, &trc);
-                fprintf(stdout, "[OBJ] MeshCollider %llu: bbox min=(%.2f,%.2f) max=(%.2f,%.2f) center=(%.2f,%.2f)\n", 
-                       (unsigned long long)e, minx, miny, maxx, maxy, trc.x, trc.y); fflush(stdout);
-                // keep arrays alive
-            } else {
-                MeshData md = { positions.data, (uvs.count==positions.count? uvs.data: NULL), NULL, positions.count/2 };
-                ecs_set_id(w, e, comp_mesh, sizeof md, &md); res.meshes_created++;
-            }
-        } else {
-            MeshData md = { positions.data, (uvs.count==positions.count? uvs.data: NULL), NULL, positions.count/2 };
-            ecs_set_id(w, e, comp_mesh, sizeof md, &md); res.meshes_created++;
-        }
-        res.objects_created++;
-        positions = (FArr){0}; uvs = (FArr){0};
-        obj_name[0]=0;
+    free(pos.d);
+    free(uv.d);
+    free(nrm.d);
+    if (!ok || nvert < 3) {
+        free(verts);
+        free(idx);
+        return 0;
     }
-
-    // Free pooled arrays (mesh arrays that were passed to ECS are intentionally not freed here)
-    farr_free(&vx); farr_free(&vy); farr_free(&vz); farr_free(&vt_u); farr_free(&vt_v);
-
-    fclose(f);
-    return res;
+    out->verts = verts;
+    out->n_vert = nvert;
+    out->idx = idx;
+    out->n_idx = nidx;
+    return 1;
 }
-#endif // AME_USE_TINYOBJLOADER
 
+int ame_obj_load_file(const char *path, ame_mesh *out)
+{
+    if (!path || !out) return 0;
+    FILE *f = fopen(path, "rb");
+    if (!f) {
+        LOGD("obj: cannot open %s\n", path);
+        return 0;
+    }
+    if (fseek(f, 0, SEEK_END) != 0) { fclose(f); return 0; }
+    long sz = ftell(f);
+    if (sz < 0 || sz > 16 * 1024 * 1024) { fclose(f); return 0; }
+    rewind(f);
+    char *buf = (char *)malloc((size_t)sz + 1);
+    if (!buf) { fclose(f); return 0; }
+    size_t n = fread(buf, 1, (size_t)sz, f);
+    fclose(f);
+    buf[n] = 0;
+    int r = ame_obj_parse(buf, out);
+    free(buf);
+    return r;
+}

@@ -1,139 +1,36 @@
 #ifndef AME_AUDIO_H
 #define AME_AUDIO_H
 
-#ifdef __cplusplus
-extern "C" {
-#endif
+/*
+ * Mixer + tiny synth. No file I/O. The audio callback only calls
+ * ame_audio_mix; the sim/main thread only calls play/cue.
+ *
+ * SETUP: ame_audio_reset(rate, channels)
+ * HOT:   ame_audio_play_tone / ame_audio_mix
+ */
 
-#include <stdbool.h>
-#include <stdint.h>
-#include <stddef.h>
+enum { AME_AUDIO_VOICES = 8 };
 
-// Forward decl from ECS wrapper
-typedef struct AmeEcsWorld AmeEcsWorld;
-typedef uint64_t AmeEcsId;
-
-// Audio source types handled by the engine mixer
-typedef enum AmeAudioSourceType {
-    AME_AUDIO_SOURCE_OSC_SIGMOID = 1,
-    AME_AUDIO_SOURCE_OPUS = 2,
-    AME_AUDIO_SOURCE_SAW_WORK = 3,
-    AME_AUDIO_SOURCE_SAW_CUT = 4
-} AmeAudioSourceType;
-
-// Sigmoid oscillator parameters
-typedef struct AmeAudioSigmoidOsc {
-    float freq_hz;     // frequency in Hz
-    float shape_k;     // sigmoid steepness, typical [1..12]
-    float phase;       // [0..1)
-} AmeAudioSigmoidOsc;
-
-// Decoded PCM buffer for Opus file playback (interleaved stereo float32)
-typedef struct AmeAudioPcm {
-    float *samples;    // interleaved stereo samples (LR LR ...)
-    size_t frames;     // number of frames
-    size_t cursor;     // current frame cursor
-    int channels;      // must be 1 or 2, will be upmixed to stereo if mono
-    bool loop;         // loop playback
-} AmeAudioPcm;
-
-// Component stored on entities that should emit audio
-typedef struct AmeAudioSource {
-    AmeAudioSourceType type;
-    float gain;     // linear gain
-    float pan;      // -1.0 = left, 0 = center, 1.0 = right
-    bool playing;   // whether this source is currently audible
-
-    union {
-        AmeAudioSigmoidOsc osc;
-        AmeAudioPcm pcm;
-        struct {
-            // Continuous circular-saw work buzz
-            float base_freq_hz; // nominal buzz frequency
-            float drive;        // waveshaper drive (0..2)
-            float noise_mix;    // 0..1 additional noise content
-            float lfo_phase;    // internal LFO phase [0..1)
-            float lfo_rate_hz;  // LFO rate (e.g., 3-8 Hz)
-            float phase;        // oscillator phase [0..1)
-            uint32_t rnd;       // RNG state for noise
-            float hp_z1;        // simple 1-pole HP filter state for noise
-        } saw_work;
-        struct {
-            // Short cutting transient (burst of tone+noise)
-            float freq_hz;
-            float noise_mix;
-            float drive;
-            int samples_left;   // remaining samples in envelope
-            int attack;         // samples
-            int decay;          // samples
-            uint32_t rnd;       // RNG state for noise
-            float hp_z1;        // filter state
-            float phase;        // tone phase
-        } saw_cut;
-    } u;
-} AmeAudioSource;
-
-// Initialize audio engine (starts PortAudio stream and mixer thread)
-// sample_rate_hz: preferred sample rate (e.g., 48000). If 0, a reasonable default is chosen.
-// Returns true on success.
-bool ame_audio_init(int sample_rate_hz);
-
-// Safe audio initialization with timeout (requires SDL3 for threading).
-// Attempts to initialize audio with a timeout. If initialization takes longer than timeout_ms,
-// it will abort and return false, allowing the application to continue without audio.
-// timeout_ms: timeout in milliseconds (e.g., 3000 for 3 seconds)
-// sample_rate_hz: preferred sample rate (e.g., 48000). If 0, a reasonable default is chosen.
-// Returns true on success, false on timeout or failure.
-bool ame_audio_init_safe(int sample_rate_hz, int timeout_ms);
-
-// Shutdown audio engine and free resources.
+void ame_audio_reset(int sample_rate, int channels);
 void ame_audio_shutdown(void);
 
-// Register the AmeAudioSource as a Flecs/AME ECS component. Returns the component id.
-AmeEcsId ame_audio_register_component(AmeEcsWorld *w);
+int  ame_audio_rate(void);
+int  ame_audio_channels(void);
 
-// Utility helpers for sources
-void ame_audio_source_init_sigmoid(AmeAudioSource *s, float freq_hz, float shape_k, float gain);
+/* pan -1 left .. +1 right. decay_s is envelope length. */
+void ame_audio_play_tone(float freq_hz, float gain, float decay_s, float pan);
 
-// Initialize continuous circular-saw work buzz generator
-void ame_audio_source_init_saw_work(AmeAudioSource *s,
-                                    float base_freq_hz,
-                                    float drive,
-                                    float noise_mix,
-                                    float lfo_rate_hz,
-                                    float gain);
+void ame_audio_cue_click(void);
+void ame_audio_cue_match(void);
+void ame_audio_cue_miss(void);
+void ame_audio_cue_win(void);
+void ame_audio_cue_pickup(void);
+void ame_audio_cue_boom(void);
+void ame_audio_cue_jump(void);
+void ame_audio_cue_hurt(void);
+void ame_audio_cue_switch(void);
 
-// Initialize short circular-saw cutting burst (one-shot)
-// duration_sec controls total length; attack is short fraction of it.
-void ame_audio_source_init_saw_cut(AmeAudioSource *s,
-                                   float freq_hz,
-                                   float drive,
-                                   float noise_mix,
-                                   float duration_sec,
-                                   float gain);
+/* Mix `frames` of interleaved float PCM into `out` (channels from reset). */
+void ame_audio_mix(float *out, int frames);
 
-// Load an Opus file from a path on disk into an AmeAudioPcm buffer inside the component.
-// Returns true on success. The component's type will be set to OPUS and ready to play.
-bool ame_audio_source_load_opus_file(AmeAudioSource *s, const char *filepath, bool loop);
-
-// Simple panning utility using constant power pan law.
-// pan in [-1,1] -> (gain_l, gain_r)
-void ame_audio_constant_power_gains(float pan, float *out_l, float *out_r);
-
-// Reference with a stable identifier for a source (e.g., ECS entity id)
-typedef struct AmeAudioSourceRef {
-    struct AmeAudioSource *src;
-    uint64_t stable_id;
-} AmeAudioSourceRef;
-
-// Preferred: sync active sources with stable ids to preserve phase/cursor across frames.
-void ame_audio_sync_sources_refs(const AmeAudioSourceRef *refs, size_t count);
-
-// Legacy: sync by pointers only (may cause phase resets if pointers relocate).
-void ame_audio_sync_sources_manual(struct AmeAudioSource **sources, size_t count);
-
-#ifdef __cplusplus
-}
 #endif
-
-#endif // AME_AUDIO_H
