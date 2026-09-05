@@ -48,16 +48,23 @@ typedef struct {
 enum {
     AME_AUCMD_PLAY = 0, /* -> id */
     AME_AUCMD_STOP,     /* -> id */
-    AME_AUCMD_SET_FREQ, /* -> id, f1 */
-    AME_AUCMD_SET_GAIN, /* -> id, f1 */
-    AME_AUCMD_SET_PAN,  /* -> id, f1 */
+    AME_AUCMD_SET_FREQ, /* -> id, f1 (legacy; SET_CFG carries everything) */
+    AME_AUCMD_SET_GAIN, /* -> id, f1 (legacy) */
+    AME_AUCMD_SET_PAN,  /* -> id, f1 (legacy) */
     AME_AUCMD_QUIT_VOICE,
+    AME_AUCMD_NEW,      /* -> id, cfg: full voice reset (create via queue) */
+    AME_AUCMD_SET_CFG,  /* -> id, cfg: full param patch via queue */
+    AME_AUCMD_SET_PCM,  /* -> id, pcm, pcm_frames */
+    AME_AUCMD_MASTER,   /* -> f1 */
 };
 
 typedef struct {
-    uint8_t cmd;      /* AME_AUCMD_* */
-    uint8_t id;
-    float   f1;
+    uint8_t      cmd;   /* AME_AUCMD_* */
+    uint8_t      id;
+    float        f1;    /* scalar param (freq/gain/pan/master) */
+    ame_synth_cfg cfg;  /* NEW / SET_CFG payload */
+    const float *pcm;   /* SET_PCM payload (caller-owned; must outlive use) */
+    int32_t      pcm_frames;
 } ame_aucmd;
 
 /* --- lifecycle ------------------------------------------------------------ */
@@ -85,7 +92,7 @@ void audio_set(int id, const ame_synth_cfg *cfg); /* republish patch */
 void audio_play(int id);
 void audio_stop(int id);
 void audio_master(float gain);        /* 0..1 */
-bool audio_voice_active(int id);      /* published by the audio thread */
+bool audio_voice_active(int id);      /* true while audible (atomic env) */
 
 /* beat/energy helper for gameplay visuals: 0..1 envelope of a voice,
  * published by the render/mix side (one writer: audio thread) */

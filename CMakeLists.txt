@@ -108,13 +108,26 @@ else()
     set(AME_SDL3_LINK SDL3::SDL3)
 endif()
 
-# asyncinput: bundled dep of AME_INPUT_ASYNCINPUT builds (input.txt/build.txt)
+# asyncinput: bundled dep of AME_INPUT_ASYNCINPUT builds (input.txt/build.txt).
+# Plain clones must fail LOUDLY with the fix, not with a CMake error later.
+if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/third_party/asyncinput/CMakeLists.txt")
+    message(FATAL_ERROR
+        "third_party/asyncinput is empty: the git submodule is not initialized.\n"
+        "Fix: git submodule update --init")
+endif()
 set(ASYNCINPUT_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(ASYNCINPUT_BUILD_SHARED OFF CACHE BOOL "" FORCE)
 set(AME_SAVE_BUILD_TESTING ${BUILD_TESTING})
 set(BUILD_TESTING OFF) # asyncinput's own smoke test stays out of our ctest
 add_subdirectory(third_party/asyncinput EXCLUDE_FROM_ALL)
 set(BUILD_TESTING ${AME_SAVE_BUILD_TESTING})
+# third_party/asyncinput's own repo builds with default glibc feature
+# macros; our strict C23 hides clock_gettime/O_CLOEXEC/usleep from its
+# posix backend. Give the vendored target the macros (external review
+# finding: the asyncinput game variant did not build).
+if(TARGET asyncinput_static)
+    target_compile_definitions(asyncinput_static PRIVATE _DEFAULT_SOURCE)
+endif()
 
 ame_dim_lib(2)
 ame_dim_lib(3)
@@ -157,6 +170,22 @@ endfunction()
 # ---------------------------------------------------------------------------
 # Tests (build.txt: every job builds tests in BOTH dimensions and RUNS them).
 # ---------------------------------------------------------------------------
+# test_mem_net plays a REAL server process. When examples are disabled
+# (AME_BUILD_EXAMPLES=OFF) the tiny pure-POSIX server is built here so
+# the test suite never depends on the examples toggle (external review
+# finding: tests-enabled + examples-disabled used to fail at configure).
+if(AME_BUILD_TESTS AND NOT AME_BUILD_EXAMPLES)
+    add_executable(mem_server
+        examples/memory_game/mem_server.c
+        examples/memory_game/mem_sim.c
+        examples/memory_game/mem_net.c)
+    target_include_directories(mem_server PRIVATE
+        ${CMAKE_SOURCE_DIR}/include
+        ${CMAKE_SOURCE_DIR}/examples/memory_game)
+    target_compile_definitions(mem_server PRIVATE AME_3D=1)
+    target_compile_options(mem_server PRIVATE -Wall -Wextra -Werror -ffp-contract=off)
+endif()
+
 if(AME_BUILD_TESTS)
     enable_testing()
     add_subdirectory(tests)

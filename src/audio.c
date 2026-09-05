@@ -46,6 +46,11 @@ typedef struct {
     _Atomic uint32_t head; /* consumer increments */
     _Atomic uint32_t tail; /* producer increments */
     uint32_t dropped;
+    /* logic-thread mirror of slot usage: voice CREATE must not read the
+     * audio-owned used/playing fields (TSan race, found post-review);
+     * selection uses this mirror + the atomic env publication only. */
+    uint8_t used_logic[AME_AUDIO_VOICES];
+    uint8_t steal_rr;
     /* SDL device */
     SDL_AudioStream *stream;
     bool attached;
@@ -150,48 +155,51 @@ int audio_new_decoded(const float *pcm_stereo, int frames, bool loop) {
     cfg.pan = 0.0f;
     cfg.loop = loop;
     int id = audio_new_synth(&cfg);
-    if (id >= 0) {
-        S.v[id].pcm = pcm_stereo;
-        S.v[id].pcm_frames = frames;
-        S.v[id].pcm_pos = 0;
-    }
+    if (id >= 0)
+        (void)au_push((ame_aucmd){ .cmd = AME_AUCMD_SET_PCM,
+                                   .id = (uint8_t)id, .pcm = pcm_stereo,
+                                   .pcm_frames = (int32_t)frames });
     return id;
 }
 
 int audio_new_synth(const ame_synth_cfg *cfg) {
-    /* find a free slot: prefer never-used, else a stopped voice */
-    int free_idx = -1, stopped = -1;
+    /* Slot selection reads ONLY logic-owned state (used_logic mirror)
+     * plus the atomic env publication - never the audio-owned fields.
+     * The voice itself is (re)created by the audio thread when it
+     * applies AME_AUCMD_NEW: no cross-thread plain writes anywhere. */
+    int id = -1;
     for (int i = 0; i < AME_AUDIO_VOICES; i++) {
-        if (!S.v[i].used) { free_idx = i; break; }
-        if (!S.v[i].playing) stopped = i;
+        if (!S.used_logic[i]) { id = i; break; }
     }
-    int id = free_idx >= 0 ? free_idx : stopped;
-    if (id < 0)
-        return -1;
-    au_voice *v = &S.v[id];
-    v->used = true;
-    v->playing = false;
-    v->cfg = *cfg;
-    v->phase = 0;
-    v->t_start = 0;
-    v->env = 0.0f;
-    v->noise = 0x9e3779b9u ^ (uint32_t)(id * 2654435761u);
+    if (id < 0) {
+        /* all slots previously used: prefer a currently-silent voice
+         * (env publication reads are atomic, race-free), else steal
+         * round-robin - deterministic given the render schedule */
+        int silent = -1;
+        for (int i = 0; i < AME_AUDIO_VOICES; i++) {
+            int j = (S.steal_rr + i) % AME_AUDIO_VOICES;
+            uint32_t e = atomic_load_explicit(&S.v[j].env_pub,
+                                              memory_order_relaxed);
+            if (e == 0) { silent = j; break; }
+        }
+        id = silent >= 0 ? silent
+                         : (S.steal_rr = (S.steal_rr + 1) % AME_AUDIO_VOICES);
+    }
+    if (!au_push((ame_aucmd){ .cmd = AME_AUCMD_NEW, .id = (uint8_t)id,
+                              .cfg = *cfg }))
+        return -1; /* ring full: voice NOT created - fail loudly */
+    S.used_logic[id] = 1;
     return id;
 }
 
 void audio_set(int id, const ame_synth_cfg *cfg) {
     if (id < 0 || id >= AME_AUDIO_VOICES)
         return;
-    /* publish fields via a QUIT_VOICE-less republish: play/stop/gain/pan/freq
-     * travel as commands; the full patch is copied under the same push so
-     * ordering is preserved */
-    S.v[id].cfg = *cfg; /* setup-side copy; audio thread sees params on cmd */
-    (void)au_push((ame_aucmd){ .cmd = AME_AUCMD_SET_FREQ, .id = (uint8_t)id,
-                               .f1 = cfg->freq });
-    (void)au_push((ame_aucmd){ .cmd = AME_AUCMD_SET_GAIN, .id = (uint8_t)id,
-                               .f1 = cfg->gain });
-    (void)au_push((ame_aucmd){ .cmd = AME_AUCMD_SET_PAN, .id = (uint8_t)id,
-                               .f1 = cfg->pan });
+    /* the FULL patch travels as one command (wave/attack/hold/release/
+     * loop included - the old trio only carried freq/gain/pan and a
+     * racy setup-side struct copy); the audio thread owns cfg after */
+    (void)au_push((ame_aucmd){ .cmd = AME_AUCMD_SET_CFG, .id = (uint8_t)id,
+                               .cfg = *cfg });
 }
 
 void audio_play(int id) {
@@ -206,12 +214,20 @@ void audio_stop(int id) {
     (void)au_push((ame_aucmd){ .cmd = AME_AUCMD_STOP, .id = (uint8_t)id });
 }
 
-void audio_master(float gain) { S.master = ame_clampf(gain, 0.0f, 1.0f); }
+void audio_master(float gain) {
+    /* master is read every mix block by the audio thread: travel as a
+     * command (the old direct write raced the mixer) */
+    (void)au_push((ame_aucmd){ .cmd = AME_AUCMD_MASTER,
+                               .f1 = ame_clampf(gain, 0.0f, 1.0f) });
+}
 
 bool audio_voice_active(int id) {
     if (id < 0 || id >= AME_AUDIO_VOICES)
         return false;
-    return S.v[id].playing;
+    /* audible = envelope active; reading the audio-owned playing flag
+     * from here would be a cross-thread plain read (env is atomic) */
+    return atomic_load_explicit(&S.v[id].env_pub, memory_order_acquire)
+           > 0;
 }
 
 float audio_beat_amplitude(int id) {
@@ -267,6 +283,30 @@ static void au_apply_cmd(ame_aucmd c) {
     case AME_AUCMD_QUIT_VOICE:
         v->playing = false;
         v->used = false;
+        break;
+    case AME_AUCMD_NEW: /* (re)create: the ONLY writer of voice state */
+        v->used = true;
+        v->playing = false;
+        v->cfg = c.cfg;
+        v->phase = 0;
+        v->t_start = 0;
+        v->env = 0.0f;
+        v->noise = 0x9e3779b9u ^ (uint32_t)(c.id * 2654435761u);
+        v->pcm = NULL;
+        v->pcm_frames = 0;
+        v->pcm_pos = 0;
+        v->env_pub = 0;
+        break;
+    case AME_AUCMD_SET_CFG:
+        v->cfg = c.cfg;
+        break;
+    case AME_AUCMD_SET_PCM:
+        v->pcm = c.pcm;
+        v->pcm_frames = c.pcm_frames;
+        v->pcm_pos = 0;
+        break;
+    case AME_AUCMD_MASTER:
+        S.master = c.f1;
         break;
     default: break;
     }

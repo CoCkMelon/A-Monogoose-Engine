@@ -95,14 +95,17 @@ static void on_raw_input(const struct ni_event *ev, void *ud) {
     }
     if (ni_is_rel_event(ev)) {
         /* accumulate raw relative motion into a window-space position for
-         * picking; games wanting raw deltas read axis deltas instead */
-        static _Atomic float rx, ry;
+         * picking; games wanting raw deltas read axis deltas instead.
+         * Plain statics: ONLY this callback (one asyncinput reader
+         * thread) touches them - in_on_mouse_move does the engine-side
+         * atomic publication. (_Atomic float fetch_add does not exist
+         * in GCC 14's C23 stdatomic generics either.) */
+        static float rx, ry;
         if (ev->code == NI_REL_X)
-            atomic_fetch_add(&rx, (float)ev->value);
+            rx += (float)ev->value;
         else if (ev->code == NI_REL_Y)
-            atomic_fetch_add(&ry, (float)ev->value);
-        float x = atomic_load(&rx), y = atomic_load(&ry);
-        in_on_mouse_move(x, y);
+            ry += (float)ev->value;
+        in_on_mouse_move(rx, ry);
     }
 }
 

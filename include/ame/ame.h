@@ -117,40 +117,98 @@ static inline uint32_t ame_fnv1a(uint32_t h, const void *data, size_t len) {
 }
 
 /* --- published snapshot (principles THREADING) -----------------------------
- * Double-buffer publish/subscribe for "writer publishes, readers read a
- * const snapshot, readers never write back". The writer writes the back
- * buffer, then flips the index with release ordering; readers acquire the
- * index and get a stable const pointer until the NEXT flip. With exactly one
- * writer and flip-separated reads this is race-free without locks.
+ * Seqlock publication: ONE writer copies the snapshot into the gate
+ * buffer under an odd version, ANY number of readers copy OUT into
+ * private storage and retry if a publish overlapped the read. Readers
+ * own their copy for as long as they like - safe at any publish/read
+ * rate ratio. (Replaces the double-buffer scheme an external review
+ * caught with TSan: its back buffer could be overwritten while a slow
+ * reader still held the pointer.)
  *
- * T must be a trivially-copyable POD snapshot struct. The writer owns the
- * struct; readers must finish reading before the writer's next publish
- * (a 1000 Hz publisher vs 60 Hz readers gives ~16 frames of slack; copy out
- * if a reader must hold it longer). */
+ * T must be a trivially-copyable POD snapshot struct. */
 typedef struct {
-    _Atomic uint32_t idx; /* 0 or 1 */
+    _Atomic uint32_t ver; /* even = stable, odd = publish in progress */
 } ame_snap_gate;
+
+/* relaxed atomic chunk copies: EVERY access to the shared snapshot
+ * buffer is atomic (atomics never race under C11), while the seqlock
+ * version check guarantees CONSISTENCY (a copy never mixes two
+ * publishes). Net effect: correct by the memory model, and TSan sees
+ * no plain-access race - no suppressions needed, future races in
+ * surrounding code stay detectable. x86 codegen: plain movs. */
+static inline void ame_snap_store_relaxed(void *dst, const void *src, size_t n) {
+    uint8_t *d = (uint8_t *)dst;
+    const uint8_t *s = (const uint8_t *)src;
+    size_t w = (((uintptr_t)dst | (uintptr_t)src) & 3u) == 0 ? n / 4 : 0;
+    for (size_t i = 0; i < w; i++)
+        __atomic_store_n((uint32_t *)d + i,
+                         __atomic_load_n((const uint32_t *)s + i,
+                                         __ATOMIC_RELAXED), __ATOMIC_RELAXED);
+    for (size_t i = w * 4; i < n; i++)
+        __atomic_store_n(d + i, __atomic_load_n(s + i, __ATOMIC_RELAXED),
+                         __ATOMIC_RELAXED);
+}
+
+static inline void ame_snap_load_relaxed(void *dst, const void *src, size_t n) {
+    uint8_t *d = (uint8_t *)dst;
+    const uint8_t *s = (const uint8_t *)src;
+    size_t w = (((uintptr_t)dst | (uintptr_t)src) & 3u) == 0 ? n / 4 : 0;
+    for (size_t i = 0; i < w; i++)
+        ((uint32_t *)d)[i] = __atomic_load_n((const uint32_t *)s + i,
+                                             __ATOMIC_RELAXED);
+    for (size_t i = w * 4; i < n; i++)
+        d[i] = __atomic_load_n(s + i, __ATOMIC_RELAXED);
+}
+
+/* GCC's TSan rejects C11 thread fences outright. Under GCC+TSan a
+ * compiler barrier suffices: TSan derives happens-before from the
+ * acquire/release VERSION operations and the data copies are atomic
+ * (atomics never race), so fences add nothing to race detection.
+ * Real builds - and Clang TSan, which supports fences - use the true
+ * fence for hardware ordering. */
+#if defined(__SANITIZE_THREAD__) && defined(__GNUC__) && !defined(__clang__)
+#define AME_SNAP_FENCE(mo) __asm__ __volatile__("" ::: "memory")
+#else
+#define AME_SNAP_FENCE(mo) atomic_thread_fence(mo)
+#endif
 
 #define AME_SNAP_DEFINE(type)                                                 \
     typedef struct {                                                          \
-        type buf[2];                                                          \
+        type buf;                                                             \
         ame_snap_gate gate;                                                   \
     } type##_snap;                                                            \
     static inline void type##_snap_init(type##_snap *s) {                     \
-        atomic_init(&s->gate.idx, 0);                                         \
+        atomic_init(&s->gate.ver, 0);                                         \
     }                                                                         \
-    /* writer ONLY: publish a fresh snapshot (back buffer), then flip. */     \
-    static inline const type *type##_publish(type##_snap *s, const type *src) {\
-        uint32_t cur = atomic_load_explicit(&s->gate.idx, memory_order_relaxed);\
-        uint32_t nxt = cur ^ 1u;                                              \
-        s->buf[nxt] = *src;                                                   \
-        atomic_store_explicit(&s->gate.idx, nxt, memory_order_release);       \
-        return &s->buf[nxt];                                                  \
+    /* writer ONLY: publish a fresh snapshot (seqlock write side). */         \
+    static inline void type##_publish(type##_snap *s, const type *src) {      \
+        uint32_t v = atomic_load_explicit(&s->gate.ver, memory_order_relaxed);\
+        atomic_store_explicit(&s->gate.ver, v + 1u, memory_order_relaxed);    \
+        AME_SNAP_FENCE(memory_order_release);                                  \
+        ame_snap_store_relaxed(&s->buf, src, sizeof(type));                       \
+        AME_SNAP_FENCE(memory_order_release);                                  \
+        atomic_store_explicit(&s->gate.ver, v + 2u, memory_order_release);    \
     }                                                                         \
-    /* any thread: latest published const snapshot. */                        \
-    static inline const type *type##_latest(const type##_snap *s) {           \
-        uint32_t i = atomic_load_explicit(&s->gate.idx, memory_order_acquire);\
-        return &s->buf[i];                                                    \
+    /* any thread: copy out the latest consistent snapshot. false only if    \
+     * every attempt overlapped a publish (retry / keep last frame);         \
+     * *out is left UNCHANGED on failure. */                                  \
+    static inline bool type##_latest_copy(const type##_snap *s, type *out) {  \
+        for (int attempt = 0; attempt < 64; attempt++) {                      \
+            uint32_t v1 = atomic_load_explicit(&s->gate.ver,                  \
+                                               memory_order_acquire);         \
+            if ((v1 & 1u) == 0) {                                             \
+                type tmp; /* atomic copy, then validate: never tear *out */ \
+                ame_snap_load_relaxed(&tmp, &s->buf, sizeof(type));              \
+                AME_SNAP_FENCE(memory_order_acquire);                         \
+                uint32_t v2 = atomic_load_explicit(&s->gate.ver,              \
+                                                   memory_order_acquire);     \
+                if (v1 == v2) {                                               \
+                    *out = tmp;                                               \
+                    return true;                                              \
+                }                                                             \
+            }                                                                 \
+        }                                                                     \
+        return false;                                                         \
     }
 
 #ifdef __cplusplus

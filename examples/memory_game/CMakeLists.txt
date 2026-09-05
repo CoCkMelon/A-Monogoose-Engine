@@ -35,10 +35,17 @@ endif()
 if(AME_BUILD_ASYNCINPUT_GAME)
     add_executable(memory_game_asyncinput
         mem_sim.c
+        mem_net.c
         mem_app.c
+        ${CMAKE_SOURCE_DIR}/src/input_asyncinput.c
         ${AME_BOOTSTRAP_SRC})
     target_link_libraries(memory_game_asyncinput PRIVATE
         ame::3d ame_font asyncinput_static)
+    # screenshot path uses stb_image_write, same as the SDL variant;
+    # the asyncinput backend needs the vendored header
+    target_include_directories(memory_game_asyncinput PRIVATE
+        ${CMAKE_SOURCE_DIR}/third_party/stb
+        ${CMAKE_SOURCE_DIR}/third_party/asyncinput/include)
     target_compile_definitions(memory_game_asyncinput PRIVATE AME_INPUT_ASYNCINPUT=1)
     target_compile_options(memory_game_asyncinput PRIVATE
         -Wall -Wextra -Werror -ffp-contract=off)

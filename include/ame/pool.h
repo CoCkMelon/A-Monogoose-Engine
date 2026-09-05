@@ -36,8 +36,10 @@
 #ifndef AME_POOL_CAP
 #error "define AME_POOL_CAP before including ame/pool.h"
 #endif
-/* worst-case simultaneous deferred frees == cap; a smaller queue only
- * delays frees to the next step, it never drops them (requests coalesce). */
+/* Duplicate free requests coalesce (a slot+generation is queued at most
+ * once per apply window). With the default MAX_FREE == CAP the queue can
+ * never overflow; an overflow drop is only reachable when MORE than
+ * MAX_FREE *distinct* handles are freed within one apply window. */
 #ifndef AME_POOL_MAX_FREE
 #define AME_POOL_MAX_FREE AME_POOL_CAP
 #endif
@@ -54,6 +56,7 @@ typedef struct {
     ame_handle pend_free[AME_POOL_MAX_FREE];
     uint16_t pend_head;
     uint16_t overflow_drops;        /* deferred-queue overflow (debug view) */
+    uint16_t coalesced;             /* duplicate free requests coalesced */
 } AME_P(slots);
 
 static inline void AME_P(slots_reset)(AME_P(slots) *s) {
@@ -65,6 +68,7 @@ static inline void AME_P(slots_reset)(AME_P(slots) *s) {
     s->free_head = (uint16_t)AME_POOL_CAP;
     s->pend_head = 0;
     s->overflow_drops = 0;
+    s->coalesced = 0;
 }
 
 /* allocate a slot; returns a valid handle or AME_HANDLE_INVALID when full */
@@ -83,12 +87,22 @@ static inline bool AME_P(slots_valid)(const AME_P(slots) *s, ame_handle h) {
         && s->alive[h.idx] && s->gen[h.idx] == h.gen;
 }
 
-/* request a despawn (deferred; safe during iteration/drain) */
+/* request a despawn (deferred; safe during iteration/drain).
+ * Exact duplicates coalesce (external-review fix: free(a), free(a) used
+ * to fill two queue slots and could push a DISTINCT free out - losing a
+ * despawn). The handle stays valid until apply, so a second request for
+ * the same slot+generation is always redundant. */
 static inline void AME_P(slots_free)(AME_P(slots) *s, ame_handle h) {
     if (!AME_P(slots_valid)(s, h))
         return;
+    for (uint16_t i = 0; i < s->pend_head; i++) {
+        if (s->pend_free[i].idx == h.idx && s->pend_free[i].gen == h.gen) {
+            s->coalesced++;
+            return;
+        }
+    }
     if (s->pend_head >= (uint16_t)AME_POOL_MAX_FREE) {
-        s->overflow_drops++; /* coalesce: a later apply will free it anyway */
+        s->overflow_drops++; /* only > MAX_FREE DISTINCT frees per window */
         return;
     }
     s->pend_free[s->pend_head++] = h;

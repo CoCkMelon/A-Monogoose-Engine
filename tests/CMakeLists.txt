@@ -4,6 +4,10 @@
 
 # dimension-agnostic suites
 add_executable(test_math   test_math.c)
+# snapshot seqlock: real threads (TSan target) - needs pthreads
+find_package(Threads REQUIRED)
+add_executable(test_snap   test_snap.c)
+target_link_libraries(test_snap PRIVATE ame Threads::Threads)
 add_executable(test_pool   test_pool.c)
 add_executable(test_particles test_particles.c)
 add_executable(test_audio_ray test_audio_ray.c)
@@ -26,6 +30,7 @@ foreach(dim 2 3)
 endforeach()
 
 add_test(NAME math   COMMAND test_math)
+add_test(NAME snap   COMMAND test_snap)
 add_test(NAME pool   COMMAND test_pool)
 add_test(NAME particles COMMAND test_particles)
 add_test(NAME audio_ray COMMAND test_audio_ray)

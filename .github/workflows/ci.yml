@@ -100,6 +100,28 @@ jobs:
           name: ame-next-stage0-linux-amd64
           path: dist/ame-next-stage0-linux-amd64.tar.gz
 
+  tsan:
+    name: linux (TSan, snapshot seqlock + pool concurrency)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            clang-19 lld-19 cmake ninja-build libsdl3-dev libegl1 \
+            libgl1-mesa-dri libgles-dev libclang-rt-19-dev
+      - name: test_snap + test_pool under TSan
+        run: |
+          cmake -S . -B build -G Ninja -DCMAKE_C_COMPILER=clang-19 \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DCMAKE_C_FLAGS="-fsanitize=thread -fno-omit-frame-pointer -g -O1"
+          cmake --build build --target test_snap test_pool
+          ./build/tests/test_snap
+          ./build/tests/test_pool
+
   clean-smoke:
     name: linux (CLEAN machine: packaged unit smoke)
     needs: package

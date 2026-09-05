@@ -67,18 +67,18 @@ typedef struct { int v; } snap_t;
 AME_SNAP_DEFINE(snap_t)
 
 static int t_snapshot(void) {
-    UT_CASE("snapshot pub/sub latest wins");
+    UT_CASE("snapshot seqlock publish/copy: latest wins");
     snap_t_snap s;
     snap_t_snap_init(&s);
-    snap_t w = { .v = 1 };
+    snap_t w = { .v = 1 }, r;
     snap_t_publish(&s, &w);
-    UT_ASSERT(snap_t_latest(&s)->v == 1);
+    UT_ASSERT(snap_t_latest_copy(&s, &r) && r.v == 1);
     w.v = 2;
     snap_t_publish(&s, &w);
-    UT_ASSERT(snap_t_latest(&s)->v == 2);
+    UT_ASSERT(snap_t_latest_copy(&s, &r) && r.v == 2);
     w.v = 3;
     snap_t_publish(&s, &w);
-    UT_ASSERT(snap_t_latest(&s)->v == 3);
+    UT_ASSERT(snap_t_latest_copy(&s, &r) && r.v == 3);
     UT_OK();
     return 0;
 }

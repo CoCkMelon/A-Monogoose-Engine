@@ -9,6 +9,14 @@
 #define AME_POOL_CAP    8
 #include <ame/pool.h>
 
+/* second instantiation: tiny deferred-free queue (2) to prove duplicate
+ * coalescing - the exact repro from the external review (free(a), free(a),
+ * free(b) used to fill the queue with a duplicate and DROP b). */
+#define AME_POOL_PREFIX tiny_
+#define AME_POOL_CAP    4
+#define AME_POOL_MAX_FREE 2
+#include <ame/pool.h>
+
 typedef struct {
     float x[8], y[8];
     float vx[8], vy[8];
@@ -51,6 +59,33 @@ int main(void) {
     bullets_slots_apply_frees(P);
     UT_ASSERT(!bullets_slots_valid(P, h2));
     UT_ASSERT(ame_handle_valid(bullets_slots_alloc(P)));
+
+    UT_CASE("duplicate frees coalesce; distinct frees never lost");
+    static tiny_slots T;
+    tiny_slots_reset(&T);
+    ame_handle a = tiny_slots_alloc(&T);
+    ame_handle b = tiny_slots_alloc(&T);
+    tiny_slots_free(&T, a);
+    tiny_slots_free(&T, a); /* duplicate: coalesces, not queued twice */
+    tiny_slots_free(&T, b); /* must NOT be dropped (queue cap is 2) */
+    UT_ASSERT(T.coalesced == 1);
+    UT_ASSERT(T.overflow_drops == 0);
+    tiny_slots_apply_frees(&T);
+    UT_ASSERT(!tiny_slots_valid(&T, a));
+    UT_ASSERT(!tiny_slots_valid(&T, b)); /* the review's lost-despawn case */
+
+    UT_CASE("overflow only beyond MAX_FREE DISTINCT frees (honest)");
+    tiny_slots_reset(&T);
+    ame_handle th[3];
+    for (int i = 0; i < 3; i++)
+        th[i] = tiny_slots_alloc(&T);
+    for (int i = 0; i < 3; i++)
+        tiny_slots_free(&T, th[i]);
+    UT_ASSERT(T.overflow_drops == 1); /* 3rd DISTINCT free, queue cap 2 */
+    UT_ASSERT(T.coalesced == 0);
+    tiny_slots_apply_frees(&T);
+    UT_ASSERT(!tiny_slots_valid(&T, th[0]) && !tiny_slots_valid(&T, th[1]));
+    UT_ASSERT(tiny_slots_valid(&T, th[2])); /* documented drop, still alive */
 
     UT_OK();
     return ut_done("test_pool");

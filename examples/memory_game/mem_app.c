@@ -693,7 +693,13 @@ static void particle_effects(const mem_snap *s) {
 }
 
 int app_render(void) {
-    const mem_snap *s = mem_snap_latest(&SNAP);
+    /* seqlock copy-out (external-review race fix): render owns this
+     * private copy for the whole frame at any publish rate; if every
+     * copy attempt overlapped a publish we keep last frame's copy -
+     * never torn, never a dead pointer. */
+    static mem_snap frame;
+    (void)mem_snap_latest_copy(&SNAP, &frame);
+    const mem_snap *s = &frame;
     particle_effects(s);
     rp_begin_frame();
 

@@ -21,6 +21,8 @@ the same single-pass renderer.
 
 ## Build & test (POSIX, GCC 14+ or Clang 19+)
 
+Clone with submodules (`git clone --recurse-submodules <url>`); plain clones are told to run `git submodule update --init`.
+
 ```sh
 cmake -S . -B build -GNinja && ninja -C build      # -Werror clean by default
 ctest --test-dir build                             # 11 tests incl. online loopback

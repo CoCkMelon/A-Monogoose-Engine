@@ -532,3 +532,62 @@ NOTES for next session:
   [i/4][i%4]); glm_quat_mul (not mulq); glm_aabb_frustum returns bool;
   _mm_set_epi32 order is (e3,e2,e1,e0); _MM_SHUFFLE(d3,d2,d1,d0).
 - Remaining parity: opus decode. Stage 2 exit: shadows + materials.
+
+SESSION 11 - EXTERNAL-REVIEW FIXES (branch agent/ame-next-20260905-4ad0fd06).
+An external comparison (A vs B-rewrite vs master) verified our 16/16
+but found integration + concurrency defects. All fixed + tested:
+
+1. SUBMODULE METADATA: third_party/asyncinput was a gitlink with NO
+   .gitmodules -> fresh checkout unbuildable. .gitmodules added (repo:
+   github.com/CoCkMelon/asyncinput, recorded commit 1f3d0cd == its
+   main HEAD). CMake now fails LOUDLY with the fix command if the
+   submodule dir is empty. README says --recurse-submodules.
+2. SNAPSHOT DATA RACE (their TSan repro): the old double-buffer
+   "latest pointer" could be overwritten mid-read (1000 Hz publisher
+   vs frame-long reader holds). AME_SNAP_DEFINE is now a SEQLOCK with
+   copy-out API: type##_latest_copy(s, out) -> bool; *out unchanged on
+   failure; mem_app renders a private copy (keeps last frame's on
+   retry - never torn, never a dead pointer). All shared-buffer
+   accesses are relaxed ATOMIC chunk copies (atomics never race under
+   C11 - TSan-clean WITHOUT suppressions; plain movs on x86). GCC TSan
+   rejects atomic_thread_fence -> AME_SNAP_FENCE shim (compiler barrier
+   under GCC+TSan only; real fence everywhere else; Clang TSan keeps
+   fences). tests/test_snap.c: 2 reader threads vs writer, 831k copies
+   0 torn, TSan-clean; CI gained a tsan job (clang-19).
+3. POOL LOST-DESPAWN (their repro: free(a),free(a),free(b) with queue
+   cap 2 dropped b's despawn): slots_free now coalesces exact
+   duplicates by (idx,gen) - the documented promise, finally true.
+   overflow_drops only reachable beyond MAX_FREE DISTINCT frees per
+   apply window; new coalesced counter; test_pool regression (the
+   review's exact repro) + honest-overflow case. 32 checks.
+4. TESTS WITHOUT EXAMPLES: -DAME_BUILD_EXAMPLES=OFF failed at
+   $<TARGET_FILE:mem_server>. Standalone mem_server target built at
+   top level when tests on + examples off. 17/17 in that config.
+5. ASYNCINPUT GAME VARIANT did not build: (a) vendored lib needs
+   _DEFAULT_SOURCE under our strict C23 (given to asyncinput_static);
+   (b) variant target missed mem_net.c, stb + asyncinput include dirs,
+   and src/input_asyncinput.c; (c) input_asyncinput.c itself had
+   invalid C (atomic_fetch_add on _Atomic float; single-threaded
+   accumulators are plain statics now).
+
+BONUS RACE FOUND BY OUR OWN GAME-WIDE TSAN SWEEP (review missed it):
+audio voice create/patch bypassed the SPSC ring - audio_new_synth/
+audio_load_pcm/audio_set/audio_master wrote voice state directly from
+the logic thread while the SDL callback mixed. All voice + master
+mutation now travels as commands (NEW/SET_CFG/SET_PCM/MASTER; ame_aucmd
+carries ame_synth_cfg + pcm ptr). Slot selection uses a logic-side
+used_logic mirror + atomic env publication only. audio_voice_active
+reads env (atomic), not the audio-owned playing flag. Audio is
+inaudible in goldens -> screenshots byte-identical anyway.
+
+VERIFY (this session, GCC 14): ctest 17/17 normal AND ASan/UBSan;
+examples-off 17/17; asyncinput variant builds; TSan: test_snap +
+test_pool + FULL autoplay-500 game = zero reports, screenshot
+byte-identical to shots/stage2_particles.png; quiet frame-5 golden
+byte-identical vs a c89b3db-built binary (cross-version proof).
+NOTE: cmake/ninja/apt packages do NOT survive sandbox resets -
+reinstall (see ci.yml apt list) when a new session cannot build.
+
+NOTES: test count is now 17 (snap). ci.yml has a 5th job (tsan).
+坑: python-generated C patches double macro backslashes; git stash +
+parallel commands race (ASan configure once saw stashed sources).
