@@ -780,3 +780,50 @@ src/dialogue.c, tools/dlg2c.c, tests/test_dialogue.c. Fresh default
 build -Werror clean, 18/18. 坑: sandbox libfyaml 0.8 vs user >= 1.0
 - optional-dep code must compile under BOTH; strict-c2x POSIX hiding
  now fixed at THREE sites total (asyncinput, dialogue trio).
+
+SESSION 15 - TEXT GRID FIX (user bug report): "Lean model of text
+rendering is bad, if it allows errors... cursor has horizontal
+offset... font is blurry. Master has similar problem that you
+inherited."
+
+ROOT CAUSE (one, both symptoms): advances are FLOAT (stb 17.375...),
+pen accumulated fractionally, el.x stored fractional, alignment shift
+added arbitrary float -> every glyph quad rasterized at its OWN
+fractional origin (blur), and the editor caret/selection rounded
+INDEPENDENTLY of the ink grid (horizontal offset; same class as
+master's metrics-vs-renderer split).
+
+FIX - "one snapped pen" model:
+- src/text.c: pen_snap(x)=floorf(x+0.5f). Layout stores el.x/el.y
+  SNAPPED; center/right shift snapped; out->w snapped. Draw
+  (text_draw_screen) snaps its origin ONCE. Contract documented in
+  include/ame/text.h: consumers read el[]/w DIRECTLY (caret_i =
+  origin+el[i].x, EOL = origin+w) - never re-round. World path
+  unaffected in principle (3D poses stay continuous).
+- Editor: EOL fudge "+2.0f" REMOVED (violated EOL=w); manual
+  caret/selection sprites now base on the SAME snapped origin
+  (floorf(ox+PAD+0.5)-PAD pattern).
+- tests/test_text.c: +4 grid-contract cases (117 checks total):
+  integrality of el/w at scale 1 AND 1.15, no backsliding pens,
+  align keeps grid.
+- lean/Ame/Text.lean (pure core): snap = floor(x+1/2); pen i =
+  sum(take i adv); caretX = snap pen; inkX = caret + xoff;
+  caret_ink_exact (offset = bearing EXACTLY - omega), eol_caret_eq_
+  width (rfl via function-indexed model - avoid list-index lemma
+  fights: model pens as FUNCTIONS not lists), align_shift_preserves_
+  gaps (omega); rig (advances 17, 8.25, 19.9, 9.1) with native_decide
+  List.all bounds (NO forall-with-free-var in native_decide
+  statements; no linarith/abs in pure core).
+
+VERIFY: ctest 18/18; test_text 117 checks; lean lake build clean.
+Goldens DELIBERATELY re-baked (both stage2_particles.png +
+stage2_shadows.png): 4469 px changed = text regions ONLY, shadow
+band x370-400/y545-665 had 0 (zero) changed pixels - numerically
+isolated via PIL before re-baking.
+
+USER DEFERRED LIST (fix later, their words): (1) memory game text is
+not ON cards, it's just hidden and revealed - text should be printed
+on the card faces; (2) no multiplayer; (3) no --help.
+
+坑: cwd typos kill whole tool calls; test locals must not collide
+(lc); native_decide statements must be CLOSED (List.all pattern).

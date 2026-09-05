@@ -50,7 +50,14 @@ int  text_init(bool nearest_sampling);
 
 /* layout/measure are pure CPU — no GL needed (headless-testable).
  * box_w <= 0 disables wrapping. scale multiplies glyph metrics.
- * Returns glyph count; out may be NULL to just measure. */
+ * Returns glyph count; out may be NULL to just measure.
+ *
+ * GRID CONTRACT (mirrored in lean/Ame/Text.lean): el[].x/.y and w are
+ * SNAPPED to whole pixels (floor(+0.5)) - the pen grid. Draw snaps
+ * its origin once and consumes them as-is. Carets, selection rects
+ * and hit-tests must read el[]/w DIRECTLY (never re-round against
+ * fractional advances): caret_i.x = origin + el[i].x, EOL caret =
+ * origin + w. Then caret and ink share one grid BY CONSTRUCTION. */
 int  text_layout(const char *utf8, float box_w, int align, float scale,
                  ame_text_layout *out);
 void text_measure(const char *utf8, float box_w, int align, float scale,

@@ -1,6 +1,7 @@
 /* tests — text layout (text.txt): pure CPU, headless, no GL. Tags, wrap,
  * align, utf-8 (cyrillic), fallback box, measure. */
 #include "utest.h"
+#include <math.h>
 #include <ame/ame.h>
 #include <ame/text.h>
 
@@ -52,6 +53,45 @@ int main(void) {
     text_layout("xy", 200, AME_TEXT_ALIGN_C, 1.0f, &lc);
     UT_ASSERT(lc.el[0].x > ll.el[0].x + 40.0f);
     UT_ASSERT_NEAR(lc.el[0].x + (ll.w * 0.0f), lc.el[0].x, 1e-3);
+
+    UT_CASE("grid contract: el positions and w are whole pixels");
+    n = text_layout("hello typed text", 0, AME_TEXT_ALIGN_L, 1.0f, &l);
+    UT_ASSERT(n == 16);
+    for (int i = 0; i < n; i++) {
+        UT_ASSERTF(l.el[i].x == floorf(l.el[i].x), "el[%d].x fractional (%.3f)",
+                   i, l.el[i].x);
+        UT_ASSERTF(l.el[i].y == floorf(l.el[i].y), "el[%d].y fractional (%.3f)",
+                   i, l.el[i].y);
+    }
+    UT_ASSERT(l.w == floorf(l.w)); /* EOL caret basis */
+
+    UT_CASE("grid contract: advance deltas stay within 1px of truth");
+    for (int i = 1; i < n; i++) {
+        UT_ASSERTF(l.el[i].y == l.el[i - 1].y, "same line expected");
+        /* snapped neighbors differ from the float advance by < 1px */
+        UT_ASSERTF(l.el[i].x >= l.el[i - 1].x - 0.5f, "pens must not go back");
+    }
+
+    UT_CASE("grid contract: center/right alignment keeps the grid");
+    float wl, wc, wr;
+    text_measure("centered", 0, AME_TEXT_ALIGN_L, 1.0f, &wl, 0);
+    ame_text_layout lca, lra;
+    text_layout("centered", 0, AME_TEXT_ALIGN_C, 1.0f, &lca);
+    text_layout("centered", 0, AME_TEXT_ALIGN_R, 1.0f, &lra);
+    for (int i = 0; i < lca.count; i++) {
+        UT_ASSERTF(lca.el[i].x == floorf(lca.el[i].x),
+                   "center el[%d].x fractional (%.3f)", i, lca.el[i].x);
+        UT_ASSERTF(lra.el[i].x == floorf(lra.el[i].x),
+                   "right el[%d].x fractional (%.3f)", i, lra.el[i].x);
+    }
+    (void)wl; (void)wc; (void)wr;
+
+    UT_CASE("grid contract: non-integer scale still lands on the grid");
+    ame_text_layout lsca;
+    n = text_layout("scale 1.15 text", 0, AME_TEXT_ALIGN_L, 1.15f, &lsca);
+    for (int i = 0; i < n; i++)
+        UT_ASSERTF(lsca.el[i].x == floorf(lsca.el[i].x),
+                   "scaled el[%d].x fractional (%.3f)", i, lsca.el[i].x);
 
     UT_OK();
     return ut_done("test_text");

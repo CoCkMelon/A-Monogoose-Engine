@@ -73,7 +73,7 @@ static void index_to_px(const ed_geom *g, int idx, float *x, float *y) {
         l++;
     int col = idx - g->line_of[l];
     const ame_text_layout *lay = &g->lay[l];
-    *x = col < lay->count ? lay->el[col].x : lay->w + 2.0f;
+    *x = col < lay->count ? lay->el[col].x : lay->w; /* EOL = w */
     *y = PAD + l * g->line_h;
 }
 
@@ -331,8 +331,12 @@ int app_render(void) {
     }
 
     rp_begin_frame();
+    /* the text grid: SAME snapped origin text_draw_screen uses, so the
+     * manual caret/selection quads sit exactly on the ink grid */
     float ox, oy;
     rp_screen_origin(&ox, &oy);
+    ox = floorf(ox + PAD + 0.5f) - PAD;
+    oy = floorf(oy + PAD + 0.5f) - PAD;
 
     /* selection highlights (behind text) */
     if (cur.sel_start != cur.sel_end) {

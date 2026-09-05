@@ -5,6 +5,7 @@
 #include <ame/math.h>
 #include "font_atlas.h"
 
+#include <math.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -56,6 +57,14 @@ int text_init(bool nearest_sampling) {
 
 int text_font_px(void)    { return AME_FONT_PX; }
 float text_line_h(void)   { return AME_FONT_LINE_H; }
+
+/* Snap a coordinate to the pixel grid: floor(x + 0.5). THE text-grid
+ * contract (mirrored in lean/Ame/Text.lean): layout stores el
+ * positions ALREADY snapped, draw snaps its origin once, and every
+ * consumer (caret, selection, hit-testing) must use el[]/w as-is -
+ * one snapped pen array, no independent rounding anywhere. This is
+ * what keeps the caret exactly on the ink grid and glyphs crisp. */
+static float pen_snap(float x) { return floorf(x + 0.5f); }
 
 /* --- utf-8 decode --------------------------------------------------------- */
 static uint32_t utf8_next(const char **s) {
@@ -202,8 +211,8 @@ int text_layout(const char *utf8, float box_w, int align, float scale,
 
         if (out && out->count < AME_TXT_MAX_GLYPHS) {
             ame_txt_el *e = &out->el[out->count];
-            e->x = pen_x;
-            e->y = pen_y;
+            e->x = pen_snap(pen_x); /* snapped pen: the one grid */
+            e->y = pen_snap(pen_y);
             e->color = color;
             e->glyph = glyph;
             out->count++;
@@ -233,11 +242,12 @@ int text_layout(const char *utf8, float box_w, int align, float scale,
         float shift = 0;
         if (align == AME_TEXT_ALIGN_C) shift = (box_w > 0 ? box_w : max_line_w) * 0.5f - line_w * 0.5f;
         else if (align == AME_TEXT_ALIGN_R) shift = (box_w > 0 ? box_w : max_line_w) - line_w;
+        shift = pen_snap(shift); /* keep the grid under alignment */
         for (int i = first; i < last; i++)
             out->el[i].x += shift;
     }
 
-    out->w = max_line_w;
+    out->w = pen_snap(max_line_w); /* EOL caret sits here exactly */
     out->h = pen_y + g_line_h * scale;
     return out->count;
 }
@@ -295,9 +305,13 @@ void text_draw_screen(const ame_text_layout *l, float x, float y,
      * CENTER otherwise). */
     float ox, oy;
     rp_screen_origin(&ox, &oy);
+    /* one snap for the whole call: glyph quads AND any caret/selection
+     * the caller derives from the same el[]/origin stay on one grid */
+    ox = pen_snap(ox + x);
+    oy = pen_snap(oy + y);
     float sc = l->scale > 0.0f ? l->scale : 1.0f;
     for (int i = 0; i < l->count; i++)
-        draw_glyph(&l->el[i], x + ox, y + oy, sc, tint, layer);
+        draw_glyph(&l->el[i], ox, oy, sc, tint, layer);
 }
 
 void text_draw_world(const ame_text_layout *l, const float pose[16],
