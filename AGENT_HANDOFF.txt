@@ -849,3 +849,52 @@ measure the consumer's actual mapping (standalone probe replicating
 geom_rebuild) before declaring victory. Space-drop rule (pen 0,
 total>0) is dead code for per-line calls - only fires within one
 multi-line/wrapped call; left as-is.
+
+SESSION 17 - THE USER WAS RIGHT: "Did you even run this app and receive
+positions?" The two-ways LAW (user's design): caret (way A) vs where a
+newly inserted symbol lands (way B) must AGREE; mismatch = one is
+wrong. Implemented at three levels, and it caught THREE real bugs:
+1. tests/test_editor_geom - ctest compiled FROM examples/text_editor/
+   ed_app.c itself (#ifdef AME_ED_SELFTEST main; links ame::2d +
+   ame_font for xoff). Corpus incl Cyrillic; law A==B exact + caret
+   <= ink; determinism; midpoint hit-tests; PAD-basis absolute check.
+2. Live trace (AME_ED_TRACE=1): render thread computes A vs B each 30
+   frames; AME_ED_TEXT/AME_ED_CARET/AME_ED_SOLID_CARET QA pins (pins
+   are glyph-ALIGNED like every real input path).
+3. Pixel receipts from the running app's PPM.
+
+BUGS FOUND+FIXED THIS SESSION (editor):
+- BYTE != GLYPH: index_to_px used byte-col against per-GLYPH el[]
+  (ASCII habit). Cyrillic carets fell to w / wrong pens. Fix: ed_geom
+  keeps the bytes; glyph_cols()/byte_at_glyph() mirror text.c's
+  utf8_next (validated 2-4 byte seqs; malformed = 1 replacement/byte);
+  arrows step whole glyphs; backspace deletes whole glyphs; mouse
+  hit-test midpoints (left half -> before glyph).
+- THE REAL "TOO LEFT" (24px!): index_to_px returned x WITHOUT PAD but
+  y WITH PAD - inconsistent basis; every internal A/B passed because
+  both sides were wrong by the same constant; only drawn-bar vs
+  drawn-ink pixels exposed it. Fix: both PAD-relative (= the exact
+  basis text_draw_screen renders). Third-way absolute check in the
+  selftest pins it.
+FINAL RECEIPT (привет мир, caret flat 8): trace A=B x=86; PPM bar at
+x=86 EXACT; next ink 88 (caret 2px LEFT of new symbol = bearing);
+prev ink 83. Law holds on screen.
+
+OFFSCREEN Y-MIRROR SOLVED (not an engine bug): SDL_VIDEODRIVER=
+offscreen reads/presents come back Y-mirrored vs GL spec (EGL pbuffer
+top-left origin). Evidence chain: CPU vp math verified (vpcheck),
+sprite quads verified, VBO dump v0=(10,10,0) EXACT, GPU u_vp readback
+m5=-0.00833 EXACT, x placement EXACT (680..759 for world 10..30) -
+yet glReadPixels rows mirrored => pbuffer TLO. Real windows (BLO)
+render correctly - user only ever reported HORIZONTAL offset,
+consistent. Engine hook: AME_SHOT_NOFLIP=1 cancels the PPM writer's
+row flip for TLO pbuffers. QA images on real drivers unaffected.
+坑 mega-lesson (user's point, now standing policy): a check that
+computes both sides through the SAME code path can't catch a constant
+offset - validate against an INDEPENDENT surface (drawn pixels, a
+second renderer basis), and RECEIVE positions from the running app,
+not from a replica of its logic.
+
+Lean: Ame/Text.lean += penOf/pen_prefix/pen_insert (the two-ways
+algebraic core: inserting cannot move the pen; List.take_append_of_
+le_length). Suite 19/19 (editor_geom added).

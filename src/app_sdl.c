@@ -241,7 +241,14 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
                 FILE *f = fopen(g_shot_path, "wb");
                 if (f) {
                     fprintf(f, "P6\n%d %d\n255\n", w, h);
-                    for (int y = h - 1; y >= 0; y--) {
+                    /* default: flip GL bottom-origin rows to top-down.
+                     * AME_SHOT_NOFLIP=1 cancels it for TOP-LEFT-origin
+                     * offscreen pbuffers (SDL offscreen + EGL pbuffer),
+                     * whose reads already come back top-down. */
+                    int noflip = getenv("AME_SHOT_NOFLIP") != NULL;
+                    for (int y = noflip ? 0 : h - 1;
+                         noflip ? y < h : y >= 0;
+                         noflip ? y++ : y--) {
                         for (int x = 0; x < w; x++) {
                             const uint8_t *px =
                                 rgba + ((size_t)y * w + x) * 4;

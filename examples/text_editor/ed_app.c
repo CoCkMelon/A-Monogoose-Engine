@@ -21,6 +21,7 @@
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_scancode.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #define VIEW_W 1280
@@ -45,10 +46,45 @@ static ed_snap_t_snap SNAP;
 /* --- per-thread line geometry (text_layout is pure CPU) ------------------- */
 typedef struct {
     ame_text_layout lay[MAX_LINES];
-    int line_of[MAX_LINES]; /* flat index at each line start */
+    int line_of[MAX_LINES]; /* flat BYTE index at each line start */
     int line_count;
     float line_h;
+    char text[BUF_CAP];     /* the bytes the geom was built from */
+    int len;
 } ed_geom;
+
+/* byte <-> glyph-column maps, mirroring src/text.c's utf8_next
+ * exactly. el[] is per GLYPH; the caret is per BYTE - conflating
+ * them (an ASCII habit) is the Cyrillic caret bug the two-ways
+ * test caught. */
+static int utf8_seq(const char *s, int len, int at) {
+    unsigned char b = (unsigned char)s[at];
+    int n = 1;
+    if ((b & 0xE0) == 0xC0) n = 2;
+    else if ((b & 0xF0) == 0xE0) n = 3;
+    else if ((b & 0xF8) == 0xF0) n = 4;
+    if (at + n > len)
+        return 1;
+    for (int k = 1; k < n; k++)
+        if (((unsigned char)s[at + k] & 0xC0) != 0x80)
+            return 1; /* malformed: one replacement glyph per byte */
+    return n;
+}
+static int glyph_cols(const ed_geom *g, int line, int byte_idx) {
+    int start = g->line_of[line];
+    int at = start, cols = 0;
+    while (at < byte_idx && at < g->len) {
+        at += utf8_seq(g->text, g->len, at);
+        cols++;
+    }
+    return cols;
+}
+static int byte_at_glyph(const ed_geom *g, int line, int col) {
+    int at = g->line_of[line];
+    for (int k = 0; k < col && at < g->len; k++)
+        at += utf8_seq(g->text, g->len, at);
+    return at;
+}
 
 /* Each line is laid out ALONE. The buffer is terminated IN PLACE at
  * the newline (both sides own their copy: logic edits `buf`, render
@@ -74,6 +110,9 @@ static void geom_rebuild(ed_geom *g, char *text, int len) {
             start = i + 1;
         }
     }
+    memcpy(g->text, text, (size_t)len);
+    g->text[len] = '\0';
+    g->len = len;
 }
 
 /* flat index -> px (x within line, y top of line); both sides use this
@@ -82,9 +121,15 @@ static void index_to_px(const ed_geom *g, int idx, float *x, float *y) {
     int l = 0;
     while (l + 1 < g->line_count && g->line_of[l + 1] <= idx)
         l++;
-    int col = idx - g->line_of[l];
+    int col = glyph_cols(g, l, idx); /* BYTES -> glyph column */
     const ame_text_layout *lay = &g->lay[l];
-    *x = col < lay->count ? lay->el[col].x : lay->w; /* EOL = w */
+    /* BOTH coordinates are PAD-relative (the same basis
+       text_draw_screen uses: origin + PAD + pen). The historic
+       "caret 24px too left" was exactly this inconsistency: x was a
+       raw pen, y carried PAD - every internal A/B check passed
+       because both sides were wrong by the same constant, and only
+       comparing the DRAWN bar against the DRAWN ink exposed it. */
+    *x = PAD + (col < lay->count ? lay->el[col].x : lay->w);
     *y = PAD + l * g->line_h;
 }
 
@@ -102,12 +147,16 @@ static int mouse_to_index(const ed_geom *g, float mx, float my) {
         return g->line_of[l];
     int col = lay->count;
     for (int i = 0; i < lay->count; i++) {
-        if (lay->el[i].x > lx) {
+        /* glyph i occupies pen el[i].x .. next pen (w at EOL): land
+           BEFORE it when clicked in the left half of its advance */
+        float pen1 = (i + 1 < lay->count) ? lay->el[i + 1].x : lay->w;
+        float mid = 0.5f * (lay->el[i].x + pen1);
+        if (lx < mid) {
             col = i;
             break;
         }
     }
-    return g->line_of[l] + col;
+    return byte_at_glyph(g, l, col); /* glyph column -> BYTE */
 }
 
 /* --- logic-side editor state ---------------------------------------------- */
@@ -156,9 +205,12 @@ static void backspace(void) {
     }
     if (caret <= 0)
         return;
-    memmove(buf + caret - 1, buf + caret, (size_t)(buf_len - caret));
-    caret--;
-    buf_len--;
+    int start = caret;
+    while (start > 0 && (buf[start - 1] & 0xC0) == 0x80)
+        start--; /* delete the WHOLE glyph, not one of its bytes */
+    memmove(buf + start, buf + caret, (size_t)(buf_len - caret));
+    buf_len -= caret - start;
+    caret = start;
     buf[buf_len] = 0;
 }
 
@@ -219,9 +271,51 @@ int app_init(void) {
 
 int app_event(const void *ev) { (void)ev; return 0; }
 
+/* measurement hooks (QA): AME_ED_CARET=<flat> pins the caret,
+ * AME_ED_SOLID_CARET stops the blink, AME_ED_TRACE prints the live
+ * two-ways check each 30 frames: the DRAWN caret (way A) vs the pen
+ * where a symbol inserted at the caret actually lands (way B). */
+static int env_caret(void) {
+    const char *s = getenv("AME_ED_CARET");
+    return s ? atoi(s) : -1;
+}
+
+static int ed_fixed(float dt);
+
 int app_fixed(float dt) {
+
+    return ed_fixed(dt);
+}
+
+static int ed_fixed(float dt) {
     (void)dt;
     int dirty = 0;
+
+    {
+        static int text_forced = 0;
+        if (!text_forced) {
+            text_forced = 1;
+            const char *t = getenv("AME_ED_TEXT");
+            if (t && *t && strlen(t) < BUF_CAP - 1) {
+                strcpy(buf, t);
+                buf_len = (int)strlen(buf);
+                caret = buf_len;
+                sel_clear();
+                dirty = 1;
+            }
+        }
+        int pin = env_caret();
+        if (pin >= 0 && pin <= buf_len && pin != caret) {
+            caret = pin;
+            /* align like every real input path (arrows/mouse/backspace
+               are glyph-stepping): the QA pin must not park mid-glyph,
+               where the two-ways law is vacuous by construction */
+            while (caret > 0 && (buf[caret] & 0xC0) == 0x80)
+                caret--;
+            sel_clear();
+            dirty = 1;
+        }
+    }
 
     if (in_key_down_raw(SDL_SCANCODE_ESCAPE))
         return 1;
@@ -252,11 +346,17 @@ int app_fixed(float dt) {
                 sel_anchor = caret;
                 sel_active = 1;
             }
-            caret += step;
-            if (caret < 0)
-                caret = 0;
-            if (caret > buf_len)
-                caret = buf_len;
+            if (step < 0) {
+                if (caret > 0)
+                    caret--;
+                while (caret > 0 && (buf[caret] & 0xC0) == 0x80)
+                    caret--; /* skip UTF-8 continuation bytes */
+            } else {
+                if (caret < buf_len)
+                    caret++;
+                while (caret < buf_len && (buf[caret] & 0xC0) == 0x80)
+                    caret++;
+            }
             if (shift)
                 sel_normalize();
             else
@@ -377,11 +477,45 @@ int app_render(void) {
         text_draw_screen(&draw_geom.lay[l], PAD,
                          PAD + l * draw_geom.line_h, white, 10);
 
-    /* caret (blink 1 Hz - presentation-only clock) */
+    /* caret (blink 1 Hz - presentation-only clock; solid for QA) */
     static Uint64 t0;
     if (!t0)
         t0 = SDL_GetTicks();
-    if ((((SDL_GetTicks() - t0) / 500u) & 1u) == 0u) {
+    static int solid = -1;
+    if (solid < 0)
+        solid = getenv("AME_ED_SOLID_CARET") ? 1 : 0;
+    static int trace = -1;
+    if (trace < 0)
+        trace = getenv("AME_ED_TRACE") ? 1 : 0;
+    if (trace) {
+        /* way A: the caret we are about to draw. way B: insert 'X' at
+           the caret, rebuild, read where IT lands - must be the same
+           grid point, and its ink must be at/after the caret. */
+        static ed_geom probe;
+        static char scratch[BUF_CAP];
+        static int frame;
+        if ((++frame % 30) == 1) {
+            float sox, soy;
+            rp_screen_origin(&sox, &soy);
+            printf("[ed trace] screen origin=(%.1f,%.1f) PAD=%.0f\n", sox,
+                   soy, (float)PAD);
+            float ax, ay;
+            index_to_px(&draw_geom, cur.caret, &ax, &ay);
+            int n = (int)cur.len < BUF_CAP - 1 ? (int)cur.len : BUF_CAP - 2;
+            int at = cur.caret < n ? cur.caret : n;
+            memcpy(scratch, cur.text, (size_t)at);
+            scratch[at] = 'X';
+            memcpy(scratch + at + 1, cur.text + at, (size_t)(n - at));
+            geom_rebuild(&probe, scratch, n + 1);
+            float bx, by;
+            index_to_px(&probe, at, &bx, &by);
+            printf("[ed trace] f%d caret flat %d: A (drawn) x %.1f y %.1f | "
+                   "B (new glyph pen) x %.1f y %.1f | delta %.1f %s\n",
+                   frame, cur.caret, ax, ay, bx, by, bx - ax,
+                   (ax == bx && ay == by) ? "OK" : "MISMATCH");
+        }
+    }
+    if (solid || (((SDL_GetTicks() - t0) / 500u) & 1u) == 0u) {
         float cx, cy;
         index_to_px(&draw_geom, cur.caret, &cx, &cy);
         rp_push_sprite(rp_white_texture(), ox + cx, oy + cy + 3.0f, 2.0f,
@@ -393,3 +527,191 @@ int app_render(void) {
 }
 
 void app_quit(void) {}
+
+/* --- QA SELF-TEST -----------------------------------------------------------
+ * Compiled from the REAL app source (tests/test_editor_geom) so the
+ * invariant binds the code that ships, not a replica. THE LAW (user
+ * demand): the drawn caret (way A: index_to_px on the current geom)
+ * and the place a newly typed symbol actually appears (way B: insert
+ * 'X' at the caret, rebuild the geom, read ITS pen) are TWO WAYS of
+ * computing one quantity - they must match exactly, on the grid, and
+ * the new ink must land at/after the caret. The historic bugs both
+ * broke this: sub-line swallowing made B read the next line's glyph
+ * (EOL caret at x~0), fractional pens made A and B drift apart. */
+#ifdef AME_ED_SELFTEST
+#include <font_atlas.h>
+
+static int ed_failures;
+
+static int glyph_xoff(uint32_t cp) {
+    int lo = 0, hi = ame_font_glyph_count - 1;
+    while (lo <= hi) {
+        int m = (lo + hi) / 2;
+        if ((uint32_t)ame_font_glyphs[m].cp == cp)
+            return ame_font_glyphs[m].xoff;
+        if ((uint32_t)ame_font_glyphs[m].cp < cp)
+            lo = m + 1;
+        else
+            hi = m - 1;
+    }
+    return 0;
+}
+
+static void two_ways_at(const char *label, const char *buf, int len, int i) {
+    static ed_geom A, B;
+    static char with_x[BUF_CAP];
+    char tmp[BUF_CAP];
+    memcpy(tmp, buf, (size_t)len); /* geom_rebuild terminates in place */
+
+    geom_rebuild(&A, tmp, len);
+    float ax, ay;
+    index_to_px(&A, i, &ax, &ay); /* way A: the drawn caret */
+
+    int n = len + 1;
+    memcpy(with_x, buf, (size_t)i);
+    with_x[i] = 'X';
+    memcpy(with_x + i + 1, buf + i, (size_t)(len - i));
+    geom_rebuild(&B, with_x, n);
+    float bx, by;
+    index_to_px(&B, i, &bx, &by); /* way B: where the new symbol lands */
+
+    if (ax != bx || ay != by) {
+        printf("FAIL %s i=%d '%c': caret A(%.1f,%.1f) != new-glyph pen "
+               "B(%.1f,%.1f)\n", label, i, i < len ? buf[i] : '#', ax, ay,
+               bx, by);
+        ed_failures++;
+        return;
+    }
+    /* caret must sit LEFT of (or at) the new symbol's ink */
+    float ink = bx + (float)glyph_xoff('X');
+    if (ax > ink + 0.001f) {
+        printf("FAIL %s i=%d: caret %.1f RIGHT of new ink %.1f\n", label, i,
+               ax, ink);
+        ed_failures++;
+    }
+}
+
+int main(void) {
+    static const char *corpus[] = {
+        "hello typed text",
+        "hi\n  ind(x)\nx",
+        "a",
+        "",
+        "\n",
+        "\n\n",
+        "line\n\nnext",
+        "trailing   \nlast",
+        "0123456789 abcdefghijklmnop",
+        "угщ ютф",
+    };
+    int ncases = (int)(sizeof corpus / sizeof corpus[0]);
+    for (int c = 0; c < ncases; c++) {
+        const char *b = corpus[c];
+        int len = (int)strlen(b);
+        int step = 1;
+        int from = 0;
+        /* multibyte corpus: only insert at char boundaries so the 'X'
+           keeps the byte<->element arithmetic strict */
+        for (int k = 0; k < len; k++)
+            if ((unsigned char)b[k] >= 0x80) {
+                while (k < len && (unsigned char)b[k] >= 0x80)
+                    k++;
+                (void)0;
+            }
+        (void)from; (void)step;
+        int ascii = 1;
+        for (int k = 0; k < len; k++)
+            if ((unsigned char)b[k] >= 0x80)
+                ascii = 0;
+        for (int i = 0; i <= len; i++) {
+            if (!ascii) {
+                /* boundaries only: start, end, or after '\n'/space */
+                int boundary = i == 0 || i == len || b[i - 1] == '\n'
+                               || b[i - 1] == ' ';
+                if (!boundary)
+                    continue;
+            }
+            two_ways_at(corpus[c], b, len, i);
+        }
+    }
+
+    /* determinism: two rebuilds of the same buffer agree byte-for-byte */
+    {
+        static ed_geom G1, G2;
+        char t1[BUF_CAP], t2[BUF_CAP];
+        strcpy(t1, "abc\n def\\ ghi\nj");
+        strcpy(t2, t1);
+        geom_rebuild(&G1, t1, (int)strlen(t1));
+        geom_rebuild(&G2, t2, (int)strlen(t2));
+        if (memcmp(&G1.line_of, &G2.line_of, sizeof G1.line_of) != 0
+            || G1.line_count != G2.line_count
+            || memcmp(&G1.lay, &G2.lay, sizeof G1.lay) != 0) {
+            printf("FAIL determinism\n");
+            ed_failures++;
+        }
+    }
+
+    /* hit-test consistency: clicking in the LEFT half of glyph i's
+       advance must land the caret BEFORE glyph i (== its pen) */
+    {
+        static ed_geom G;
+        char t[BUF_CAP];
+        strcpy(t, "hit testing here");
+        geom_rebuild(&G, t, (int)strlen(t));
+        const ame_text_layout *lay = &G.lay[0];
+        for (int i = 0; i < lay->count; i++) {
+            float pen1 = (i + 1 < lay->count) ? lay->el[i + 1].x : lay->w;
+            float mid = 0.5f * (lay->el[i].x + pen1);
+            for (float f = 0.0f; f <= 0.49f; f += 0.12f) {
+                float lx = lay->el[i].x + f * (pen1 - lay->el[i].x);
+                if (lx >= mid)
+                    continue;
+                int got = mouse_to_index(&G, PAD + lx,
+                                         PAD + 0.5f * G.line_h);
+                if (got != G.line_of[0] + i) {
+                    printf("FAIL hit-test: click at %.1f (left half of "
+                           "glyph %d, pen %.1f..%.1f) -> flat %d, want "
+                           "%d\n", lx, i, lay->el[i].x, pen1, got,
+                           G.line_of[0] + i);
+                    ed_failures++;
+                }
+            }
+        }
+    }
+
+    /* absolute basis: index_to_px must equal PAD + (el pen | w) -
+       the exact quantity text_draw_screen renders. A constant
+       offset here (the historic 24px) hides from every relative
+       A/B check but breaks caret-vs-ink on screen. */
+    {
+        static ed_geom G;
+        char t[BUF_CAP];
+        strcpy(t, "abc\n деф\nx");
+        geom_rebuild(&G, t, (int)strlen(t));
+        for (int idx = 0; idx <= (int)strlen(t); idx++) {
+            int l = 0;
+            while (l + 1 < G.line_count && G.line_of[l + 1] <= idx)
+                l++;
+            int col = glyph_cols(&G, l, idx);
+            const ame_text_layout *lay = &G.lay[l];
+            float want_x = PAD + (col < lay->count ? lay->el[col].x
+                                                   : lay->w);
+            float ax, ay;
+            index_to_px(&G, idx, &ax, &ay);
+            if (ax != want_x) {
+                printf("FAIL basis: idx %d px %.1f != PAD+pen %.1f\n", idx,
+                       ax, want_x);
+                ed_failures++;
+            }
+        }
+    }
+
+    if (ed_failures) {
+        printf("== test_editor_geom: %d FAILURE(S) ==\n", ed_failures);
+        return 1;
+    }
+    printf("== test_editor_geom: two-ways caret law holds "
+           "(A == B, caret <= ink) ==\n");
+    return 0;
+}
+#endif /* AME_ED_SELFTEST */

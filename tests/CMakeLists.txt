@@ -126,3 +126,15 @@ endif()
     set_tests_properties(render PROPERTIES
         ENVIRONMENT "LIBGL_ALWAYS_SOFTWARE=1")
 endif()
+
+# editor caret contract - compiled from the REAL app source (not a
+# replica): two-ways law (drawn caret == pen where a new symbol
+# lands; caret left of new ink), determinism, midpoint hit-tests.
+add_executable(test_editor_geom
+    ${CMAKE_SOURCE_DIR}/examples/text_editor/ed_app.c)
+target_compile_definitions(test_editor_geom PRIVATE
+    AME_2D=1 AME_INPUT_SDL=1 AME_ED_SELFTEST=1)
+target_link_libraries(test_editor_geom PRIVATE ame::2d ame_font)
+target_compile_options(test_editor_geom PRIVATE
+    -Wall -Wextra -Werror -ffp-contract=off)
+add_test(NAME editor_geom COMMAND test_editor_geom)
