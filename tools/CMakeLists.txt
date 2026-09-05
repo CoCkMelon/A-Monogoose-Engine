@@ -3,7 +3,7 @@
 # WITHOUT warnings-as-errors (vendored-code exemption, build.txt rule 3).
 
 add_executable(bake_font bake_font.c)
-target_include_directories(bake_font PRIVATE ${CMAKE_SOURCE_DIR}/third_party/stb)
+target_include_directories(bake_font PRIVATE ${CMAKE_SOURCE_DIR}/external/stb)
 target_compile_options(bake_font PRIVATE -Wall -Wextra -ffp-contract=off)
 if(UNIX AND NOT APPLE)
     target_link_libraries(bake_font PRIVATE m)

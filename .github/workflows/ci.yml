@@ -1,7 +1,7 @@
 name: ci
 
 # ame-next CI (build.txt): every job builds the engine's OWN code with
-# warnings-as-errors; third_party/ is exempt. The Linux job also RUNS the
+# warnings-as-errors; external/ is exempt. The Linux job also RUNS the
 # tests headlessly (logic + golden render under llvmpipe/EGL surfaceless).
 # Windows/Android/web toolchain jobs are tracked in AGENT_HANDOFF.txt.
 

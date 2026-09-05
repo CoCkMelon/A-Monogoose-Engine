@@ -5,7 +5,7 @@
  * directly. Deterministic, zero startup cost, identical on native and web.
  *
  * The baker is a host tool: it is never linked into the engine, and it is the
- * single TU that touches stb_truetype (third_party/, warning-exempt).
+ * single TU that touches stb_truetype (external/, warning-exempt).
  *
  * usage: bake_font <font.ttf> <pixel_size> <out_prefix>
  */
@@ -15,7 +15,7 @@
 #include <string.h>
 
 #define STB_TRUETYPE_IMPLEMENTATION /* single TU, build-time tool only */
-#include <stb_truetype.h>           /* third_party/stb include dir */
+#include <stb_truetype.h>           /* external/stb include dir */
 
 /* glyph ranges: latin, latin-1 supplement + latin-ext-A, cyrillic */
 static const struct { uint32_t lo, hi; } RANGES[] = {

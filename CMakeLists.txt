@@ -26,7 +26,7 @@ option(AME_BUILD_ASYNCINPUT_GAME "Build the asyncinput-backend game variant" OFF
 # ---------------------------------------------------------------------------
 set(AME_FP_FLAGS "-ffp-contract=off")
 
-# The engine's OWN code is warnings-as-errors. third_party/ and tools/ are
+# The engine's OWN code is warnings-as-errors. external/ and tools/ are
 # exempt (build.txt rule 3 / vendored-code exemption).
 set(AME_WARN_FLAGS "-Wall;-Wextra;-Werror")
 
@@ -110,18 +110,18 @@ endif()
 
 # asyncinput: bundled dep of AME_INPUT_ASYNCINPUT builds (input.txt/build.txt).
 # Plain clones must fail LOUDLY with the fix, not with a CMake error later.
-if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/third_party/asyncinput/CMakeLists.txt")
+if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/external/asyncinput/CMakeLists.txt")
     message(FATAL_ERROR
-        "third_party/asyncinput is empty: the git submodule is not initialized.\n"
+        "external/asyncinput is empty: the git submodule is not initialized.\n"
         "Fix: git submodule update --init")
 endif()
 set(ASYNCINPUT_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(ASYNCINPUT_BUILD_SHARED OFF CACHE BOOL "" FORCE)
 set(AME_SAVE_BUILD_TESTING ${BUILD_TESTING})
 set(BUILD_TESTING OFF) # asyncinput's own smoke test stays out of our ctest
-add_subdirectory(third_party/asyncinput EXCLUDE_FROM_ALL)
+add_subdirectory(external/asyncinput EXCLUDE_FROM_ALL)
 set(BUILD_TESTING ${AME_SAVE_BUILD_TESTING})
-# third_party/asyncinput's own repo builds with default glibc feature
+# external/asyncinput's own repo builds with default glibc feature
 # macros; our strict C23 hides clock_gettime/O_CLOEXEC/usleep from its
 # posix backend. Give the vendored target the macros (external review
 # finding: the asyncinput game variant did not build).

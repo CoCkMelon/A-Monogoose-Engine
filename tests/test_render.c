@@ -136,7 +136,7 @@ static uint32_t hash_frame(void) {
     return ame_fnv1a(2166136261u, px, sizeof px);
 }
 
-/* PNG writer via stb_image_write (third_party, this one test TU) */
+/* PNG writer via stb_image_write (external, this one test TU) */
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include <stb_image_write.h>
 
