@@ -111,11 +111,14 @@ static void pass_turn(mem_game *g) {
     for (int i = 0; i < g->count; i++)
         if (!g->card[i].matched)
             all = false;
-    if (all)
+    if (all) {
         g->phase = MEM_PHASE_OVER;
+        g->over_t = g->t;
+    }
 }
 
 void mem_step(mem_game *g, float dt) {
+    g->t += dt;
     g->phase_t += dt;
     switch (g->phase) {
     case MEM_PHASE_PICK1:
@@ -138,6 +141,8 @@ void mem_step(mem_game *g, float dt) {
             if (is_match) {
                 g->card[g->first].matched = 1;
                 g->card[g->second].matched = 1;
+                g->card[g->first].matched_at = g->t;
+                g->card[g->second].matched_at = g->t;
                 g->score[g->turn]++;
             } else if (g->first >= 0 && g->second >= 0) {
                 start_flip(&g->card[g->first], MEM_CARD_CLOSING);

@@ -34,6 +34,12 @@ static SDL_GLContext g_gl = NULL;
 static SDL_Thread *g_logic = NULL;
 static _Atomic int g_run;       /* 1 = running, 0 = stop requested */
 static _Atomic int g_exit_code;
+/* QA/headless: AME_FIXED_FRAME_DT=seconds runs the logic INLINE in the
+ * render iterate (exactly dt per rendered frame, no logic thread), so
+ * frame N always sees sim time N*dt - byte-deterministic captures of
+ * mid-game animation (with e.g. AME_AUTOPLAY). Unset = the normal
+ * split-thread 1 kHz loop (loop.txt). */
+static double g_fixed_dt = 0.0;
 
 static int logic_thread(void *ud) {
     (void)ud;
@@ -127,8 +133,14 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char **argv) {
 
     atomic_store(&g_run, 1);
     atomic_store(&g_exit_code, 0);
-    g_logic = SDL_CreateThread(logic_thread, "ame-logic", NULL);
-    if (!g_logic)
+    {
+        const char *ffd = SDL_getenv("AME_FIXED_FRAME_DT");
+        if (ffd)
+            g_fixed_dt = SDL_strtod(ffd, NULL);
+    }
+    if (g_fixed_dt <= 0.0)
+        g_logic = SDL_CreateThread(logic_thread, "ame-logic", NULL);
+    if (g_fixed_dt <= 0.0 && !g_logic)
         return SDL_APP_FAILURE;
     return SDL_APP_CONTINUE;
 }
@@ -190,6 +202,12 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
     (void)appstate;
     if (!atomic_load_explicit(&g_run, memory_order_relaxed))
         return SDL_APP_SUCCESS;
+    if (g_fixed_dt > 0.0) {
+        /* fixed-frame QA mode: step logic inline, exact dt per frame */
+        in_begin_step();
+        if (app_fixed((float)g_fixed_dt) != 0)
+            return SDL_APP_SUCCESS;
+    }
     if (app_render() != 0)
         return SDL_APP_SUCCESS;
     SDL_GL_SwapWindow(g_window);

@@ -5,8 +5,10 @@
 # dimension-agnostic suites
 add_executable(test_math   test_math.c)
 add_executable(test_pool   test_pool.c)
+add_executable(test_particles test_particles.c)
 target_link_libraries(test_math PRIVATE ame)
 target_link_libraries(test_pool PRIVATE ame)
+target_link_libraries(test_particles PRIVATE ame)
 
 add_executable(test_camera test_camera.c)
 target_link_libraries(test_camera PRIVATE ame::3d)
@@ -22,6 +24,7 @@ endforeach()
 
 add_test(NAME math   COMMAND test_math)
 add_test(NAME pool   COMMAND test_pool)
+add_test(NAME particles COMMAND test_particles)
 add_test(NAME geo2d  COMMAND test_geometry_2d)
 add_test(NAME geo3d  COMMAND test_geometry_3d)
 

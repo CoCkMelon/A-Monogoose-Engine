@@ -326,3 +326,34 @@ SESSION 7 ADDENDUM - STAGE 2 SLICE 2: THE MULTIPASS DECISION + POST:
   (deterministic across runs); shots/stage2_post_vignette.png.
 - Loader additions: FBO/renderbuffer fns, DRAWARRAYS, GETINTEGERV,
   UNIFORM3FV/UNIFORM1F. rp_viewport grows/shrinks the scene target.
+
+SESSION 7 ADDENDUM 2 - STAGE 2 SLICE 3: PARTICLES (single pass only):
+- include/ame/particles.h + src/particles.c: SoA pool (2048), pt_spawn/
+  pt_step (gravity+drag, swap-with-last removal)/pt_draw (camera-facing
+  billboards from the camera basis, size0->size1 + col0->col1 fade,
+  unlit, ONE rp batch). NO RNG in the module - callers parameterize
+  spawns, so effects are reproducible.
+- GAME EFFECTS ARE A PURE FUNCTION OF THE SNAPSHOT: the first
+  (stateful, display-side) implementation broke screenshot determinism
+  - accumulated particle state depends on WHICH sim t each display
+  frame samples. Rebuild-from-scratch each frame instead: sim stamps
+  card.matched_at / game.over_t (mem_sim), the app recomputes
+  closed-form trajectories (linear damping has a closed form:
+  p(a) = o + v0(a - k a^2/2) + g a^2/2) into a scratch pool and draws.
+  Frame = f(snapshot) only -> byte-deterministic MID-ANIMATION captures.
+- AME_FIXED_FRAME_DT (app_sdl.c): QA mode - no logic thread; iterate
+  calls app_fixed(dt) inline per rendered frame, so frame N sees
+  exactly sim t = N*dt. With AME_AUTOPLAY=1 (local-only honest-memory
+  bot) captures are deterministic at ANY frame index (proven: frames
+  200..950 byte-identical across runs, bursts + confetti in flight).
+- REAL BUG FIXED by this slice: app_fixed hardcoded mem_step(SIM,
+  0.001f) - correct only for the 1 kHz thread; now steps by its dt
+  parameter (thread path identical, dt=0.001).
+- Tests: test_particles (pool semantics, no GL: dense front, visible
+  overflow drop, swap-remove identity via velocity signatures,
+  bit-identical lockstep states) + render case (64 billboards = 64
+  quads, stable hash, expiry to zero). 12/12 ctest. Quiet golden
+  UNCHANGED (no input -> no effects -> byte-identical frame 5).
+- shots/stage2_particles.png: autoplay frame 500 (matched cards green,
+  bursts flying) - byte-reproducible via AME_FIXED_FRAME_DT=0.0166667
+  AME_AUTOPLAY=1 AME_SCREENSHOT_FRAMES=500.

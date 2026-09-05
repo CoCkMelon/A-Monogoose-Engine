@@ -16,6 +16,7 @@
 #include <ame/geometry.h>
 #include <ame/input.h>
 #include <ame/math.h>
+#include <ame/particles.h>
 #include <ame/render.h>
 #include <ame/text.h>
 
@@ -49,6 +50,9 @@ typedef struct {
     int turn;
     int phase;      /* mem_phase */
     int hover;      /* hovered card idx or -1 (pickable) */
+    float sim_t;    /* deterministic sim seconds (effect clock) */
+    float matched_at[MEM_MAX_CARDS]; /* sim t each card matched (fx) */
+    float over_t;                    /* sim t the game ended (fx) */
     int winner;     /* -2 while playing, -1 tie, 0/1 winner */
     uint8_t online; /* Stage 1: thin client of an authoritative server */
     uint8_t you;    /* our player slot when online */
@@ -109,6 +113,10 @@ static void publish_snapshot(int hover) {
     s.turn = SIM->turn;
     s.phase = (int)SIM->phase;
     s.hover = hover;
+    s.sim_t = SIM->t;
+    s.over_t = SIM->over_t;
+    for (int i = 0; i < SIM->count; i++)
+        s.matched_at[i] = SIM->card[i].matched_at;
     s.winner = mem_over(SIM) ? mem_winner(SIM) : -2;
     s.online = (uint8_t)g_online;
     s.you = CLI.you < 0 ? 0 : (uint8_t)CLI.you;
@@ -389,9 +397,61 @@ static void try_pick(void) {
 }
 
 int app_fixed(float dt) {
-    (void)dt;
     online_pump();
     try_pick();
+
+    /* AME_AUTOPLAY=1 (local mode only): deterministic honest-memory
+     * bot drives the game so headless captures (with
+     * AME_FIXED_FRAME_DT) can prove effects/animation byte-exactly. */
+    if (!g_online && SDL_getenv("AME_AUTOPLAY")) {
+        static double acc = 0;
+        acc += dt;
+        if (acc > 0.35) {
+            acc = 0;
+            if (!mem_over(SIM)
+                && (SIM->phase == MEM_PHASE_PICK1
+                    || SIM->phase == MEM_PHASE_PICK2)) {
+                int slot = SIM->phase == MEM_PHASE_PICK1 ? 0 : 1;
+                int choice = -1;
+                int n = SIM->count;
+                if (slot == 0) {
+                    for (int p = 0; p < 256 && choice < 0; p++) {
+                        int a2 = -1, b2 = -1;
+                        for (int i = 0; i < n; i++) {
+                            if (SIM->card[i].matched) continue;
+                            if (SIM->card[i].state != MEM_CARD_DOWN) continue;
+                            if (SIM->card[i].pair == (uint8_t)p) {
+                                if (a2 < 0) a2 = i; else b2 = i;
+                            }
+                        }
+                        if (a2 >= 0 && b2 >= 0) { choice = a2; break; }
+                    }
+                    if (choice < 0)
+                        for (int i = 0; i < n; i++)
+                            if (!SIM->card[i].matched
+                                && SIM->card[i].state == MEM_CARD_DOWN) {
+                                choice = i; break;
+                            }
+                } else if (SIM->first >= 0) {
+                    int fp = SIM->card[SIM->first].pair;
+                    for (int i = 0; i < n; i++)
+                        if (i != SIM->first && !SIM->card[i].matched
+                            && SIM->card[i].state == MEM_CARD_DOWN
+                            && SIM->card[i].pair == (uint8_t)fp) {
+                            choice = i; break;
+                        }
+                    if (choice < 0)
+                        for (int i = 0; i < n; i++)
+                            if (i != SIM->first && !SIM->card[i].matched
+                                && SIM->card[i].state == MEM_CARD_DOWN) {
+                                choice = i; break;
+                            }
+                }
+                if (choice >= 0 && mem_pick(&G, choice))
+                    audio_play(au_flip);
+            }
+        }
+    }
 
     int hover = hover_from_mouse();
     int hover_pickable = card_pickable(hover) && my_move() ? hover : -1;
@@ -405,7 +465,9 @@ int app_fixed(float dt) {
     }
 
     int prev_phase = (int)SIM->phase;
-    mem_step(SIM, 0.001f);
+    mem_step(SIM, dt); /* dt = the caller's fixed step (loop.txt: the
+                        * logic thread passes 1 ms; the fixed-frame QA
+                        * mode passes one render frame) */
     if (prev_phase != (int)SIM->phase) {
         if (SIM->phase == MEM_PHASE_RESOLVE && SIM->was_match)
             audio_play(au_match);
@@ -553,8 +615,86 @@ static void take_screenshot(int w, int h) {
         SDL_Log("memory_game: screenshot write failed");
 }
 
+/* --- Stage 2 particles: single-pass billboards -------------------
+ * PURE FUNCTION OF THE SNAPSHOT: every effect is a closed-form
+ * trajectory parameterized by SIM time (matched_at / over_t), so the
+ * rendered frame depends only on the sim state - never on display
+ * timing. Screenshots/replays stay byte-deterministic even with
+ * effects on screen (AME_AUTOPLAY captures prove it). The scratch
+ * pool is REBUILT each frame; pt_draw handles billboarding/fade. */
+static ame_particles PT;
+
+/* linear-damping closed form:  v(a) = v0*(1-k a)
+ *                              p(a) = o + v0 (a - k a^2/2) + g a^2/2 */
+static void fx_burst(const mem_snap *s, int i) {
+    float age0 = s->sim_t - s->matched_at[i];
+    const float T = 0.9f, k = 0.9f, gy = -1.7f;
+    if (!(age0 >= 0.0f && age0 < T))
+        return;
+    float cx = s->x[i], cz = s->z[i];
+    for (int j = 0; j < 26; j++) {
+        float a = (float)j * 2.399963f + (float)i * 0.7f;
+        float sp = 0.55f + 0.45f * (float)((i * 7 + j * 13) % 16) / 15.0f;
+        float ttl = 0.7f + 0.3f * sp;
+        float v0[3] = { cosf(a) * sp, 0.9f + 0.5f * sp, sinf(a) * sp };
+        float age = age0;
+        if (age > ttl)
+            continue;
+        float px2 = cx + v0[0] * (age - k * age * age * 0.5f);
+        float py2 = 0.12f + v0[1] * (age - k * age * age * 0.5f)
+                  + 0.5f * gy * age * age;
+        float pz2 = cz + v0[2] * (age - k * age * age * 0.5f);
+        uint8_t c0[4] = { 120, 235, 150, 235 };
+        uint8_t c1[4] = { 40, 160, 90, 0 };
+        pt_spawn(&PT, px2, py2, pz2, v0[0], v0[1], v0[2],
+                 ttl - age, 0.09f, 0.01f, c0, c1);
+    }
+}
+
+static void fx_confetti(const mem_snap *s) {
+    if (s->phase != (int)MEM_PHASE_OVER || s->over_t <= 0.0f)
+        return;
+    float over_age = s->sim_t - s->over_t;
+    if (over_age < 0.0f)
+        return;
+    const float k = 0.35f, gy = -1.7f;
+    static const uint8_t pal[4][4] = {
+        { 255, 120, 90, 235 }, { 120, 200, 255, 235 },
+        { 255, 210, 90, 235 }, { 170, 120, 255, 235 },
+    };
+    int n = (int)(over_age / 0.02f); /* one confetto per sim 20 ms */
+    if (n > 90)
+        n = 90;
+    for (int j = 0; j < n; j++) {
+        float age = over_age - 0.02f * (float)j;
+        const float ttl = 1.6f;
+        if (age >= ttl)
+            continue;
+        int h = (j * 31 + (int)s->over_t) % 97;
+        float v0[3] = { 0.06f * (h % 5 - 2), -0.5f, 0.06f * (h % 3 - 1) };
+        float px2 = -2.2f + 4.4f * (float)(h % 97) / 96.0f
+                  + v0[0] * (age - k * age * age * 0.5f);
+        float py2 = 2.6f + v0[1] * (age - k * age * age * 0.5f)
+                  + 0.5f * gy * age * age;
+        float pz2 = -1.6f + 3.2f * (float)(h % 61) / 60.0f
+                  + v0[2] * (age - k * age * age * 0.5f);
+        uint8_t c1[4] = { pal[h % 4][0], pal[h % 4][1], pal[h % 4][2], 0 };
+        pt_spawn(&PT, px2, py2, pz2, v0[0], v0[1], v0[2], ttl - age,
+                 0.075f, 0.03f, pal[h % 4], c1);
+    }
+}
+
+static void particle_effects(const mem_snap *s) {
+    pt_reset(&PT);
+    for (int i = 0; i < s->count; i++)
+        if (s->matched[i])
+            fx_burst(s, i);
+    fx_confetti(s);
+}
+
 int app_render(void) {
     const mem_snap *s = mem_snap_latest(&SNAP);
+    particle_effects(s);
     rp_begin_frame();
 
     float tw = GRID_COLS * (CARD_W + GAP) + 1.0f;
@@ -626,6 +766,9 @@ int app_render(void) {
         float gray[4] = { 0.7f, 0.7f, 0.75f, 1 };
         text_draw_world(&l2, pose2, gray, 31);
     }
+
+    /* match bursts + win confetti (unlit single-pass billboards) */
+    pt_draw(&PT, &CAM, rp_white_texture(), 30);
 
     draw_cursor(s);
 

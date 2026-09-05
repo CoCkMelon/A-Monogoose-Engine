@@ -43,6 +43,7 @@ typedef struct {
     uint8_t state;       /* mem_card_state */
     uint8_t matched;     /* stays face up forever */
     float   angle;       /* 0 = face down, 180 = face up (degrees) */
+    float   matched_at;  /* sim t this card matched (effect stamp) */
 } mem_card;
 
 typedef struct {
@@ -56,7 +57,10 @@ typedef struct {
     int      picks;            /* total cards opened (stats) */
     bool     resolved;         /* RESOLVE entry work done this turn */
     bool     was_match;        /* last turn resolved as a match */
+    float    over_t;           /* sim t the game ended (effect stamp) */
     uint32_t rng;              /* seeded at reset; drives shuffle only */
+    float    t;                /* deterministic seconds since reset
+                              * (presentation clock: particles etc.) */
 } mem_game;
 
 /* fixed animation speed (deg/s): 180 degrees in ~0.33 s */

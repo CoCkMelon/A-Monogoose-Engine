@@ -58,6 +58,8 @@ resumes from a full snapshot; click after `WIN` for a voted rematch.
 | `AME_SCREENSHOT_FRAMES=n` | N (default 5) |
 | `AME_FAKE_MOUSE=x,y` | headless hover checks |
 | `AME_WINDOW_W/H` | window size |
+| `AME_AUTOPLAY=1` | local: deterministic honest-memory bot (QA captures) |
+| `AME_FIXED_FRAME_DT=s` | QA: logic runs inline at s/render-frame (deterministic mid-game screenshots; e.g. 0.0166667) |
 | `MEM_TIME_SCALE=k` | server: authoritative pacing (tests) |
 | `MEM_IDLE_EXIT=s` | server: exit when nobody is connected |
 

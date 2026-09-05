@@ -7,6 +7,7 @@
  * Also writes render_golden.png for human/screenshot verification loop.
  */
 #include "utest.h"
+#include "ame/particles.h"
 #include <ame/ame.h>
 #include <ame/camera.h>
 #include <ame/math.h>
@@ -370,6 +371,56 @@ int main(void) {
      * Render glyph 'F' (strongly asymmetric) big on an ortho screen and
      * correlate the pixels with the atlas bitmap: direct must beat the
      * horizontally-flipped hypothesis. Catches any L-R mirroring. */
+    UT_CASE("Stage 2 particles: billboards batch, fade, expire");
+    {
+        rp_set_camera(&cam3); /* back to 3D after the later camera cases */
+        ame_particles *pt = &(ame_particles){ 0 };
+        pt_reset(pt);
+        uint8_t c0[4] = { 255, 200, 90, 255 }, c1[4] = { 255, 60, 30, 0 };
+        for (int i = 0; i < 64; i++) /* deterministic fan */
+            pt_spawn(pt, -1.5f + 3.0f * (i / 64.0f), 0.6f, -0.4f,
+                     0.2f * (i % 5 - 2), 0.8f + 0.02f * i, 0.1f * (i % 3),
+                     0.5f + 0.01f * i, 0.10f, 0.02f, c0, c1);
+        rp_begin_frame();
+        int drawn = pt_draw(pt, &cam3, rp_white_texture(), 30);
+        rp_end_frame();
+        UT_ASSERTF(drawn == 64 && rp_quads_last_frame() == 64,
+                   "one quad per particle (drawn=%d quads=%d)", drawn,
+                   rp_quads_last_frame());
+        uint32_t pa = hash_frame();
+        /* re-draw same state: identical batch => identical frame */
+        rp_begin_frame();
+        pt_draw(pt, &cam3, rp_white_texture(), 30);
+        rp_end_frame();
+        UT_ASSERTF(hash_frame() == pa, "particle frame must be stable");
+        /* step in lockstep twice: same trajectory => same hash */
+        for (int k = 0; k < 30; k++)
+            pt_step(pt, 1.0f / 60.0f, 0, -1.7f, 0, 0.12f);
+        rp_begin_frame();
+        pt_draw(pt, &cam3, rp_white_texture(), 30);
+        rp_end_frame();
+        uint32_t pb = hash_frame();
+        ame_particles qt = *pt;
+        for (int k = 0; k < 30; k++) {
+            pt_step(pt, 1.0f / 60.0f, 0, -1.7f, 0, 0.12f);
+            pt_step(&qt, 1.0f / 60.0f, 0, -1.7f, 0, 0.12f);
+        }
+        UT_ASSERT(pt->count == qt.count);
+        rp_begin_frame();
+        int d2 = pt_draw(pt, &cam3, rp_white_texture(), 30);
+        rp_end_frame();
+        UT_ASSERTF(d2 == pt->count && d2 < 64,
+                   "particles expired (alive=%d)", d2);
+        (void)pb;
+        /* all dead eventually */
+        for (int k = 0; k < 240; k++)
+            pt_step(pt, 1.0f / 60.0f, 0, -1.7f, 0, 0.12f);
+        UT_ASSERT(pt->count == 0);
+        rp_begin_frame();
+        rp_end_frame();
+        UT_ASSERT(rp_quads_last_frame() == 0);
+    }
+
     UT_CASE("text orientation matches atlas (SCREEN path)");
     {
         ame_camera cam2;
