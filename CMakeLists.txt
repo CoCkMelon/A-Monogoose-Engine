@@ -60,7 +60,7 @@ function(ame_dim_lib dim)
         $<INSTALL_INTERFACE:include>)
     target_compile_options(ame_${dim}d PRIVATE ${AME_WARN_FLAGS} ${AME_FP_FLAGS})
     target_compile_definitions(ame_${dim}d PUBLIC AME_${dim}D=1)
-    target_link_libraries(ame_${dim}d PUBLIC SDL3::SDL3)
+    target_link_libraries(ame_${dim}d PUBLIC ${AME_SDL3_LINK})
     target_link_libraries(ame_${dim}d PRIVATE ame_font)
     if(UNIX AND NOT APPLE)
         target_link_libraries(ame_${dim}d PUBLIC m)
@@ -73,6 +73,26 @@ function(ame_dim_lib dim)
 endfunction()
 
 find_package(SDL3 REQUIRED)
+
+# deploy.txt LIBRARY LINKING: release links SDL3 STATICALLY wherever
+# available (the "works on my machine, missing .so on a clean one" bug
+# class). Non-release builds keep the shared lib (dev ergonomics). If a
+# static SDL3 is unavailable in Release, tools/pack.sh falls back to
+# bundling the dynamic libs beside the game (found via $ORIGIN rpath,
+# set in examples/memory_game/CMakeLists.txt).
+if(NOT DEFINED AME_SDL3_STATIC)
+    if(CMAKE_BUILD_TYPE STREQUAL "Release" AND TARGET SDL3::SDL3-static)
+        set(AME_SDL3_STATIC ON)
+    else()
+        set(AME_SDL3_STATIC OFF)
+    endif()
+endif()
+if(AME_SDL3_STATIC AND TARGET SDL3::SDL3-static)
+    message(STATUS "ame: linking SDL3 STATICALLY (deploy.txt release rule)")
+    set(AME_SDL3_LINK SDL3::SDL3-static)
+else()
+    set(AME_SDL3_LINK SDL3::SDL3)
+endif()
 
 # asyncinput: bundled dep of AME_INPUT_ASYNCINPUT builds (input.txt/build.txt)
 set(ASYNCINPUT_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)

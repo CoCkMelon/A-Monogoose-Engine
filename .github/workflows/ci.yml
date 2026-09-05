@@ -80,3 +80,42 @@ jobs:
             -DCMAKE_BUILD_TYPE=Debug -DAME_ENABLE_ASAN=ON
           cmake --build build
           ctest --test-dir build --output-on-failure
+
+  package:
+    name: linux (package stage-0 unit, deploy.txt)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            cmake ninja-build libsdl3-dev libegl1 libgl1-mesa-dri libgles-dev
+      - name: pack (release; static SDL3 where available, else $ORIGIN bundle)
+        run: tools/pack.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ame-next-stage0-linux-amd64
+          path: dist/ame-next-stage0-linux-amd64.tar.gz
+
+  clean-smoke:
+    name: linux (CLEAN machine: packaged unit smoke)
+    needs: package
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: ame-next-stage0-linux-amd64
+          path: dist
+      # runtime packages ONLY - no -dev, no toolchain: this is the
+      # "runs on a machine with no dev environment" check (deploy.txt)
+      - name: runtime deps only
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libegl1 libgl1-mesa-dri libgles2
+      - name: smoke (unpack, dep audit, headless PNG, seed replay)
+        run: tools/smoke.sh dist/ame-next-stage0-linux-amd64.tar.gz

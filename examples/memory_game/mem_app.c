@@ -22,6 +22,7 @@
 #include <SDL3/SDL.h>
 #include <stdatomic.h>
 #include <stdio.h>
+#include <inttypes.h>
 #include <string.h>
 
 #include "mem_sim.h"
@@ -150,7 +151,15 @@ int app_init(void) {
     au_win = audio_new_synth(&win);
 
     ame_geo_reset();
-    mem_reset(&G, GRID_COLS, GRID_ROWS, 0xC0FFEE);
+    /* Stage 0 exit: "replay with a fixed seed is deterministic". The
+     * default keeps the classic board (golden tests); AME_SEED lets a
+     * human/test replay any specific shuffle. */
+    uint32_t seed = 0xC0FFEE;
+    const char *sd = SDL_getenv("AME_SEED");
+    if (sd && sd[0])
+        seed = (uint32_t)SDL_strtoul(sd, NULL, 0);
+    printf("ame: memory board seed=0x%08" PRIx32 "\n", seed);
+    mem_reset(&G, GRID_COLS, GRID_ROWS, seed);
     for (int i = 0; i < G.count; i++) {
         float p[3];
         board_pos(i, p);
@@ -167,6 +176,13 @@ int app_init(void) {
 
     /* software cursor: the game draws its own; hide the system one */
     SDL_HideCursor();
+
+    const char *fm = SDL_getenv("AME_FAKE_MOUSE");
+    if (fm) {
+        float fx = 0, fy = 0;
+        if (sscanf(fm, "%f,%f", &fx, &fy) == 2)
+            in_on_mouse_move(fx, fy); /* logic thread picks it up next step */
+    }
 
     const char *shot = SDL_getenv("AME_SCREENSHOT");
     if (shot && shot[0]) {
@@ -350,9 +366,9 @@ static void billboard_pose(float pose[16], float wx, float wy, float wz,
     pose[3] = 0; pose[7] = 0; pose[11] = 0; pose[15] = 1;
 }
 
-/* in-scene SOFTWARE CURSOR: camera-facing quad where the mouse ray meets the
- * table plane. Runs on the render thread from the latest input atomics
- * (read-only) — sub-tick smooth, no sim mutation. */
+/* in-scene SOFTWARE CURSOR: a shaded CONE pointing down at the spot where
+ * the mouse ray meets the table plane. Render thread reads the latest input
+ * atomics (read-only) - sub-tick smooth, no sim mutation. */
 static void draw_cursor(const mem_snap *s) {
     float mx, my;
     in_mouse_pos(&mx, &my);
@@ -365,20 +381,31 @@ static void draw_cursor(const mem_snap *s) {
         return;
     ame_v3 p = ame_v3_add(ame_v3_(o[0], o[1], o[2]),
                           ame_v3_scale(ame_v3_(d[0], d[1], d[2]), t));
-    ame_v3 f = ame_v3_norm(ame_v3_sub(CAM.look, CAM.pos));
-    ame_v3 r = ame_v3_norm(ame_v3_cross(f, CAM.up));
-    ame_v3 u = ame_v3_cross(r, f);
     bool hot = s->hover >= 0;
-    float sz = hot ? 0.10f : 0.065f;
-    float tint[4] = { 1.0f, 0.78f, 0.25f, 1.0f }; /* amber; bigger when hot */
-    ame_v3 rr = ame_v3_scale(r, sz), uu = ame_v3_scale(u, sz);
-    ame_v3 c0 = ame_v3_add(ame_v3_sub(p, rr), uu);
-    ame_v3 c1 = ame_v3_add(ame_v3_add(p, rr), uu);
-    ame_v3 c2 = ame_v3_sub(ame_v3_add(p, rr), uu);
-    ame_v3 c3 = ame_v3_sub(ame_v3_sub(p, rr), uu);
-    float q0[3] = { c0.x, c0.y, c0.z }, q1[3] = { c1.x, c1.y, c1.z };
-    float q2[3] = { c2.x, c2.y, c2.z }, q3[3] = { c3.x, c3.y, c3.z };
-    rp_push_quad(rp_white_texture(), q0, q1, q2, q3, 0, 0, 1, 1, tint, 40);
+    float r = hot ? 0.09f : 0.055f;
+    float ch = hot ? 0.30f : 0.20f;   /* cone height */
+    ame_v3 apex = ame_v3_add(p, ame_v3_(0, 0.02f, 0));
+    ame_v3 bc   = ame_v3_add(apex, ame_v3_(0, ch, 0));
+    /* fixed key light for cheap per-face shading (unlit shader) */
+    ame_v3 L = ame_v3_norm(ame_v3_(0.35f, 0.9f, 0.25f));
+    const int N = 8;
+    for (int k = 0; k < N; k++) {
+        float a0 = (float)k       * (2.0f * (float)AME_PI / N);
+        float a1 = (float)(k + 1) * (2.0f * (float)AME_PI / N);
+        ame_v3 b0 = ame_v3_add(bc, ame_v3_(cosf(a0) * r, 0, sinf(a0) * r));
+        ame_v3 b1 = ame_v3_add(bc, ame_v3_(cosf(a1) * r, 0, sinf(a1) * r));
+        ame_v3 n = ame_v3_norm(ame_v3_cross(ame_v3_sub(b0, apex),
+                                            ame_v3_sub(b1, apex)));
+        float lam = ame_v3_dot(n, L);
+        float shade = 0.45f + 0.55f * (lam > 0 ? lam : 0);
+        float tint[4];
+        if (hot) { tint[0] = shade;            tint[1] = shade * 0.92f; tint[2] = shade * 0.55f; tint[3] = 1; }
+        else     { tint[0] = shade;            tint[1] = shade * 0.78f; tint[2] = shade * 0.25f; tint[3] = 1; }
+        float q0[3] = { apex.x, apex.y, apex.z };
+        float q1[3] = { b0.x, b0.y, b0.z };
+        float q2[3] = { b1.x, b1.y, b1.z };
+        rp_push_tri(rp_white_texture(), q0, q1, q2, 0, 0, 1, 1, tint, 40);
+    }
 }
 
 static void take_screenshot(int w, int h) {

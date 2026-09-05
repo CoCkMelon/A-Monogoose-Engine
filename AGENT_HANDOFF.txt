@@ -101,3 +101,101 @@ CONVENTIONS LOCKED
   -Werror there. -ffp-contract=off always. Per-target AME_2D/AME_3D and
   AME_INPUT_SDL/AME_INPUT_ASYNCINPUT defines. Games live in examples/ with
   their own CMakeLists (user decision, like A-Mongoose).
+
+SESSION 4 PITFALLS + STATE (picking fix + Lean model)
+- ROOT CAUSE of hover misalignment: ame_m4_inverse was mathematically wrong
+  (hand-transcribed cofactors). ONLY picking consumed it -> visuals masked it
+  for weeks. Fix: gl-matrix adjugate rewrite + M*inv(M)=I test in
+  test_camera.c. LESSON: never hand-transcribe matrix algebra without an
+  inverse round-trip test. camera_screen_ray is now ANALYTIC (camera basis,
+  no inverse at all); board picking round-trip misses 0.0000 on all 16 spots.
+- Cursor is a shaded 8-face CONE (rp_push_tri -> degenerate quad). Hot state:
+  bigger + amber. AME_FAKE_MOUSE=x,y env drives headless hover proofs.
+- Lean model (lean/): elan lives in ~/.elan (survives snapshots usually;
+  if gone: curl elan-init.sh, `elan default stable`, ~13s).
+  Lean 4.33.1 pitfalls hit:
+  * structure fields CANNOT share a binder (refA refB : Nat -> "Failed to
+    infer type of binder") - one field per line.
+  * List.get? gone; List.getElem? NOT reachable via dot notation; use
+    l[i]? index syntax; full `simp at h` reduces (c::cs)[k+1]? fine.
+  * List.length_drop is an equality, not a function - rw it, don't apply.
+  * `rw [h] at h'` fails hard if pattern absent in h' - rw goal only.
+  * theorem with section `variable (step)` + local step binder: OK, variable
+    just isn't included.
+  * no deriving Repr on structures with function fields; no doc-comment
+    directly before `namespace` (use /- -/ with space); @[default_target]
+    annotation on lean_lib REQUIRED or lake builds nothing.
+- Lean acceptance met: lake build green from clean, zero sorry, no mathlib,
+  #print axioms on all 14 theorems = stdlib-only (3 axiom-free).
+- lean/.lake is gitignored (added).
+- Stage 1 online Memory: still NOT started (user has not greenlit).
+
+SESSION 4 ADDENDUM - LEAN GEOMETRY MODEL (user directive: "primary use
+case for lean here is geometry, pixel coords, other coord conversions,
+so shaders could also be verified"):
+- New modules: Ame/Geo (vectors, px<->NDC round-trips both axes/both
+  directions), Ame/M4 (mat4 layer + adjugate inverse transcribed from
+  ame_m4_inverse + structured-inverse theorems + 4 native_decide
+  concrete M*inv(M)=I checks mirroring test_camera.c), Ame/Camera
+  (rayRaw = raw camera_screen_ray dir; ray_hits: pos + D*ray = P),
+  Ame/Shader (vertShader = gl_Position line, gpuViewport = divide +
+  viewport; shader_pixel_x/y == analytic pixel; picking_from_shader =
+  end-to-end GPU-pixel -> analytic-ray -> exact hit). 27 kernel-checked
+  theorems + 4 quarantined native_decide checks.
+- LEAN-RAT PITFALLS (cost the most time):
+  * Kernel CANNOT reduce Rat ops (extern): `decide` is DEAD for all Rat
+    facts, even 1+1=2. Workarounds: numeral adds/muls via
+    `simp [Rat.add_def, Rat.normalize_eq]`; DIVISION is not
+    simp-evaluable at all (divInt blocks) -> concrete division checks
+    must use native_decide (disclosed) or be avoided.
+  * Structure fields cannot share binders (refA refB : Nat -> error).
+  * `+`/`*` on own structures go through instances that simp CANNOT
+    unfold: write defs used by proofs with explicit V3.add/V4.add
+    nesting, and state hypotheses with explicit V3.add.
+  * `show` requires DEFEQ, and Rat add is NOT assoc-defeq (extern):
+    parenthesization of sums in `show` patterns must match exactly.
+  * rw direction discipline: rw [h] replaces h's LHS; rw [<- h] its
+    RHS; `rw ... at h'` fails hard if the pattern is absent (no
+    partial application) - rw the goal, carry hypotheses manually.
+  * Full-AC simp (mul_comm+assoc+left_comm+add_*) can TIMEOUT on 4x4
+    matrix products: `set_option maxHeartbeats 4000000 in` fixed
+    mulv_mul (60s build). Keep simp sets minimal per goal.
+  * Long chained projections collect paren bugs; use local defs
+    (vp3) + `simp only [vp3]` to unfold.
+- Cone cursor + AME_FAKE_MOUSE hover proof unchanged (54ccb5b).
+- Stage 1 online Memory: NOT started (network is stage-1 implementation
+  work, NOT a Lean target - per user).
+
+SESSION 5 - STAGE 0 CLOSED (packaged unit + clean-machine smoke):
+- Gap audit vs the spec's Stage 0 EXIT line found two open items: seed
+  replay ergonomics and "packaged unit runs on a clean machine"
+  (build.txt PACKAGING + deploy.txt). Both closed; everything else was
+  already green.
+- AME_SEED env in mem_app (default 0xC0FFEE unchanged -> golden hashes
+  stable); seed printed at boot. Replay proofs: test_mem_sim trace-hash
+  (existing) + packaged smoke byte-identical screenshots (AME_SEED
+  0x5EED twice -> cmp equal).
+- deploy.txt packaging: root CMake links SDL3 STATICALLY in Release
+  when the SDL3::SDL3-static target exists (Debian ships it; its
+  interface still pulls shared sndfile/pulse/X11 deps - those get
+  bundled); memory_game gets $ORIGIN/lib rpath in Release ONLY (plain
+  user build unchanged, shared SDL3). tools/pack.sh: release build ->
+  bundle FULL dep closure (ldd of binary AND every bundled lib to
+  fixpoint; PITFALLS: glibc ldd prints per-file "path:" HEADER lines
+  when given multiple files - filter /:$/ or cp chokes on a trailing
+  colon; libpulsecommon lives in a private pulseaudio/ dir found via
+  the ORIGINAL file's runpath - resolve at original location) -> run.sh
+  (LD_LIBRARY_PATH=lib) + README.txt -> dist/ame-next-stage0-linux-
+  amd64.tar.gz + sha256. tools/smoke.sh: unpack to empty tmp dir, dep
+  audit (bundle-or-base ONLY, run with the launcher's LD_LIBRARY_PATH),
+  headless PNG magic+size check, seed-replay cmp. Verified BOTH paths
+  here: static unit (40 libs) and dynamic fallback (-DAME_SDL3_STATIC
+  OFF, libSDL3.so.0 bundled). CI: package + clean-smoke jobs appended
+  (clean-smoke installs RUNTIME packages only, no -dev).
+- Slimming the bundle (custom SDL_LEAN_AND_MEAN build per deploy.txt)
+  is a LATER-stage nicety; bundling is the spec-sanctioned fallback.
+- Stage 0 EXIT checklist now fully green: hot-seat 2-player with 3D
+  flips + billboard scoreboard, strict alternation (turn passes every
+  resolve), most-matches-wins + tie, fixed-seed replay deterministic,
+  headless screenshot, clean -Werror build + 10/10 ctest, packaged
+  unit passes clean-machine smoke.
