@@ -166,46 +166,42 @@ static inline ame_m4 ame_m4_ortho_px(float w, float h, float zn, float zf) {
     return r;
 }
 
-/* General 4x4 inverse via cofactor expansion (Laplace). Column-major m.
- * Returns identity when singular. */
+/* General 4x4 inverse (adjugate method, gl-matrix formula). Column-major.
+ * Returns identity when singular. Unit-tested: M * inv(M) == I. */
 static inline ame_m4 ame_m4_inverse(ame_m4 m) {
     const float *a = m.m;
-    float s0 = a[0*4+0] * a[1*4+1] - a[1*4+0] * a[0*4+1];
-    float s1 = a[0*4+0] * a[2*4+1] - a[2*4+0] * a[0*4+1];
-    float s2 = a[0*4+0] * a[3*4+1] - a[3*4+0] * a[0*4+1];
-    float s3 = a[1*4+0] * a[2*4+1] - a[2*4+0] * a[1*4+1];
-    float s4 = a[1*4+0] * a[3*4+1] - a[3*4+0] * a[1*4+1];
-    float s5 = a[2*4+0] * a[3*4+1] - a[3*4+0] * a[2*4+1];
-
-    float c5 = a[2*4+2] * a[3*4+3] - a[3*4+2] * a[2*4+3];
-    float c4 = a[1*4+2] * a[3*4+3] - a[3*4+2] * a[1*4+3];
-    float c3 = a[1*4+2] * a[2*4+3] - a[2*4+2] * a[1*4+3];
-    float c2 = a[0*4+2] * a[3*4+3] - a[3*4+2] * a[0*4+3];
-    float c1 = a[0*4+2] * a[2*4+3] - a[2*4+2] * a[0*4+3];
-    float c0 = a[0*4+2] * a[1*4+3] - a[1*4+2] * a[0*4+3];
-
-    float det = s0 * c5 - s1 * c4 + s2 * c3 + s3 * c2 - s4 * c1 + s5 * c0;
+    float a00=a[0],a01=a[1],a02=a[2],a03=a[3];
+    float a10=a[4],a11=a[5],a12=a[6],a13=a[7];
+    float a20=a[8],a21=a[9],a22=a[10],a23=a[11];
+    float a30=a[12],a31=a[13],a32=a[14],a33=a[15];
+    float b0 = a00*a11 - a01*a10,  b1 = a00*a12 - a02*a10;
+    float b2 = a00*a13 - a03*a10,  b3 = a01*a12 - a02*a11;
+    float b4 = a01*a13 - a03*a11,  b5 = a02*a13 - a03*a12;
+    float b6 = a20*a31 - a21*a30,  b7 = a20*a32 - a22*a30;
+    float b8 = a20*a33 - a23*a30,  b9 = a21*a32 - a22*a31;
+    float b10= a21*a33 - a23*a31,  b11= a22*a33 - a23*a32;
+    float det = b0*b11 - b1*b10 + b2*b9 + b3*b8 - b4*b7 + b5*b6;
     ame_m4 r;
     if (det > -1e-12f && det < 1e-12f)
         return ame_m4_identity();
-    float inv_det = 1.0f / det;
+    float id = 1.0f / det;
     float *o = r.m;
-    o[0]  = ( a[1*4+1] * c5 - a[2*4+1] * c4 + a[3*4+1] * c3) * inv_det;
-    o[1]  = (-a[1*4+0] * c5 + a[2*4+0] * c4 - a[3*4+0] * c3) * inv_det;
-    o[2]  = ( a[1*4+3] * s5 - a[2*4+3] * s4 + a[3*4+3] * s3) * inv_det;
-    o[3]  = (-a[1*4+2] * s5 + a[2*4+2] * s4 - a[3*4+2] * s3) * inv_det;
-    o[4]  = (-a[0*4+1] * c5 + a[2*4+1] * c2 - a[3*4+1] * c1) * inv_det;
-    o[5]  = ( a[0*4+0] * c5 - a[2*4+0] * c2 + a[3*4+0] * c1) * inv_det;
-    o[6]  = (-a[0*4+3] * s5 + a[2*4+3] * s2 - a[3*4+3] * s1) * inv_det;
-    o[7]  = ( a[0*4+2] * s5 - a[2*4+2] * s2 + a[3*4+2] * s1) * inv_det;
-    o[8]  = ( a[0*4+1] * c4 - a[1*4+1] * c2 + a[3*4+1] * c0) * inv_det;
-    o[9]  = (-a[0*4+0] * c4 + a[1*4+0] * c2 - a[3*4+0] * c0) * inv_det;
-    o[10] = ( a[0*4+3] * s4 - a[1*4+3] * s2 + a[3*4+3] * s0) * inv_det;
-    o[11] = (-a[0*4+2] * s4 + a[1*4+2] * s2 - a[3*4+2] * s0) * inv_det;
-    o[12] = (-a[0*4+1] * c3 + a[1*4+1] * c1 - a[2*4+1] * c0) * inv_det;
-    o[13] = ( a[0*4+0] * c3 - a[1*4+0] * c1 + a[2*4+0] * c0) * inv_det;
-    o[14] = (-a[0*4+3] * s3 + a[1*4+3] * s1 - a[2*4+3] * s0) * inv_det;
-    o[15] = ( a[0*4+2] * s3 - a[1*4+2] * s1 + a[2*4+2] * s0) * inv_det;
+    o[0]  = (a11*b11 - a12*b10 + a13*b9 ) * id;
+    o[1]  = (a02*b10 - a01*b11 - a03*b9 ) * id;
+    o[2]  = (a31*b5  - a32*b4  + a33*b3 ) * id;
+    o[3]  = (a22*b4  - a21*b5  - a23*b3 ) * id;
+    o[4]  = (a12*b8  - a10*b11 - a13*b7 ) * id;
+    o[5]  = (a00*b11 - a02*b8  + a03*b7 ) * id;
+    o[6]  = (a32*b2  - a30*b5  - a33*b1 ) * id;
+    o[7]  = (a20*b5  - a22*b2  + a23*b1 ) * id;
+    o[8]  = (a10*b10 - a11*b8  + a13*b6 ) * id;
+    o[9]  = (a01*b8  - a00*b10 - a03*b6 ) * id;
+    o[10] = (a30*b4  - a31*b2  + a33*b0 ) * id;
+    o[11] = (a21*b2  - a20*b4  - a23*b0 ) * id;
+    o[12] = (a11*b7  - a10*b9  - a12*b6 ) * id;
+    o[13] = (a00*b9  - a01*b7  + a02*b6 ) * id;
+    o[14] = (a31*b1  - a30*b3  - a32*b0 ) * id;
+    o[15] = (a20*b3  - a21*b1  + a22*b0 ) * id;
     return r;
 }
 

@@ -87,26 +87,33 @@ void camera_screen_to_world2d(const ame_camera *c, float sx, float sy,
     out[1] = cy - h * 0.5f + sy / (float)c->zoom;
 }
 
-/* clip-space xform of a vec4 */
-static ame_v4 m4_xform4(ame_m4 m, float x, float y, float z, float w) {
-    ame_v4 r;
-    r.x = m.m[0] * x + m.m[4] * y + m.m[8]  * z + m.m[12] * w;
-    r.y = m.m[1] * x + m.m[5] * y + m.m[9]  * z + m.m[13] * w;
-    r.z = m.m[2] * x + m.m[6] * y + m.m[10] * z + m.m[14] * w;
-    r.w = m.m[3] * x + m.m[7] * y + m.m[11] * z + m.m[15] * w;
-    return r;
-}
-
 void camera_screen_ray(const ame_camera *c, float sx, float sy,
                        float out_origin[3], float out_dir[3]) {
-    /* px -> ndc (y flipped: our px space is y-down, NDC y-up) */
+    /* px -> ndc (y flipped: px space is y-down, NDC y-up) */
     float nx = (sx / (float)c->vw) * 2.0f - 1.0f;
     float ny = 1.0f - (sy / (float)c->vh) * 2.0f;
-    ame_v4 near4 = m4_xform4(c->vp_inv, nx, ny, -1.0f, 1.0f);
-    ame_v4 far4  = m4_xform4(c->vp_inv, nx, ny,  1.0f, 1.0f);
-    ame_v3 near_p = ame_v3_(near4.x / near4.w, near4.y / near4.w, near4.z / near4.w);
-    ame_v3 far_p  = ame_v3_(far4.x / far4.w, far4.y / far4.w, far4.z / far4.w);
-    out_origin[0] = near_p.x; out_origin[1] = near_p.y; out_origin[2] = near_p.z;
-    ame_v3 d = ame_v3_norm(ame_v3_sub(far_p, near_p));
-    out_dir[0] = d.x; out_dir[1] = d.y; out_dir[2] = d.z;
+    if (c->kind == AME_CAM_PERSP3D) {
+        /* analytic unprojection through the camera basis - no matrix
+         * inverse involved (exact and cheap) */
+        ame_v3 f = ame_v3_norm(ame_v3_sub(c->look, c->pos));
+        ame_v3 s = ame_v3_norm(ame_v3_cross(f, c->up));
+        ame_v3 u = ame_v3_cross(s, f);
+        float tan_f = tanf(c->fov_y * 0.5f);
+        float aspect = c->vh > 0 ? (float)c->vw / (float)c->vh : 1.0f;
+        ame_v3 d = ame_v3_norm(ame_v3_add(
+            f,
+            ame_v3_add(ame_v3_scale(s, nx * tan_f * aspect),
+                       ame_v3_scale(u, ny * tan_f))));
+        out_origin[0] = c->pos.x; out_origin[1] = c->pos.y; out_origin[2] = c->pos.z;
+        out_dir[0] = d.x; out_dir[1] = d.y; out_dir[2] = d.z;
+        return;
+    }
+    /* ortho2d: ray goes straight into the screen (-z) from the px point */
+    float w = (float)(c->vw / c->zoom), h = (float)(c->vh / c->zoom);
+    float cx = c->snap ? floorf(c->pos.x) : c->pos.x;
+    float cy = c->snap ? floorf(c->pos.y) : c->pos.y;
+    out_origin[0] = cx - w * 0.5f + sx / (float)c->zoom;
+    out_origin[1] = cy - h * 0.5f + sy / (float)c->zoom;
+    out_origin[2] = c->zn;
+    out_dir[0] = 0; out_dir[1] = 0; out_dir[2] = -1;
 }

@@ -407,6 +407,13 @@ static bool push_quad_common(int tex,
     return true;
 }
 
+void rp_push_tri(int tex, const float p0[3], const float p1[3],
+                 const float p2[3], float u0, float v0, float u1, float v1,
+                 const float tint[4], float layer) {
+    /* p3 = p0 makes the second index triangle degenerate (zero area) */
+    push_quad_common(tex, p0, p1, p2, p0, u0, v0, u1, v1, tint, layer);
+}
+
 void rp_push_quad(int tex, const float p0[3], const float p1[3],
                   const float p2[3], const float p3[3],
                   float u0, float v0, float u1, float v1,

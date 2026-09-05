@@ -58,6 +58,11 @@ void rp_end_frame(void);
 void rp_push_sprite(int tex, float x, float y, float w, float h,
                     float u0, float v0, float u1, float v1,
                     const float tint[4], float layer);
+/* single triangle (batched; emitted as a quad with a degenerate 2nd tri) */
+void rp_push_tri(int tex,
+                 const float p0[3], const float p1[3], const float p2[3],
+                 float u0, float v0, float u1, float v1,
+                 const float tint[4], float layer);
 /* 3D/general: explicit corners in world space (column order: p0..p3 CCW) */
 void rp_push_quad(int tex,
                   const float p0[3], const float p1[3],

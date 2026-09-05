@@ -8,6 +8,11 @@ add_executable(test_pool   test_pool.c)
 target_link_libraries(test_math PRIVATE ame)
 target_link_libraries(test_pool PRIVATE ame)
 
+add_executable(test_camera test_camera.c)
+target_link_libraries(test_camera PRIVATE ame::3d)
+target_compile_definitions(test_camera PRIVATE SDL_MAIN_HANDLED=1)
+add_test(NAME camera COMMAND test_camera)
+
 # dimension-specific suites: built once per dimension
 foreach(dim 2 3)
     add_executable(test_geometry_${dim}d test_geometry.c)
