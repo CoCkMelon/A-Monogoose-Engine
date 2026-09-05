@@ -39,6 +39,7 @@
     X(UNIFORMMATRIX4FV, UniformMatrix4fv) X(UNIFORM1I, Uniform1i)               \
     X(GENTEXTURES, GenTextures)     X(BINDTEXTURE, BindTexture)                 \
     X(TEXIMAGE2D, TexImage2D)       X(TEXPARAMETERI, TexParameteri)             \
+    X(TEXSUBIMAGE2D, TexSubImage2D)                                          \
     X(ACTIVETEXTURE, ActiveTexture) X(ENABLE, Enable) X(DISABLE, Disable)       \
     X(DEPTHFUNC, DepthFunc)         X(BLENDFUNC, BlendFunc)                     \
     X(CLEARCOLOR, ClearColor)       X(CLEAR, Clear) X(VIEWPORT, Viewport)       \
@@ -137,6 +138,7 @@ typedef struct {
     GLuint vao, vbo, ibo;
     rp_batch batch;
     GLuint tex[RP_TEX_MAX];
+    int tex_w[RP_TEX_MAX], tex_h[RP_TEX_MAX], tex_comps[RP_TEX_MAX];
     int tex_count;
     int draws, quads;
     bool inited;
@@ -621,6 +623,9 @@ int rp_load_texture(const uint8_t *pixels, int w, int h, int comps,
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
     glTexImage2D(GL_TEXTURE_2D, 0, (GLint)fmt, w, h, 0, fmt, GL_UNSIGNED_BYTE,
                  pixels);
+    S.tex_w[id] = w;
+    S.tex_h[id] = h;
+    S.tex_comps[id] = comps;
     return id;
 }
 
@@ -629,6 +634,24 @@ void rp_free_texture(int id) {
         return;
     glDeleteTextures(1, &S.tex[id]);
     S.tex[id] = 0;
+}
+
+/* Update an existing texture IN PLACE (same id, same dims/format) -
+ * the dynamic-texture path for software-rendered content (e.g. the
+ * raymarch example: CPU shades a small buffer, uploads each frame,
+ * draws one quad through the normal batch). Returns false on id/dim
+ * mismatch (never reallocates behind the caller's back). */
+bool rp_update_texture(int id, const uint8_t *pixels, int w, int h, int comps) {
+    if (id < 0 || id >= S.tex_count || !S.tex[id] || !pixels)
+        return false;
+    if (w != S.tex_w[id] || h != S.tex_h[id]
+        || comps != S.tex_comps[id])
+        return false; /* dims/format must match the created texture */
+    GLenum fmt = comps == 4 ? GL_RGBA : comps == 3 ? GL_RGB : GL_RED;
+    glBindTexture(GL_TEXTURE_2D, S.tex[id]);
+    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w, h, fmt, GL_UNSIGNED_BYTE,
+                    pixels);
+    return true;
 }
 
 int rp_white_texture(void) { return 0; }

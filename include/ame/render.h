@@ -76,6 +76,10 @@ void rp_push_quad(int tex,
 int  rp_load_texture(const uint8_t *pixels, int w, int h, int comps,
                      bool nearest_sampling);
 void rp_free_texture(int id);
+/* Update an existing texture in place (same id/dims/format) - the
+ * dynamic-texture path for software-shaded content (a CPU raymarcher
+ * uploading each frame, video frames later). false on mismatch. */
+bool rp_update_texture(int id, const uint8_t *pixels, int w, int h, int comps);
 int  rp_white_texture(void); /* 1x1 white, always id 0 */
 
 /* top-left of the current view in WORLD px (ortho pixel camera only).

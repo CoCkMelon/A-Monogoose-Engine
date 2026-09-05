@@ -718,3 +718,53 @@ opus_encode needs standard frame durations; turn-boundary snapshots
 may rewind .git (fetch remote + reset --soft recovers); git identity
 vanishes each reset (set per-repo); AME_SCREENSHOT was game-level
 (env handled in mem_app), engine uses AME_SHOT_PPM.
+
+SESSION 14 - TWO MORE MASTER PORTS: raymarch_arcade + text_editor.
+Commits: this one. Suite 18/18 unchanged; memory goldens unaffected.
+
+ENGINE ADDITION: rp_update_texture(id, pixels, w, h, comps) - in-place
+glTexSubImage2D for dynamic textures (dims/format must match; renderer
+now tracks tex_w/tex_h/tex_comps). The software-rendered-content path
+(CPU shades, uploads per frame, draws ONE quad through the batch).
+
+raymarch_arcade (master: one fullscreen GLSL SDF shader game):
+- ame-next keeps the ONE-batch doctrine: the same 2D SDF scene
+  (player + falling orbs, smooth-union, glow, vignette, scanlines,
+  state tint, hit flash, SDF-box HUD bars) is shaded ON THE CPU into
+  480x270 RGBA8, rp_update_texture'd, drawn as one screen-anchored
+  quad. Master's gameplay constants ported (45 s level, 0.15 health
+  per hit, 0.6 s spawn rows of 1-3, sway formulas, 2 s compaction),
+  scaled 1280->480; deterministic LCG (master used rand()).
+- Threading per spec: gameplay in app_fixed (logic thread), state
+  crosses via AME_SNAP_DEFINE seqlock; render keeps the last good
+  copy on retry. TSan: ZERO reports in our sources (2 in libgallium
+  driver internals at shutdown - third-party, documented).
+- Verified headless: AME_SHOT_FRAMES 5 -> 90 lit-pixels 19511 ->
+  27927 (enemies spawning + progress bar filling = gameplay alive).
+
+text_editor (master: SDL_ttf texture + second solid-color shader):
+- ONE batch: glyphs AND caret/selection rects are batch quads; the
+  engine's baked atlas replaces SDL_ttf. Layout per line; per-glyph
+  el[].x makes caret/selection geometry EXACT for any font.
+- THREADING FIX worth remembering: text_layout is pure CPU, so BOTH
+  sides keep their OWN ed_geom (logic re-layouts for mouse
+  hit-testing, render for drawing) - sharing layout arrays across
+  the fixed-step/render threads would race. State crosses via
+  seqlock {rev, text, caret, sel_start, sel_end}; render re-layouts
+  only on rev change. 32K buffer published per edit (memcpy trivial).
+- Keys: raw scancodes + shift -> ASCII (engine input surface = the
+  equivalent of master's asyncinput/xkb path); backspace/enter/
+  arrows/home/end, shift+arrows extend selection, mouse press/drag
+  selects (press sets anchor). ESC quits. Blink is presentation-only
+  (SDL_GetTicks in render).
+- 坑 found the hard way: text_draw_screen already adds
+  rp_screen_origin INTERNALLY - do not pre-add ox/oy for text (the
+  manual caret/selection sprites DO need it). Symptom: text flew
+  offscreen at 2x offset, only caret visible.
+- TSan: zero reports at all. Headless shot: 13414 lit px (6 lines).
+
+PORT MATRIX UPDATE: done += raymarch_arcade, text_editor. Remaining:
+example_parent_child, prefab_smoke, flecs_scene, flecs_script_scene,
+multithreaded_scripts, obj_loading, physics_test, rhythm_game,
+kenney_pixel-platformer, unitylike_{minimal,audio_example,box2d_car,
+pixel_platformer,platformer_ecs,scene_hierarchy_test}.
