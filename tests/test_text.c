@@ -54,6 +54,21 @@ int main(void) {
     UT_ASSERT(lc.el[0].x > ll.el[0].x + 40.0f);
     UT_ASSERT_NEAR(lc.el[0].x + (ll.w * 0.0f), lc.el[0].x, 1e-3);
 
+    UT_CASE("multi-line layout: newline splits sub-lines (no newline els)");
+    /* documents the contract the text editor violated: ONE layout call
+       with embedded '\n' produces SUB-LINES in el[] (y offsets) - a
+       consumer laying out line-by-line MUST terminate each line, or the
+       element at its EOL column is the NEXT sub-line's first glyph at
+       x~0 (the "caret too left" bug). */
+    ame_text_layout ml;
+    n = text_layout("hi\nyo", 0, AME_TEXT_ALIGN_L, 1.0f, &ml);
+    UT_ASSERT(n == 4); /* no element emitted for '\n' */
+    UT_ASSERT(ml.el[2].y == text_line_h()); /* sub-line 2 on its own row */
+    UT_ASSERT(ml.h > text_line_h());        /* two rows tall */
+    for (int i = 0; i < n; i++)
+        UT_ASSERTF(ml.el[i].x == floorf(ml.el[i].x),
+                   "multi-line el[%d].x fractional (%.3f)", i, ml.el[i].x);
+
     UT_CASE("grid contract: el positions and w are whole pixels");
     n = text_layout("hello typed text", 0, AME_TEXT_ALIGN_L, 1.0f, &l);
     UT_ASSERT(n == 16);

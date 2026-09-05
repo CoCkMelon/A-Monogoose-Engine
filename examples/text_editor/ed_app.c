@@ -50,15 +50,26 @@ typedef struct {
     float line_h;
 } ed_geom;
 
-static void geom_rebuild(ed_geom *g, const char *text, int len) {
+/* Each line is laid out ALONE. The buffer is terminated IN PLACE at
+ * the newline (both sides own their copy: logic edits `buf`, render
+ * owns `cur.text`), then restored - text_layout would otherwise keep
+ * consuming the following lines as sub-lines of ONE layout, and the
+ * element at the EOL column would be the NEXT line's first glyph at
+ * x~0: the caret at any non-final line's end jumped to the left
+ * margin (the "too left" bug), and hit-tests past a line's end read
+ * garbage positions. */
+static void geom_rebuild(ed_geom *g, char *text, int len) {
     g->line_h = text_line_h();
     g->line_count = 0;
     int start = 0;
     for (int i = 0; i <= len && g->line_count < MAX_LINES; i++) {
         if (i == len || text[i] == '\n') {
+            char saved = text[i];
+            text[i] = '\0';
             g->line_of[g->line_count] = start;
             text_layout(text + start, 0.0f, AME_TEXT_ALIGN_L, 1.0f,
                         &g->lay[g->line_count]);
+            text[i] = saved;
             g->line_count++;
             start = i + 1;
         }

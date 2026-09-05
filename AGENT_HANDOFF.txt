@@ -827,3 +827,25 @@ on the card faces; (2) no multiplayer; (3) no --help.
 
 坑: cwd typos kill whole tool calls; test locals must not collide
 (lc); native_decide statements must be CLOSED (List.all pattern).
+
+SESSION 16 - THE REAL "CARET TOO LEFT" (user: "being too left problem
+not solved"). The snap work fixed sub-pixels; the VISIBLE offset was
+different: geom_rebuild passed text+start to text_layout WITHOUT
+terminating at the newline - every line's layout swallowed ALL
+following lines as SUB-LINES of one call (probe: "hi" line reported
+emitted=9, el[2].x=0.0 = next line's glyph). The element at the EOL
+column was the NEXT line's first glyph at x~0 -> caret at any
+NON-FINAL line's end jumped to the LEFT MARGIN; hit-tests past a
+line end read garbage columns. (Text LOOKED right - sub-lines drew
+at identical absolute positions, pure overdraw.)
+FIX: geom_rebuild terminates the buffer IN PLACE at each newline,
+lays out, restores (both sides own their copy: buf / cur.text).
+Probe after fix: EOL carets at true line w (22.0 / 83.0, was 0.0),
+leading spaces map 1:1. Plus regression test pinning multi-line
+semantics (embedded \n = sub-lines with y offsets, no newline els,
+grid intact) - test_text now 124 checks, suite 18/18.
+坑/lesson: pen-grid Lean model was fine but validated the WRONG el -
+measure the consumer's actual mapping (standalone probe replicating
+geom_rebuild) before declaring victory. Space-drop rule (pen 0,
+total>0) is dead code for per-line calls - only fires within one
+multi-line/wrapped call; left as-is.
