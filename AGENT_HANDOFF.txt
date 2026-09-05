@@ -471,3 +471,64 @@ Tests: test_geometry +8 cases in BOTH dims (62+58 checks), audio_ray
 +2 (sphere exactness 0-loss near-miss / 18dB dead-center; LIST wav),
 render +1 (straight-down camera particles). rp_push_mesh signature
 now (tex, verts, vert_count, idx, idx_count, xform, tint, layer).
+
+SESSION 10 - CGLM PARITY (user directive #8: "reach cglm feature and
+performance parity or use cglm"). DECISION upheld: parity path, NOT
+adoption - cglm stays a TEST-ONLY oracle/benchmark exactly like the
+golden screenshots; the engine keeps its zero-dependency, Lean-verified
+math layer. libcglm-dev 0.9.6 (apt) + pkg-config gates the test.
+
+API PARITY (include/ame/math.h, all static inline, no alloc):
+- ame_v4 arithmetic (add/sub/scale/dot/lerp); full ame_m3 set
+  (identity/mul/mulv/transpose/from_m4/inverse via adjugate).
+- ame_quat (x,y,z,w) full set: identity/dot/norm/conj/mul (Hamilton)/
+  axis_angle/rotate_v3/mat4/from_m4/slerp (shortest path) + nlerp
+  near-parallel.
+- ame_m4_transpose, ame_m4_axis_angle (Rodrigues via quat).
+- ame_frustum: Gribb-Hartmann plane extraction from vp (order
+  [L,R,B,T,N,F], inside-positive, normalized) + aabb p/n-vertex and
+  sphere classify (OUTSIDE/INTERSECT/INSIDE).
+- ame_bezier3, ame_catmull_rom; ame_m4_mul_to pointer form for hot
+  loops. -ffp-contract=off determinism unchanged.
+
+SSE2 FAST PATHS (x86-64; scalar fallback compiled elsewhere):
+- ame_m4_mul + ame_m4_mul_to: column broadcasts, per-element product
+  order preserved -> BIT-IDENTICAL to ame_m4_mul_scalar.
+- ame_quat_mul: 4 term-vectors with sign XORs, uniform
+  ((t1+/-t2)+/-t3)+/-t4 -> BIT-IDENTICAL to scalar body.
+- test_math_cglm asserts memcmp equality vs the scalar twin on EVERY
+  oracle iteration (the assertion caught two wrong lane shuffles in
+  development - it earns its keep).
+
+PERF (test perf case, serial-dependency anti-DCE both sides,
+informational printf; ns/op, same machine, GCC -O2):
+    mat4_mul ptr : ours 5.1   cglm 5.4   (0.93x - faster)
+    mat4_mul val : ours 27.3  (by-value struct traffic, API choice)
+    mulv point   : ours 3.8   cglm 3.6   (1.05x)
+    quat_mul     : ours 4.3   cglm 5.3   (0.82x - faster)
+    mat4_inv     : ours 47.5  cglm 19.0  (2.5x - ACCEPTED cold path,
+                     2 calls per camera update; SSE cofactors would
+                     diverge bitwise from the scalar adjugate for no
+                     real gain. Documented, not hidden.)
+
+CORRECTNESS: tests/test_math_cglm.c = 2625 checks green:
+64 iters m4 (mul/point-transform/inverse/look_at/perspective vs cglm
+4e-5..1e-4 eps + bit-identity asserts), 64 iters quat (axis-angle/mul
+with +-sign fix for double cover/rotate_v3/slerp/mat4/from_m4 +
+bit-identity), 32 iters frustum (plane extraction sign-fixed vs
+glm_frustum_planes + aabb/sphere cull agreement vs glm_aabb_frustum).
+Deterministic LCG rng 0x12345678.
+
+VERIFY (all green this session): ctest 16/16 normal, 16/16 ASan/UBSan,
+fresh default-config build -Werror-clean (0 warnings), quiet golden
+(frame 5) + autoplay-500 golden (stage2_particles.png) BYTE-IDENTICAL
+with SSE live - proves bit-identity through the whole render pipeline.
+
+NOTES for next session:
+- cmake re-run needed once: tests/CMakeLists.txt gained a conditional
+  pkg_check_modules(CGLM QUIET cglm) -> math_cglm test only when cglm
+  is installed (status message otherwise, suite is 15 without it).
+- cglm C API details that cost time: mat4 is vec4[4] (flat index via
+  [i/4][i%4]); glm_quat_mul (not mulq); glm_aabb_frustum returns bool;
+  _mm_set_epi32 order is (e3,e2,e1,e0); _MM_SHUFFLE(d3,d2,d1,d0).
+- Remaining parity: opus decode. Stage 2 exit: shadows + materials.
