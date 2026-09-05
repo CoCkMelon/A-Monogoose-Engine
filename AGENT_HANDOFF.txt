@@ -199,3 +199,52 @@ SESSION 5 - STAGE 0 CLOSED (packaged unit + clean-machine smoke):
   resolve), most-matches-wins + tie, fixed-seed replay deterministic,
   headless screenshot, clean -Werror build + 10/10 ctest, packaged
   unit passes clean-machine smoke.
+
+SESSION 6 - STAGE 1 ONLINE (server-authoritative Memory) IMPLEMENTED:
+- examples/memory_game/mem_net.h/.c: TCP framing [type a b c len16 LE]
+  + payload; message set exactly the spec's join/state/your-turn/
+  open-card/match/no-match/win (+left/bye/welcome/opened/quit); POSIX
+  socket helpers (nonblocking data, streaming rx reassembly); client
+  MIRROR driver (mem_client): OPENED -> mem_pick on the local mem_game
+  (identical deterministic flip animation), STATE -> full overwrite
+  (join/rejoin/rematch). v0 NOTE: STATE carries face-down pairs (a
+  memory-scanning client could peek) - hiding behind reveal events is
+  later hardening; exit criteria do not require secrecy.
+- mem_server.c: authoritative; owns the ONE mem_game; accepts 2 slots;
+  validates OPEN via the sim itself (turn+phase+card) and broadcasts
+  the echo. Turn of an ABSENT player = natural pause (no turn theft);
+  rejoin = full STATE snapshot + resume; rematch = JOIN votes after
+  WIN; clean exit SIGINT/SIGTERM (BYE) or MEM_IDLE_EXIT idle timeout.
+  MEM_TIME_SCALE env speeds the authoritative sim (safe: server only
+  ever WAITS for discrete intents).
+- mem_app.c: AME_SERVER=host:port online mode - thin view: local sim
+  becomes the render-only mirror, clicks send OPEN intents, scoreboard
+  shows YOU labels + YOUR/opponent turn + YOU WIN/LOSE + opponent-left
+  + server-closed status; rematch click = JOIN vote; unreachable
+  server falls back to LOCAL hot-seat (never dead-ends). Local mode
+  byte-identical (deterministic screenshots verified). New envs:
+  AME_SERVER, AME_SCREENSHOT_FRAMES.
+- tests/test_mem_net.c (ctest: mem_net, ~15s): spawns the REAL
+  mem_server binary (free loopback port), two scripted clients play a
+  full game to WIN (winner+scores+alternation verified on BOTH
+  mirrors), rematch, drop-mid-game (LEFT, no turn theft within 400ms,
+  no flip), rejoin (mid-game STATE equality), resume to completion,
+  SIGTERM -> BYE -> exit 0.
+- BUGS FOUND + FIXED (all logged): (1) any_client computed at loop top
+  but idle check at bottom -> idle-exited on the very iteration that
+  ACCEPTED the first client (read slot occupancy LIVE); (2) same class:
+  empty_since==0 not-yet-rearmed treated as epoch-0 -> instant idle
+  exit right after the LAST client dropped (guard empty_since != 0);
+  (3) accept-then-JOIN-message double-join duplicated game-start
+  STATE+TURN -> looked like broken alternation (accept only reserves
+  the slot; JOIN message drives the join state machine; rematch votes
+  separate); (4) uninitialized slot_ix[] read for just-accepted fd
+  (stack garbage POLLHUP -> instant drop); (5) test mirrors were never
+  mem_step'd (frozen in REVEAL1); (6) ninja hides compile errors when
+  piped to grep -c (grep exits 1 on zero matches -> && chain breaks or
+  stale binary runs SILENTLY - always check build freshness, e.g.
+  strings binary | grep new-symbol).
+- CI: mem_net is a normal ctest (self-contained loopback); no CI
+  changes needed. mem_server builds with the default target (pure
+  POSIX + sim; AME_3D define satisfies ame.h; _POSIX_C_SOURCE
+  200809L needed under -std=c2x for sigaction/clock_gettime).

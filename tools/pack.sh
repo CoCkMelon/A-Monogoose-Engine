@@ -111,7 +111,12 @@ Needs a GL/EGL runtime (any desktop has it). Headless/CI:
   LIBGL_ALWAYS_SOFTWARE=1 AME_SCREENSHOT=shot.png ./run.sh
 
 ENV
-  AME_SEED=0x...      replay a specific board shuffle (deterministic)
+  AME_SERVER=h:p      ONLINE (Stage 1): connect to an authoritative
+                      mem_server (run: mem_server <port>) instead of
+                      local hot-seat; falls back to local if unreachable
+  AME_SEED=0x...      replay a specific board shuffle (deterministic,
+                      local mode only - online boards come from the
+                      server)
   AME_SCREENSHOT=p    write p (PNG) after 5 frames, then exit
   AME_FAKE_MOUSE=x,y  place the cursor for headless hover checks
   AME_WINDOW_W/H      window size override

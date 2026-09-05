@@ -40,6 +40,20 @@ target_include_directories(test_mem_sim PRIVATE
     ${CMAKE_SOURCE_DIR}/examples/memory_game)
 add_test(NAME mem_sim COMMAND test_mem_sim)
 
+# Stage 1 exit: authoritative online Memory over loopback — two client
+# sessions play a REAL server process ($<TARGET_FILE:mem_server>) to a
+# verified winner, one client drops mid-game, a rejoining client gets a
+# mid-game STATE snapshot and the game resumes to completion.
+add_executable(test_mem_net test_mem_net.c
+    ${CMAKE_SOURCE_DIR}/examples/memory_game/mem_sim.c
+    ${CMAKE_SOURCE_DIR}/examples/memory_game/mem_net.c)
+target_include_directories(test_mem_net PRIVATE
+    ${CMAKE_SOURCE_DIR}/examples/memory_game)
+target_link_libraries(test_mem_net PRIVATE ame::3d)
+target_compile_options(test_mem_net PRIVATE -Wall -Wextra -Werror -ffp-contract=off)
+add_test(NAME mem_net COMMAND test_mem_net $<TARGET_FILE:mem_server>)
+set_tests_properties(mem_net PROPERTIES TIMEOUT 180)
+
 # text layout (pure CPU; glyph metrics from the baked atlas)
 add_executable(test_text test_text.c)
 target_link_libraries(test_text PRIVATE ame::3d)

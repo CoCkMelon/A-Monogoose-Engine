@@ -23,9 +23,11 @@
 #include <stdatomic.h>
 #include <stdio.h>
 #include <inttypes.h>
+#include <unistd.h>
 #include <string.h>
 
 #include "mem_sim.h"
+#include "mem_net.h"
 
 #define GRID_COLS 4
 #define GRID_ROWS 4
@@ -48,12 +50,27 @@ typedef struct {
     int phase;      /* mem_phase */
     int hover;      /* hovered card idx or -1 (pickable) */
     int winner;     /* -2 while playing, -1 tie, 0/1 winner */
+    uint8_t online; /* Stage 1: thin client of an authoritative server */
+    uint8_t you;    /* our player slot when online */
+    uint8_t opp_left;
+    uint8_t srv_gone;
 } mem_snap;
 AME_SNAP_DEFINE(mem_snap)
 
 static mem_game G;
 static mem_snap_snap SNAP;
 static ame_camera CAM;
+
+/* Stage 1: online mode (AME_SERVER=host:port). The local hot-seat sim
+ * stays the default; online, the app is a THIN VIEW: the authoritative
+ * server owns the game, the local mem_game is a render-only mirror
+ * driven by server messages, and clicks become open-card intents. */
+static mem_game *SIM = &G;
+static mem_client CLI;
+static int CLI_FD = -1;
+static mem_net_rx CLI_RX;
+static int g_online;
+static int g_srv_gone;
 
 /* pick intent: main thread publishes click px, logic consumes */
 static _Atomic uint32_t pick_flag;
@@ -86,25 +103,43 @@ static void board_pos(int i, float out[3]) {
 
 static void publish_snapshot(int hover) {
     mem_snap s;
-    s.count = G.count;
-    s.score[0] = G.score[0];
-    s.score[1] = G.score[1];
-    s.turn = G.turn;
-    s.phase = (int)G.phase;
+    s.count = SIM->count;
+    s.score[0] = SIM->score[0];
+    s.score[1] = SIM->score[1];
+    s.turn = SIM->turn;
+    s.phase = (int)SIM->phase;
     s.hover = hover;
-    s.winner = mem_over(&G) ? mem_winner(&G) : -2;
-    for (int i = 0; i < G.count; i++) {
+    s.winner = mem_over(SIM) ? mem_winner(SIM) : -2;
+    s.online = (uint8_t)g_online;
+    s.you = CLI.you < 0 ? 0 : (uint8_t)CLI.you;
+    s.opp_left = CLI.opp_left < 0 ? 0 : (uint8_t)CLI.opp_left;
+    s.srv_gone = (uint8_t)g_srv_gone;
+    for (int i = 0; i < SIM->count; i++) {
         float p[3];
         board_pos(i, p);
         s.x[i] = p[0];
         s.y[i] = p[1];
         s.z[i] = p[2];
-        s.angle[i] = G.card[i].angle;
-        s.lift[i] = G.card[i].matched ? 0.0f : g_lift[i];
-        s.matched[i] = G.card[i].matched;
-        s.pair[i] = G.card[i].pair;
+        s.angle[i] = SIM->card[i].angle;
+        s.lift[i] = SIM->card[i].matched ? 0.0f : g_lift[i];
+        s.matched[i] = SIM->card[i].matched;
+        s.pair[i] = SIM->card[i].pair;
     }
     mem_snap_publish(&SNAP, &s);
+}
+
+/* drain pending server messages into the mirror (logic-thread tick) */
+static void online_pump(void) {
+    if (!g_online || CLI_FD < 0)
+        return;
+    mem_msgv m;
+    int r;
+    while ((r = mem_net_rx_step(&CLI_RX, CLI_FD, &m)) == 1)
+        mem_client_on(&CLI, &m);
+    if (r < 0) {
+        g_srv_gone = 1;
+        printf("ame: server connection lost\n");
+    }
 }
 
 /* --- app hooks (engine calls these; loop.txt) ------------------------------ */
@@ -151,15 +186,69 @@ int app_init(void) {
     au_win = audio_new_synth(&win);
 
     ame_geo_reset();
-    /* Stage 0 exit: "replay with a fixed seed is deterministic". The
-     * default keeps the classic board (golden tests); AME_SEED lets a
-     * human/test replay any specific shuffle. */
-    uint32_t seed = 0xC0FFEE;
-    const char *sd = SDL_getenv("AME_SEED");
-    if (sd && sd[0])
-        seed = (uint32_t)SDL_strtoul(sd, NULL, 0);
-    printf("ame: memory board seed=0x%08" PRIx32 "\n", seed);
-    mem_reset(&G, GRID_COLS, GRID_ROWS, seed);
+    /* Stage 1: online mode. The server owns the game; the local sim
+     * becomes a render-only mirror. Any failure falls back to local
+     * hot-seat so the app never dead-ends. */
+    const char *srv = SDL_getenv("AME_SERVER");
+    if (srv && srv[0]) {
+        char host[64] = "127.0.0.1";
+        unsigned port = 7777;
+        char *colon = SDL_strchr(srv, ':');
+        if (colon) {
+            size_t hl = (size_t)(colon - srv);
+            if (hl >= sizeof host)
+                hl = sizeof host - 1;
+            memcpy(host, srv, hl);
+            host[hl] = 0;
+            port = (unsigned)SDL_strtoul(colon + 1, NULL, 0);
+        } else {
+            /* "port" only: loopback */
+            port = (unsigned)SDL_strtoul(srv, NULL, 0);
+        }
+        mem_client_init(&CLI);
+        mem_net_rx_init(&CLI_RX);
+        for (int try = 0; try < 3 && CLI_FD < 0; try++) {
+            CLI_FD = mem_net_connect(host, (uint16_t)port, 500);
+            if (CLI_FD < 0)
+                SDL_Delay(200);
+        }
+        if (CLI_FD >= 0
+            && mem_net_send(CLI_FD, MEM_MSG_JOIN, 0xff, 0, 0, NULL, 0) == 0) {
+            Uint32 deadline = SDL_GetTicks() + 3000;
+            while (CLI.states == 0 && SDL_GetTicks() < deadline) {
+                mem_msgv m;
+                int r;
+                while ((r = mem_net_rx_step(&CLI_RX, CLI_FD, &m)) == 1)
+                    mem_client_on(&CLI, &m);
+                if (r < 0)
+                    break;
+                SDL_Delay(1);
+            }
+        }
+        if (CLI_FD >= 0 && CLI.states > 0) {
+            g_online = 1;
+            SIM = &CLI.g;
+            printf("ame: online as player %d (%s:%u)\n", CLI.you, host,
+                   port);
+        } else {
+            if (CLI_FD >= 0) {
+                close(CLI_FD);
+                CLI_FD = -1;
+            }
+            printf("ame: AME_SERVER unreachable, falling back to local\n");
+        }
+    }
+    if (!g_online) {
+        /* Stage 0 exit: "replay with a fixed seed is deterministic".
+         * Default keeps the classic board (golden tests); AME_SEED
+         * replays any specific shuffle. */
+        uint32_t seed = 0xC0FFEE;
+        const char *sd = SDL_getenv("AME_SEED");
+        if (sd && sd[0])
+            seed = (uint32_t)SDL_strtoul(sd, NULL, 0);
+        printf("ame: memory board seed=0x%08" PRIx32 "\n", seed);
+        mem_reset(&G, GRID_COLS, GRID_ROWS, seed);
+    }
     for (int i = 0; i < G.count; i++) {
         float p[3];
         board_pos(i, p);
@@ -188,6 +277,11 @@ int app_init(void) {
     if (shot && shot[0]) {
         snprintf(g_shot_path, sizeof g_shot_path, "%s", shot);
         g_shot_frames_left = 5;
+        const char *fr = SDL_getenv("AME_SCREENSHOT_FRAMES");
+        if (fr && fr[0])
+            g_shot_frames_left = (int)SDL_strtol(fr, NULL, 0);
+        if (g_shot_frames_left < 1)
+            g_shot_frames_left = 1;
     }
     return 0;
 }
@@ -215,9 +309,14 @@ void app_resize(int w, int h) {
 /* --- hover + fixed step ----------------------------------------------------- */
 
 static bool card_pickable(int i) {
-    return (G.phase == MEM_PHASE_PICK1 || G.phase == MEM_PHASE_PICK2)
-        && i >= 0 && i < G.count
-        && !G.card[i].matched && G.card[i].state == MEM_CARD_DOWN;
+    return (SIM->phase == MEM_PHASE_PICK1 || SIM->phase == MEM_PHASE_PICK2)
+        && i >= 0 && i < SIM->count
+        && !SIM->card[i].matched && SIM->card[i].state == MEM_CARD_DOWN;
+}
+
+/* online: is it THIS client's move right now? */
+static bool my_move(void) {
+    return !g_online || (SIM->turn == CLI.you && CLI.opp_left < 0);
 }
 
 /* ray from latest mouse atomics; returns hovered static-shape idx or -1 */
@@ -243,7 +342,12 @@ static void try_pick(void) {
     float mx = (float)atomic_load(&pick_x) / 16.0f;
     float my = (float)atomic_load(&pick_y) / 16.0f;
 
-    if (mem_over(&G)) {
+    if (mem_over(SIM)) {
+        if (g_online) {
+            /* rematch vote: the server restarts when everyone asked */
+            mem_net_send(CLI_FD, MEM_MSG_JOIN, 0, 0, 0, NULL, 0);
+            return;
+        }
         mem_reset(&G, GRID_COLS, GRID_ROWS, (uint32_t)G.picks + 1);
         memset(g_lift, 0, sizeof g_lift);
         publish_snapshot(-1);
@@ -258,34 +362,42 @@ static void try_pick(void) {
     r.tmax = 100.0f;
     ame_hit h;
     if (ame_geo_raycast(r, &h) && h.shape >= 0) {
-        if (mem_pick(&G, h.shape))
+        if (g_online) {
+            /* thin view: send the intent; the server's OPENED echo
+             * flips the mirror (and the exact same animation) */
+            if (card_pickable(h.shape) && my_move())
+                mem_net_send(CLI_FD, MEM_MSG_OPEN, (uint8_t)h.shape, 0, 0,
+                             NULL, 0);
+        } else if (mem_pick(&G, h.shape)) {
             audio_play(au_flip);
+        }
     }
 }
 
 int app_fixed(float dt) {
     (void)dt;
+    online_pump();
     try_pick();
 
     int hover = hover_from_mouse();
-    int hover_pickable = card_pickable(hover) ? hover : -1;
+    int hover_pickable = card_pickable(hover) && my_move() ? hover : -1;
 
     /* ease each card's lift toward its target (presentation only) */
-    for (int i = 0; i < G.count; i++) {
+    for (int i = 0; i < SIM->count; i++) {
         float target = (i == hover_pickable) ? HOVER_LIFT : 0.0f;
         g_lift[i] += (target - g_lift[i]) * HOVER_EASE;
         if (target == 0.0f && g_lift[i] < 0.001f)
             g_lift[i] = 0.0f;
     }
 
-    int prev_phase = (int)G.phase;
-    mem_step(&G, 0.001f);
-    if (prev_phase != (int)G.phase) {
-        if (G.phase == MEM_PHASE_RESOLVE && G.was_match)
+    int prev_phase = (int)SIM->phase;
+    mem_step(SIM, 0.001f);
+    if (prev_phase != (int)SIM->phase) {
+        if (SIM->phase == MEM_PHASE_RESOLVE && SIM->was_match)
             audio_play(au_match);
-        else if (G.phase == MEM_PHASE_RESOLVE)
+        else if (SIM->phase == MEM_PHASE_RESOLVE)
             audio_play(au_miss);
-        if (G.phase == MEM_PHASE_OVER)
+        if (SIM->phase == MEM_PHASE_OVER)
             audio_play(au_win);
     }
     publish_snapshot(hover_pickable);
@@ -450,13 +562,30 @@ int app_render(void) {
 
     /* scoreboard: in-scene billboard above the far table edge */
     char line[96];
-    const char *phase_txt =
-        s->winner == -2 ? (s->turn == 0 ? "P1 turn" : "P2 turn")
-      : s->winner == -1 ? "TIE!"
-      : s->winner == 0  ? "P1 WINS!"
-                        : "P2 WINS!";
-    snprintf(line, sizeof line, "P1 %d   %s   P2 %d", s->score[0],
-             phase_txt, s->score[1]);
+    const char *left = "P1", *right = "P2";
+    const char *phase_txt;
+    if (s->online && s->you < 2) {
+        if (s->you == 0)
+            left = "YOU";
+        else
+            right = "YOU";
+    }
+    if (s->online && s->srv_gone)
+        phase_txt = "server closed";
+    else if (s->online && s->opp_left)
+        phase_txt = "opponent left";
+    else if (s->winner == -2)
+        phase_txt = s->online
+            ? (s->turn == s->you ? "YOUR turn" : "opponent turn")
+            : (s->turn == 0 ? "P1 turn" : "P2 turn");
+    else if (s->winner == -1)
+        phase_txt = "TIE!";
+    else if (s->online)
+        phase_txt = s->winner == s->you ? "YOU WIN!" : "YOU LOSE";
+    else
+        phase_txt = s->winner == 0 ? "P1 WINS!" : "P2 WINS!";
+    snprintf(line, sizeof line, "%s %d   %s   %s %d", left, s->score[0],
+             phase_txt, right, s->score[1]);
     ame_text_layout l;
     text_layout(line, 0, AME_TEXT_ALIGN_C, 0.9f, &l);
     float pose[16];
@@ -466,7 +595,8 @@ int app_render(void) {
 
     if (s->winner != -2) {
         ame_text_layout l2;
-        text_layout("click to play again", 0, AME_TEXT_ALIGN_C, 0.6f, &l2);
+        text_layout(s->online ? "click for rematch" : "click to play again",
+                    0, AME_TEXT_ALIGN_C, 0.6f, &l2);
         float pose2[16];
         billboard_pose(pose2, 0, 0.38f, -td * 0.5f - 1.15f, 0.008f);
         float gray[4] = { 0.7f, 0.7f, 0.75f, 1 };
@@ -490,5 +620,10 @@ int app_render(void) {
 }
 
 void app_quit(void) {
+    if (g_online && CLI_FD >= 0) {
+        mem_net_send(CLI_FD, MEM_MSG_QUIT, 0, 0, 0, NULL, 0);
+        close(CLI_FD);
+        CLI_FD = -1;
+    }
     SDL_ShowCursor();
 }
