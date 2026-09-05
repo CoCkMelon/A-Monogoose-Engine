@@ -12,3 +12,5 @@ trash/
 .vscode/
 .idea/
 cmake-build-*/
+.lake/
+build-pkg*/
