@@ -253,4 +253,30 @@ theorem picking_from_shader (f s u eye P : V3) (X Y D t a vw vh zn zf : Rat)
     exact ndcOfPxY_pxOfNdcY _ hvh
   exact Ame.Camera.ray_hits hV hnx hny ht ha hD
 
+
+/-! ## Stage 2: the Lambert term of the one shader -/
+
+/-- The shader's `max(_, 0.0)`. -/
+def max0 (x : Rat) : Rat := if x ≤ 0 then 0 else x
+
+theorem max0_eq_zero {x : Rat} (h : x ≤ 0) : max0 x = 0 := by
+  rw [max0, if_pos h]
+
+/-- The directional term of the engine's forward light:
+    `amb + col * max0(dot(n, -dir))` (u_lamb + u_lcol * max(dot(n,-u_ldir),0))
+    with scalars per channel; stated for one channel. -/
+def shadeTerm (n dir : V3) (amb col : Rat) : Rat :=
+  amb + col * max0 (-(n.dot dir))
+
+/-- A surface turned AWAY from the light is lit by the ambient term
+    only (the clamp kills the negative term; no subtraction cheat). -/
+theorem shade_backface {n dir : V3} {amb col : Rat}
+    (h : n.dot dir ≥ 0) :
+    shadeTerm n dir amb col = amb := by
+  have h0 : (0 : Rat) ≤ n.dot dir := h
+  have hle : -(n.dot dir) ≤ 0 := by
+    have hn := Rat.neg_le_neg h0
+    rwa [Rat.neg_zero] at hn
+  rw [shadeTerm, max0_eq_zero hle, Rat.mul_zero, Rat.add_zero]
+
 end Ame.Shader
