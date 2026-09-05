@@ -53,6 +53,20 @@ file(GLOB AME_ENGINE_SRC CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/src/*.c"
 list(FILTER AME_ENGINE_SRC EXCLUDE REGEX ".*/app_sdl\.c$")
 set(AME_BOOTSTRAP_SRC "${CMAKE_CURRENT_SOURCE_DIR}/src/app_sdl.c")
 
+# dialogue needs libfyaml (dialogue.txt; system package OK). Without it
+# the engine still builds - dialogue.c drops out and the test skips.
+find_package(PkgConfig QUIET)
+if(PkgConfig_FOUND)
+    pkg_check_modules(FYAML QUIET libfyaml)
+endif()
+if(FYAML_FOUND)
+    message(STATUS "ame: libfyaml ${FYAML_VERSION} - dialogue enabled")
+else()
+    message(STATUS "ame: libfyaml NOT found - dialogue module disabled "
+                   "(install libfyaml-dev)")
+    list(FILTER AME_ENGINE_SRC EXCLUDE REGEX ".*/dialogue\.c$")
+endif()
+
 function(ame_dim_lib dim)
     add_library(ame_${dim}d STATIC ${AME_ENGINE_SRC})
     target_include_directories(ame_${dim}d PUBLIC

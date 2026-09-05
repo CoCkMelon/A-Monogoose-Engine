@@ -29,3 +29,16 @@ add_library(ame_font STATIC ${CMAKE_SOURCE_DIR}/generated/font_atlas.c)
 target_include_directories(ame_font PUBLIC ${CMAKE_SOURCE_DIR}/generated)
 add_dependencies(ame_font generated_font)
 target_compile_options(ame_font PRIVATE -w) # generated data: silence
+
+# assimp2c: build-time model baker (levels.txt Assimp rule). Optional -
+# baked outputs are COMMITTED (tests/assets/*.h), so the engine/tests
+# build fine without Assimp; install libassimp-dev only to re-bake.
+find_package(assimp QUIET)
+if(assimp_FOUND)
+    add_executable(assimp2c assimp2c.c)
+    target_link_libraries(assimp2c PRIVATE assimp::assimp)
+    message(STATUS "ame: assimp2c tool available (assimp ${assimp_VERSION})")
+else()
+    message(STATUS "ame: assimp not found - assimp2c tool skipped "
+                   "(baked assets are committed)")
+endif()

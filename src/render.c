@@ -747,6 +747,71 @@ void rp_end_frame(void) {
     }
 }
 
+int rp_push_mesh(int tex, const ame_mesh_vert *verts,
+                 const unsigned int *idx, int idx_count,
+                 const float *xform_or_null, const float tint[4],
+                 float layer) {
+    if (!verts || !idx || idx_count < 3)
+        return 0;
+    if (tex < 0 || tex >= S.tex_count)
+        tex = 0;
+    const float *M = xform_or_null;
+    int tris = 0;
+    for (int i = 0; i + 2 < idx_count; i += 3) {
+        if (S.batch.quad_count >= S.batch.quad_cap)
+            break; /* assert/drop: never silent overflow */
+        unsigned int ix[3] = { idx[i], idx[i + 1], idx[i + 2] };
+        int q = S.batch.quad_count++;
+        rp_vertex *v = &S.batch.verts[q * 4];
+        for (int k = 0; k < 4; k++) {
+            /* k=3 repeats v0: the 4th index triangle is degenerate */
+            const ame_mesh_vert *mv = &verts[ix[k < 3 ? k : 0]];
+            float p[3] = { mv->pos[0], mv->pos[1], mv->pos[2] };
+            float n[3] = { mv->nrm[0], mv->nrm[1], mv->nrm[2] };
+            if (M) { /* column-major: out = M[:3,:3]*p + M[:3,3] */
+                float tp[3], tn[3];
+                for (int r2 = 0; r2 < 3; r2++) {
+                    tp[r2] = M[r2] * p[0] + M[4 + r2] * p[1]
+                           + M[8 + r2] * p[2] + M[12 + r2];
+                    tn[r2] = M[r2] * n[0] + M[4 + r2] * n[1]
+                           + M[8 + r2] * n[2];
+                }
+                p[0] = tp[0]; p[1] = tp[1]; p[2] = tp[2];
+                n[0] = tn[0]; n[1] = tn[1]; n[2] = tn[2];
+            }
+            v[k].pos[0] = p[0]; v[k].pos[1] = p[1]; v[k].pos[2] = p[2];
+            v[k].nrm[0] = n[0]; v[k].nrm[1] = n[1]; v[k].nrm[2] = n[2];
+            v[k].uv[0] = mv->uv[0];
+            v[k].uv[1] = mv->uv[1];
+            v[k].col[0] = col_byte(tint[0]);
+            v[k].col[1] = col_byte(tint[1]);
+            v[k].col[2] = col_byte(tint[2]);
+            v[k].col[3] = col_byte(tint[3]);
+            v[k].layer = layer;
+            v[k].lit = S.stamp_lit; /* lit only under rp_set_lit(1) */
+        }
+        float u0 = v[0].uv[0], u1 = u0, vv0 = v[0].uv[1], vv1 = vv0;
+        for (int k = 1; k < 3; k++) {
+            if (v[k].uv[0] < u0) u0 = v[k].uv[0];
+            if (v[k].uv[0] > u1) u1 = v[k].uv[0];
+            if (v[k].uv[1] < vv0) vv0 = v[k].uv[1];
+            if (v[k].uv[1] > vv1) vv1 = v[k].uv[1];
+        }
+        /* remap per-tri UV bounds into the tile rect (white texture:
+         * any uv works; atlases use full-tile coverage) */
+        for (int k = 0; k < 4; k++) {
+            v[k].uv[0] = (v[k].uv[0] - u0) / (u1 - u0 > 1e-9f ? u1 - u0 : 1);
+            v[k].uv[1] = (v[k].uv[1] - vv0)
+                       / (vv1 - vv0 > 1e-9f ? vv1 - vv0 : 1);
+        }
+        S.batch.q_tex[q] = (uint16_t)tex;
+        S.batch.q_layer[q] =
+            (uint8_t)(layer < 0 ? 0 : layer > 255 ? 255 : layer);
+        tris++;
+    }
+    return tris;
+}
+
 /* --- Stage 2: post pass uniforms ----------------------------------------- */
 
 void rp_post_tint(float r, float g, float b) {

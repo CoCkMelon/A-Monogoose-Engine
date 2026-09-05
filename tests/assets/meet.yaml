@@ -1,0 +1,12 @@
+scene: meet
+speakers: {G: Glitcher, V: Venera}
+default speaker: G
+lines:
+  - "Hi. Press ENTER to proceed."
+  - {V: "I like jumps."}
+  - "With enough skill anything is fun."
+  - {V: "Oh no!", portrait: worried, on: [unlock_car_jump, play_chime]}
+  - "What now?"
+  - choices: [{Keep going: mid}, {Stop here: }]
+  - {mid: "Good, onward."}
+  - {V: "Then let us race.", portrait: happy}

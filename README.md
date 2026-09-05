@@ -14,7 +14,7 @@ the same single-pass renderer.
 | 0 | local game, headless screenshots, packaged unit + clean-machine smoke | **done** |
 | 1 | server-authoritative **online** Memory over TCP (loopback-tested) | **done** |
 | 2 | advanced rendering: forward lighting ✓, offscreen + post pass ✓, particles ✓ (shadows next) | in progress |
-| — | A-Monogoose parity: audio occlusion raytracer ✓ (ported), decoded PCM + wav ✓, tilemap (.tmj) + 2D proof ✓ | dialogue + mesh import next |
+| — | A-Monogoose parity: audio occlusion raytracer ✓ (ported), decoded PCM + wav ✓, tilemap (.tmj) + 2D proof ✓, dialogue (libfyaml + bake-to-C) ✓, Assimp mesh import ✓ | done (opus decode = Stage 3) |
 | — | Lean 4 formal model (geometry/picking/shader contracts + game rules) | done, `lean/` |
 | 2+ | advanced rendering, richer 3D, ports | roadmap (`docs/README.txt`) |
 
@@ -26,7 +26,9 @@ ctest --test-dir build                             # 11 tests incl. online loopb
 ```
 
 Needs: CMake ≥3.16, Ninja, SDL3 dev, EGL/GLES dev (`libsdl3-dev libegl1
-libgl1-mesa-dri libgles-dev` on Debian/Ubuntu).
+libgl1-mesa-dri libgles-dev` on Debian/Ubuntu). Optional: `libfyaml-dev`
+(dialogue module; engine builds without it), `libassimp-dev` (the
+`assimp2c` bake tool; baked assets are committed).
 
 ## Play
 

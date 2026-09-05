@@ -107,6 +107,23 @@ void rp_lighting_off(void);
  * PIXEL-EXACT with the direct path (test-proven) - post is a pure
  * add-on, never a second renderer. Effects are cheap uniforms, so
  * they may be set per frame. */
+/* --- Stage 2 mesh path: Assimp-baked geometry in the ONE batch ------
+ * tools/assimp2c.c bakes models to C arrays at BUILD time (levels.txt:
+ * no runtime obj/parser). verts are interleaved pos xyz / nrm xyz /
+ * uv (matches ame_mesh_vert). xform = optional column-major 4x4
+ * (ame_m4) applied to positions; normals rotate by the upper 3x3.
+ * Per-vertex normals pair with rp_set_lit(1). Returns tris pushed. */
+typedef struct {
+    float pos[3];
+    float nrm[3];
+    float uv[2];
+} ame_mesh_vert;
+
+int rp_push_mesh(int tex, const ame_mesh_vert *verts,
+                 const unsigned int *idx, int idx_count,
+                 const float *xform_or_null, const float tint[4],
+                 float layer);
+
 void rp_post_tint(float r, float g, float b);
 void rp_post_vignette(float strength); /* 0 = off .. ~0.5 strong */
 

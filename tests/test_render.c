@@ -371,6 +371,48 @@ int main(void) {
      * Render glyph 'F' (strongly asymmetric) big on an ortho screen and
      * correlate the pixels with the atlas bitmap: direct must beat the
      * horizontally-flipped hypothesis. Catches any L-R mirroring. */
+    UT_CASE("Stage 2 mesh: Assimp-baked cube under world matrices");
+    {
+#include "assets/baked_cube.h"
+        rp_set_camera(&cam3);
+        /* identity + translated cube on the same batch, lit normals */
+        float id[16] = { 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1 };
+        float mv[16] = { 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0,
+                         -1.6f, 0.9f, 0, 1 }; /* column-major */
+        float tint[4] = { 0.8f, 0.7f, 0.95f, 1 };
+        rp_begin_frame();
+        rp_set_lit(1);
+        int tris = rp_push_mesh(rp_white_texture(),
+                                (const ame_mesh_vert *)baked_cube_verts,
+                                baked_cube_idx, baked_cube_idx_count, id,
+                                tint, 5);
+        int tris2 = rp_push_mesh(rp_white_texture(),
+                                 (const ame_mesh_vert *)baked_cube_verts,
+                                 baked_cube_idx, baked_cube_idx_count, mv,
+                                 tint, 5);
+        rp_set_lit(0);
+        rp_end_frame();
+        UT_ASSERTF(tris == baked_cube_idx_count / 3 && tris2 == tris,
+                   "one quad per tri (%d %d)", tris, tris2);
+        UT_ASSERTF(rp_quads_last_frame() == 2 * tris, "batch holds both");
+        UT_ASSERT(rp_draw_calls_last_frame() <= 2);
+        uint32_t mh = hash_frame();
+        /* determinism: identical draw -> identical frame */
+        rp_begin_frame();
+        rp_set_lit(1);
+        rp_push_mesh(rp_white_texture(),
+                     (const ame_mesh_vert *)baked_cube_verts, baked_cube_idx,
+                     baked_cube_idx_count, id, tint, 5);
+        rp_push_mesh(rp_white_texture(),
+                     (const ame_mesh_vert *)baked_cube_verts, baked_cube_idx,
+                     baked_cube_idx_count, mv, tint, 5);
+        rp_set_lit(0);
+        rp_end_frame();
+        UT_ASSERTF(hash_frame() == mh, "mesh frame must be stable");
+        printf("    baked cube: %d verts %d tris x2, stable hash 0x%08x\n",
+               baked_cube_vert_count, tris, mh);
+    }
+
     UT_CASE("Stage 2 particles: billboards batch, fade, expire");
     {
         rp_set_camera(&cam3); /* back to 3D after the later camera cases */

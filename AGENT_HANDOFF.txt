@@ -395,3 +395,40 @@ REMAINING PARITY: dialogue (libfyaml runtime + bake-to-C +
 determinism test, dialogue.txt), mesh import (Assimp build-time tool
 -> C + rp_push_mesh per-object world matrix, levels.txt), opus decode
 (Stage 3 codecs).
+
+SESSION 8 ADDENDUM - PARITY 2/3 AND 3/3 (dialogue + mesh import):
+- tools/assimp2c.c (optional CMake target when assimp found): bakes
+  models to C arrays at BUILD time (levels.txt); engine rp_push_mesh
+  (amesh_vert pos/nrm/uv, optional column-major xform, per-vertex
+  normals under rp_set_lit, per-tri UV normalize); baked cube
+  COMMITTED at tests/assets/baked_cube.h so tests need no assimp.
+  %.6ff in the emitter - "%gf" prints "0f" (invalid C).
+- dialogue (libfyaml, apt libfyaml-dev; CMake drops dialogue.c when
+  absent - engine/tests build fine): the TIGHT format of
+  dialogue.txt - aliases/speakers map, default speaker (RESOLVED
+  through the table: "default speaker: G" -> "Glitcher"), bare quoted
+  strings (current speaker), flow/block maps, per-line portrait/on
+  (string or list), choices [{button: label}] with empty target =
+  end. DISAMBIGUATION IS BY KEY, not value (the spec's "value"
+  wording is misleading: "{V: ...}" switches because V is a known
+  alias; "{mid: ...}" labels because mid is not; "do not name a
+  label the same as a speaker" confirms). Walker = A-Monogoose
+  semantics: advance BLOCKS at a choice point, select jumps to the
+  label, on-events fire once per line (take_events).
+  PITFALLS: fy_node_get_scalar is NOT zero-terminated - always copy
+  via len (node_scpy/key_is); libfyaml 0.8 names:
+  fy_node_mapping_item_count / _get_by_index /
+  fy_node_mapping_lookup_value_by_string(n,k,len). DETERMINISM RULE:
+  runtime vs baked (tools/dlg2c.c) scenes must be memcmp-IDENTICAL -
+  a speaker written twice ("Glitcher" then "Venera") leaves stale
+  bytes past the NUL: memset target buffers before overwrite. Test
+  asserts file parse == string parse == baked.
+- CI: libfyaml-dev + libassimp-dev added to the apt lines.
+- Parity matrix vs A-Monogoose-Engine: KEPT+DONE: 1kHz loop, split
+  threads, deterministic audio, builders, text atlas, camera,
+  asyncinput, tilemap, dialogue, mesh import, audio raytracer,
+  decoded samples, pan. REJECTED per spec (never parity targets):
+  flecs ECS, Unity-like facade, scene YAML, prefabs, parent-child
+  hierarchy, Box2D-as-core. ame-next is AHEAD: 3D, lighting, post,
+  particles, online server-authoritative game, Lean model, packaging.
+  Remaining: opus decode (Stage 3 codecs).
