@@ -17,6 +17,7 @@
  * the SDL_AppInit/Event/Iterate/Quit loop below (loop.txt rule 1). */
 #define SDL_MAIN_USE_CALLBACKS
 #include <SDL3/SDL_main.h>
+#include <stdio.h>
 #include <stdlib.h> /* generates main() -> SDL_App* callbacks */
 
 #include <ame/app.h>
@@ -198,10 +199,29 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
     return SDL_APP_CONTINUE;
 }
 
+/* engine-level headless verification shot (Stage 0 exit for EVERY
+ * app): AME_SHOT_PPM=path.ppm writes a zero-dependency P6 PPM after
+ * AME_SHOT_FRAMES frames (default 5). Games with fancier needs (the
+ * memory game's stb PNG path) keep their own AME_SCREENSHOT hook. */
+static int g_shot_left = -1;
+static char g_shot_path[256];
+
 SDL_AppResult SDL_AppIterate(void *appstate) {
     (void)appstate;
     if (!atomic_load_explicit(&g_run, memory_order_relaxed))
         return SDL_APP_SUCCESS;
+    if (g_shot_left < 0) {
+        const char *p = getenv("AME_SHOT_PPM");
+        if (p && p[0]) {
+            snprintf(g_shot_path, sizeof g_shot_path, "%s", p);
+            const char *fr = getenv("AME_SHOT_FRAMES");
+            g_shot_left = fr ? (int)SDL_strtol(fr, NULL, 0) : 5;
+            if (g_shot_left < 1)
+                g_shot_left = 1;
+        } else {
+            g_shot_left = 1000 * 1000; /* never */
+        }
+    }
     if (g_fixed_dt > 0.0) {
         /* fixed-frame QA mode: step logic inline, exact dt per frame */
         in_begin_step();
@@ -210,6 +230,35 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
     }
     if (app_render() != 0)
         return SDL_APP_SUCCESS;
+    if (g_shot_left > 0 && --g_shot_left == 0 && g_shot_path[0]) {
+        int w = 0, h = 0;
+        SDL_GetWindowSizeInPixels(g_window, &w, &h);
+        if (w > 0 && h > 0) {
+            /* RGBA8 read + flip to top-down RGB rows = P6 PPM */
+            uint8_t *rgba = (uint8_t *)malloc((size_t)w * h * 4);
+            uint8_t *row = (uint8_t *)malloc((size_t)w * 3);
+            if (rgba && row && rp_read_pixels(rgba, w, h)) {
+                FILE *f = fopen(g_shot_path, "wb");
+                if (f) {
+                    fprintf(f, "P6\n%d %d\n255\n", w, h);
+                    for (int y = h - 1; y >= 0; y--) {
+                        for (int x = 0; x < w; x++) {
+                            const uint8_t *px =
+                                rgba + ((size_t)y * w + x) * 4;
+                            row[x * 3 + 0] = px[0];
+                            row[x * 3 + 1] = px[1];
+                            row[x * 3 + 2] = px[2];
+                        }
+                        fwrite(row, 3, (size_t)w, f);
+                    }
+                    fclose(f);
+                    SDL_Log("ame: engine shot -> %s", g_shot_path);
+                }
+            }
+            free(rgba);
+            free(row);
+        }
+    }
     SDL_GL_SwapWindow(g_window);
     return SDL_APP_CONTINUE;
 }

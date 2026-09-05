@@ -1,0 +1,5 @@
+# audio_ray — occlusion raytracer visualization (A-Monogoose port)
+add_executable(audio_ray ray_app.c ${AME_BOOTSTRAP_SRC})
+target_link_libraries(audio_ray PRIVATE ame::2d)
+target_compile_definitions(audio_ray PRIVATE AME_INPUT_SDL=1 AME_2D=1)
+target_compile_options(audio_ray PRIVATE -Wall -Wextra -Werror -ffp-contract=off)

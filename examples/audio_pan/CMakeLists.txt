@@ -1,0 +1,5 @@
+# audio_pan — synth voice panned by the mouse (A-Monogoose port)
+add_executable(audio_pan pan_app.c ${AME_BOOTSTRAP_SRC})
+target_link_libraries(audio_pan PRIVATE ame::2d)
+target_compile_definitions(audio_pan PRIVATE AME_INPUT_SDL=1 AME_2D=1)
+target_compile_options(audio_pan PRIVATE -Wall -Wextra -Werror -ffp-contract=off)

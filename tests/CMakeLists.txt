@@ -81,6 +81,20 @@ if(UNIX AND NOT APPLE)
     target_compile_options(test_render_2d PRIVATE -Wno-error=implicit-function-declaration)
     add_test(NAME render_2d COMMAND test_render_2d)
 
+# opus decode test: needs opusfile (engine feature) + the asset baked
+# by tools/mkopus_sine (needs the opus ENCODER). Same optional-dep
+# pattern as the cglm oracle below.
+if(OPUSFILE_FOUND AND OPUS_FOUND)
+    add_executable(test_audio_opus test_audio_opus.c)
+    target_link_libraries(test_audio_opus PRIVATE ame::3d)
+    target_include_directories(test_audio_opus PRIVATE
+        ${CMAKE_SOURCE_DIR}/tests/assets)
+    add_test(NAME audio_opus COMMAND test_audio_opus)
+    add_dependencies(test_audio_opus bake_opus_asset)
+else()
+    message(STATUS "tests: opus test skipped (needs libopusfile-dev + libopus-dev)")
+endif()
+
 # math parity vs cglm (oracle + perf table; cglm is a TEST-ONLY dep)
 find_package(PkgConfig QUIET)
 if(PkgConfig_FOUND)

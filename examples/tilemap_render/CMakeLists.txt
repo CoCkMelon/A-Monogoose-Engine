@@ -1,0 +1,7 @@
+# tilemap_render — .tmj through the one batch (A-Monogoose port)
+add_executable(tilemap_render tile_app.c ${AME_BOOTSTRAP_SRC})
+target_link_libraries(tilemap_render PRIVATE ame::2d)
+target_compile_definitions(tilemap_render PRIVATE AME_INPUT_SDL=1 AME_2D=1)
+target_compile_options(tilemap_render PRIVATE -Wall -Wextra -Werror -ffp-contract=off)
+# asset lands beside the binary (sample.tmj opens relative to cwd)
+file(COPY ${CMAKE_CURRENT_SOURCE_DIR}/sample.tmj DESTINATION ${CMAKE_CURRENT_BINARY_DIR})

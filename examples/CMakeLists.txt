@@ -1,1 +1,6 @@
 add_subdirectory(memory_game)
+add_subdirectory(audio_pan)
+add_subdirectory(audio_opus)
+add_subdirectory(audio_ray)
+add_subdirectory(line_draw)
+add_subdirectory(tilemap_render)

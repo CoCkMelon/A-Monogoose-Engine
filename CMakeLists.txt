@@ -20,6 +20,16 @@ option(AME_BUILD_TESTS    "Build tests"    ON)
 option(AME_ENABLE_ASAN    "ASan/UBSan debug build" OFF)
 option(AME_BUILD_ASYNCINPUT_GAME "Build the asyncinput-backend game variant" OFF)
 
+# optional system deps, found ONCE before any add_subdirectory (tools
+# and tests both gate on these): libfyaml (dialogue), opusfile (opus
+# decode, engine), opus (encode, test-asset baker).
+find_package(PkgConfig QUIET)
+if(PkgConfig_FOUND)
+    pkg_check_modules(FYAML QUIET libfyaml)
+    pkg_check_modules(OPUSFILE QUIET opusfile)
+    pkg_check_modules(OPUS QUIET opus)
+endif()
+
 # ---------------------------------------------------------------------------
 # FP behaviour is PINNED for determinism (principles.txt): no fast-math,
 # no FP contraction, on every target.
@@ -55,10 +65,7 @@ set(AME_BOOTSTRAP_SRC "${CMAKE_CURRENT_SOURCE_DIR}/src/app_sdl.c")
 
 # dialogue needs libfyaml (dialogue.txt; system package OK). Without it
 # the engine still builds - dialogue.c drops out and the test skips.
-find_package(PkgConfig QUIET)
-if(PkgConfig_FOUND)
-    pkg_check_modules(FYAML QUIET libfyaml)
-endif()
+
 if(FYAML_FOUND)
     message(STATUS "ame: libfyaml ${FYAML_VERSION} - dialogue enabled")
 else()
@@ -132,6 +139,20 @@ endif()
 ame_dim_lib(2)
 ame_dim_lib(3)
 add_library(ame ALIAS ame_${AME_DIM}d)
+
+# Ogg Opus decode (audio.txt "decoded samples (opus/wav), one C API"):
+# optional system dep, exactly like cglm in tests - the engine never
+# requires it. When present, audio.c gains audio_load_opus[_mem].
+if(OPUSFILE_FOUND)
+    message(STATUS "ame: opusfile ${OPUSFILE_VERSION} - opus decode enabled")
+    foreach(dim 2 3)
+        target_compile_definitions(ame_${dim}d PRIVATE AME_HAVE_OPUSFILE=1)
+        target_include_directories(ame_${dim}d PRIVATE ${OPUSFILE_INCLUDE_DIRS})
+        target_link_libraries(ame_${dim}d PRIVATE ${OPUSFILE_LIBRARIES})
+    endforeach()
+else()
+    message(STATUS "ame: opusfile not found - opus decode stubbed (apt libopusfile-dev)")
+endif()
 
 # ---------------------------------------------------------------------------
 # Helper: declare an engine-consuming target with dimension + input backend.

@@ -88,6 +88,15 @@ int  audio_new_decoded(const float *pcm_stereo, int frames, bool loop);
  * interleaved float samples (setup layer: call once, free() when the
  * voice is gone). Returns NULL on any format mismatch. */
 float *audio_load_wav(const char *path, int *frames_out);
+/* Decode an Ogg Opus FILE / MEMORY blob to the same caller-owned
+ * stereo-float contract as audio_load_wav (audio.txt: "one C API for
+ * both"). Opus is 48 kHz by spec; when the mixer runs at another rate
+ * the decode is linearly resampled (deterministic). Requires the
+ * engine built with opusfile (pkg-config opusfile); otherwise these
+ * return NULL and audio_opus_available() reports false. */
+float *audio_load_opus(const char *path, int *frames_out);
+float *audio_load_opus_mem(const uint8_t *data, size_t len, int *frames_out);
+bool  audio_opus_available(void);
 void audio_set(int id, const ame_synth_cfg *cfg); /* republish patch */
 void audio_play(int id);
 void audio_stop(int id);

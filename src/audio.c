@@ -494,3 +494,115 @@ float *audio_load_wav(const char *path, int *frames_out) {
     *frames_out = frames;
     return out;
 }
+
+/* --- Stage 3 arrived early: Ogg Opus decode ------------------------------ */
+#if defined(AME_HAVE_OPUSFILE)
+#include <opus/opusfile.h>
+
+static float *au_opus_decode(OggOpusFile *of, int *frames_out) {
+    /* op_read_float_stereo: always stereo float at 48 kHz (Opus spec) */
+    size_t cap = 48000 * 2;
+    float *buf = (float *)malloc(cap * sizeof(float));
+    if (!buf) {
+        op_free(of);
+        return NULL;
+    }
+    size_t got = 0; /* interleaved floats */
+    for (;;) {
+        if (got + 2 * 120 > cap) { /* grow in 10 s-ish chunks */
+            cap *= 2;
+            float *nb = (float *)realloc(buf, cap * sizeof(float));
+            if (!nb) {
+                free(buf);
+                op_free(of);
+                return NULL;
+            }
+            buf = nb;
+        }
+        int n = op_read_float_stereo(of, buf + got, (int)(cap - got));
+        if (n == 0)
+            break; /* EOF */
+        if (n < 0) { /* corrupt stream: fail the whole load */
+            free(buf);
+            op_free(of);
+            return NULL;
+        }
+        got += (size_t)n * 2;
+    }
+    op_free(of);
+    if (got == 0) {
+        free(buf);
+        return NULL;
+    }
+    /* mixer-rate resample (48k native -> S.rate), linear + deterministic */
+    size_t in_frames = got / 2;
+    float *out = buf;
+    size_t out_frames = in_frames;
+    if (S.rate > 0 && S.rate != 48000) {
+        out_frames = in_frames * (size_t)S.rate / 48000u;
+        out = (float *)malloc(out_frames * 2 * sizeof(float));
+        if (!out) {
+            free(buf);
+            return NULL;
+        }
+        for (size_t i = 0; i < out_frames; i++) {
+            /* fixed-point position: exact, no accumulating drift */
+            size_t p = i * 48000u / (size_t)S.rate;
+            size_t q = p + 1 < in_frames ? p + 1 : p;
+            float t = (float)((uint64_t)i * 48000u % (uint64_t)S.rate)
+                      / (float)S.rate;
+            for (int ch = 0; ch < 2; ch++) {
+                out[i * 2 + ch] =
+                    buf[p * 2 + ch] + (buf[q * 2 + ch] - buf[p * 2 + ch]) * t;
+            }
+        }
+        free(buf);
+    }
+    *frames_out = (int)out_frames;
+    return out;
+}
+
+float *audio_load_opus(const char *path, int *frames_out) {
+    if (!path || !frames_out)
+        return NULL;
+    *frames_out = 0;
+    int err = 0;
+    OggOpusFile *of = op_open_file(path, &err);
+    if (!of)
+        return NULL;
+    return au_opus_decode(of, frames_out);
+}
+
+float *audio_load_opus_mem(const uint8_t *data, size_t len, int *frames_out) {
+    if (!data || len == 0 || !frames_out)
+        return NULL;
+    *frames_out = 0;
+    int err = 0;
+    OggOpusFile *of = op_open_memory(data, len, &err);
+    if (!of)
+        return NULL;
+    return au_opus_decode(of, frames_out);
+}
+
+bool audio_opus_available(void) { return true; }
+
+#else /* !AME_HAVE_OPUSFILE: honest stubs, engine still builds */
+
+float *audio_load_opus(const char *path, int *frames_out) {
+    (void)path;
+    if (frames_out)
+        *frames_out = 0;
+    return NULL;
+}
+
+float *audio_load_opus_mem(const uint8_t *data, size_t len, int *frames_out) {
+    (void)data;
+    (void)len;
+    if (frames_out)
+        *frames_out = 0;
+    return NULL;
+}
+
+bool audio_opus_available(void) { return false; }
+
+#endif /* AME_HAVE_OPUSFILE */

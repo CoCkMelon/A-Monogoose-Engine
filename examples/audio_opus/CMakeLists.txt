@@ -1,0 +1,5 @@
+# audio_opus — decoded .opus playback (A-Monogoose port; needs opusfile)
+add_executable(audio_opus opus_app.c ${AME_BOOTSTRAP_SRC})
+target_link_libraries(audio_opus PRIVATE ame::2d)
+target_compile_definitions(audio_opus PRIVATE AME_INPUT_SDL=1 AME_2D=1)
+target_compile_options(audio_opus PRIVATE -Wall -Wextra -Werror -ffp-contract=off)

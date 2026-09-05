@@ -651,3 +651,70 @@ REMAINING for Stage 2 exit: MATERIALS. Then opus decode (parity).
 Lean note: pure core only (no mathlib): no linarith/norm_num in
 proofs; closed numerics via native_decide; Rat lemma names verified
 via #check probes.
+
+SESSION 13 - OPUS DECODE + third_party->external RENAME + EXAMPLE
+PORTS (user directive: "Add opus decode. Rename third_party to
+external. Next is to rewrite each example, except yaml, from master
+to here."). Commits this session: rename, opus+examples.
+
+RENAME: third_party/ -> external/ (git mv; .gitmodules path updated;
+7 files re-pathed). Fresh clone verifies: submodule at
+external/asyncinput checks out from GitHub, builds 17/17.
+
+OPUS (last A-Monogoose parity item, pulled ahead of Stage 3):
+- Engine: audio_load_opus(path)/audio_load_opus_mem(bytes) in
+  src/audio.c under AME_HAVE_OPUSFILE (pkg-config opusfile, found in
+  top-level BEFORE any add_subdirectory - tools/tests gate on it).
+  Same caller-owned stereo-float contract as audio_load_wav
+  ("one C API for both", audio.txt). 48k native; linear deterministic
+  resample when mixer rate differs. Stubs (NULL) when absent.
+- tools/mkopus_sine.c: bakes the test asset at BUILD time - libopus
+  ENCODER + HAND-MUXED minimal Ogg (OpusHead/OpusTags, 1 packet/page,
+  Ogg CRC32 0x04c11db7 MSB-first; frames must be full 20 ms - pad the
+  tail, opus_encode rejects 13 ms leftovers). Output
+  tests/assets/baked_sine_opus.h (gitignored, generated).
+- tests/test_audio_opus.c (18th test, gated opusfile+opus): duration
+  window, zero-crossing frequency 420-460 Hz (codec-noise robust),
+  rms level, L==R, decode-twice memcmp, corrupt-blob rejection,
+  plays 2.02 s through the mixer. 18/18 total.
+
+ENGINE SHOT HOOK: app_sdl.c now honors AME_SHOT_PPM=path +
+AME_SHOT_FRAMES (default 5): zero-dep P6 PPM screenshot for ANY app
+(engine stays stb-free; memory_game keeps its stb PNG AME_SCREENSHOT
+path). All examples below smoke-verified headless with it.
+
+EXAMPLE PORTS FROM MASTER (rewrite onto ame-next, no ECS/facades -
+spec; each examples/<name>/ with own CMake, plain C app hooks):
+DONE THIS SESSION:
+- audio_pan: mouse-panned 440 Hz synth + level puck (master:
+  flecs+Position component -> plain app_fixed).
+- audio_opus: .opus player (AME_OPUS=path env), pan by mouse, level
+  meter; decodes via the new engine API.
+- audio_ray: concrete wall + listener + mouse source; live L/R gain
+  bars driven by ame_audio_ray_compute (AME_MAT_CONCRETE).
+- line_draw: freehand as thin rotated quads in the ONE batch (master
+  used a second GL_LINE_STRIP pipeline; ours keeps one batch).
+- tilemap_render: master's own sample.tmj through ame_tilemap_draw
+  (stable flat tints), arrow-key scroll; asset copied to bindir.
+COVERED ALREADY IN-TREE: memory_game (anchor game), dialogue (engine
+module + tests = master's dialogue_example/dialogue_ui_example).
+SKIPPED PER USER: scene_file (yaml; scene-YAML is spec-rejected).
+REMAINING (next sessions, biggest-last): example_parent_child (90 l,
+relative transforms by hand), prefab_smoke (70, data-driven spawn),
+flecs_scene (248) + flecs_script_scene (ECS demos -> plain-C scene
+setups), multithreaded_scripts (218, logic-thread demo), obj_loading
+(assimp bake demo + .blend sample), physics_test (geometry queries),
+raymarch_arcade (461, software raymarch into a sprite - one batch),
+text_editor (671), rhythm_game (966), kenney_pixel-platformer
+(1.9 M assets), unitylike_{minimal,audio_example,box2d_car,
+pixel_platformer,platformer_ecs,scene_hierarchy_test} (C++ facade
+demos -> plain-C ports of the same gameplay).
+
+VERIFY: ctest 18/18; all 5 new examples build -Werror clean and shot
+headless; memory_game quiet golden still byte-identical.
+
+坑 this session: pkg finds must precede add_subdirectory(tools);
+opus_encode needs standard frame durations; turn-boundary snapshots
+may rewind .git (fetch remote + reset --soft recovers); git identity
+vanishes each reset (set per-repo); AME_SCREENSHOT was game-level
+(env handled in mem_app), engine uses AME_SHOT_PPM.

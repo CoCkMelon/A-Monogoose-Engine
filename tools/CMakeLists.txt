@@ -42,3 +42,17 @@ else()
     message(STATUS "ame: assimp not found - assimp2c tool skipped "
                    "(baked assets are committed)")
 endif()
+# opus asset baker: deterministic Ogg Opus test asset (libopus encoder
+# + hand-muxed container). Output feeds tests/test_audio_opus.c.
+if(PkgConfig_FOUND AND OPUS_FOUND)
+    add_executable(mkopus_sine mkopus_sine.c)
+    target_link_libraries(mkopus_sine PRIVATE ${OPUS_LIBRARIES} m)
+    target_include_directories(mkopus_sine PRIVATE ${OPUS_INCLUDE_DIRS})
+    add_custom_command(
+        OUTPUT ${CMAKE_SOURCE_DIR}/tests/assets/baked_sine_opus.h
+        COMMAND mkopus_sine ${CMAKE_SOURCE_DIR}/tests/assets/baked_sine_opus.h
+        DEPENDS mkopus_sine mkopus_sine.c
+        COMMENT "baking tests/assets/baked_sine_opus.h")
+    add_custom_target(bake_opus_asset
+        DEPENDS ${CMAKE_SOURCE_DIR}/tests/assets/baked_sine_opus.h)
+endif()

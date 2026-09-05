@@ -14,7 +14,7 @@ the same single-pass renderer.
 | 0 | local game, headless screenshots, packaged unit + clean-machine smoke | **done** |
 | 1 | server-authoritative **online** Memory over TCP (loopback-tested) | **done** |
 | 2 | advanced rendering: forward lighting ✓, offscreen + post pass ✓, particles ✓, shadow maps ✓ (materials next) | in progress |
-| — | A-Monogoose parity: audio occlusion raytracer ✓ (ported), decoded PCM + wav ✓, tilemap (.tmj) + 2D proof ✓, dialogue (libfyaml + bake-to-C) ✓, Assimp mesh import ✓ | done (opus decode = Stage 3) |
+| — | A-Monogoose parity: audio occlusion raytracer ✓, decoded PCM + wav + **opus** ✓, tilemap (.tmj) ✓, dialogue ✓, Assimp mesh import ✓, example ports in progress (`examples/`) | done |
 | — | Math layer: cglm-parity API (m3/quat/frustum/curves) + SSE2 fast paths **bit-identical** to the scalar bodies; cglm is a test-only oracle/benchmark (`tests/test_math_cglm.c`), never an engine dependency | done |
 | — | Lean 4 formal model (geometry/picking/shader contracts + game rules) | done, `lean/` |
 | 2+ | advanced rendering, richer 3D, ports | roadmap (`docs/README.txt`) |
