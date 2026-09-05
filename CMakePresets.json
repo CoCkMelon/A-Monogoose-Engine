@@ -1,0 +1,54 @@
+{
+  "version": 6,
+  "configurePresets": [
+    {
+      "name": "default",
+      "displayName": "Default (Ninja, all)",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build"
+    },
+    {
+      "name": "termux",
+      "displayName": "Termux / Android (clang, static libs, engine+tests)",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build-termux",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "BUILD_SHARED_LIBS": "OFF",
+        "AME_BUILD_EXAMPLES": "ON"
+      }
+    },
+    {
+      "name": "termux-engine-only",
+      "displayName": "Termux engine lib only (no tests/examples)",
+      "inherits": "termux",
+      "binaryDir": "${sourceDir}/build-termux-lib",
+      "cacheVariables": {
+        "AME_BUILD_EXAMPLES": "OFF",
+        "AME_BUILD_TESTS": "OFF",
+        "BUILD_TESTING": "OFF"
+      }
+    },
+    {
+      "name": "asan",
+      "displayName": "ASan+UBSan (Debug)",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build-asan",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_C_FLAGS": "-fsanitize=address,undefined -fno-omit-frame-pointer",
+        "CMAKE_EXE_LINKER_FLAGS": "-fsanitize=address,undefined"
+      }
+    },
+    {
+      "name": "tsan",
+      "displayName": "TSan (concurrency)",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build-tsan",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_C_FLAGS": "-fsanitize=thread -fno-omit-frame-pointer -g -O1"
+      }
+    }
+  ]
+}

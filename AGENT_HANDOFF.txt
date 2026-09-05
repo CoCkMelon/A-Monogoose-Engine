@@ -983,3 +983,28 @@ rows 32..53 at EVERY size, events flow, no garbage. Suite 19/19,
 headless drivers - driver-name opt-out is the pattern; ALWAYS decode
 window position (SDL centers unmanaged windows) before reading root
 dumps as ground truth.
+
+SESSION 20 - TERMUX BUILD (user hit clang -Wunused-result on fgetc in
+audio.c wav chunk skip; "also try static cmake").
+
+FIXED + FULL CLANG SWEEP (installed clang-19 = CI's compiler; the
+point: catch every clang-only break at once, not file-by-file on the
+user's phone):
+- src/audio.c fgetc pad: consume into int + (void) (glibc/bionic mark
+  fgetc warn_unused_result; clang -Werror's it, gcc never did).
+- tests/test_render.c: GCC NESTED FUNCTION (lum) - clang rejects in
+  C23. Hoisted to file scope as lum_case() with explicit params.
+- raymarch rm_app.c: float LCG seed 0x12345678u -> implicit
+  const-int-float conversion warning + real precision loss; now a
+  proper uint32 LCG (exact, deterministic, better spawn spread).
+- CMakePresets.json added: default / termux (static libs, Release) /
+  termux-engine-only / asan / tsan. VERIFIED: cmake --preset termux
+  builds 0 warnings, 19/19 ctest, libame_2d.a + libame_3d.a real
+  archives (engine was already add_library STATIC; executables link
+  system SDL dynamically - normal everywhere incl. Termux).
+GCC default build: 0 warnings, 19/19, golden byte-identical.
+TERMUX NOTES for the user: pkg install libsdl3 (or build SDL) then
+cmake --preset termux && ninja -C build-termux; tests need EGL
+surfaceless (termux has angle? if headless tests fail, use
+termux-engine-only preset). Clang sweep = standing practice now that
+a phone-sized contributor builds it.

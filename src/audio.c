@@ -441,8 +441,10 @@ float *audio_load_wav(const char *path, int *frames_out) {
             rate = (uint32_t)(fmtb[4] | (fmtb[5] << 8) | (fmtb[6] << 16)
                               | ((uint32_t)fmtb[7] << 24));
             bits = (uint16_t)(fmtb[14] | (fmtb[15] << 8));
-            if (sz & 1)
-                fgetc(f); /* chunks are word-aligned */
+            if (sz & 1) {
+                int pad = fgetc(f); /* chunks are word-aligned */
+                (void)pad; /* clang -Wunused-result: consume explicitly */
+            }
             continue;
         }
         if (!memcmp(ch, "data", 4)) {

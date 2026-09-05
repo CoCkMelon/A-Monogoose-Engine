@@ -46,12 +46,13 @@ AME_SNAP_DEFINE(rm_snap_t)
 static ame_camera CAM;
 static rm_snap_t_snap SNAP;
 
-/* logic-side state */
-static float lcg = 0x12345678u;
+/* logic-side state. Proper integer LCG (float state lost precision
+ * and clang rightly flags the seed conversion; uint32 is exact and
+ * still fully deterministic) */
+static uint32_t lcg_state = 0x12345678u;
 static float frand(void) {
-    lcg = lcg * 1103515245.0f + 12345.0f; /* stays finite in float */
-    float f = lcg - floorf(lcg);
-    return f;
+    lcg_state = lcg_state * 1103515245u + 12345u;
+    return (float)(lcg_state >> 8) / 16777216.0f; /* [0,1) exact */
 }
 
 static void spawn_row(rm_snap_t *s) {

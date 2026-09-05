@@ -140,6 +140,33 @@ static uint32_t hash_frame(void) {
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include <stb_image_write.h>
 
+/* luminance of one lit-card frame (was a GCC nested function - clang
+ * rejects those in C23; hoisted to file scope with explicit params) */
+static long lum_case(bool face_up, const float t0[3], const float t1[3],
+                     const float t2[3], const float t3[3],
+                     const float ttint[4], const float c0[4][3],
+                     const float c1[4][3], const float red[4],
+                     const float blue[4], const ame_text_layout *hello,
+                     const float pose[16], const float tint_w[4]) {
+    rp_begin_frame();
+    rp_push_quad(rp_white_texture(), t0, t1, t2, t3, 0, 0, 1, 1, ttint, 0);
+    rp_set_lit(1);
+    rp_set_normal(0, face_up ? 1.0f : -1.0f, 0);
+    rp_push_quad(rp_white_texture(), c0[0], c0[1], c0[2], c0[3], 0, 0, 1, 1,
+                 red, 10);
+    rp_set_lit(0);
+    rp_push_quad(rp_white_texture(), c1[0], c1[1], c1[2], c1[3], 0, 0, 1, 1,
+                 blue, 10);
+    text_draw_world(hello, pose, tint_w, 20);
+    rp_end_frame();
+    static uint8_t px[W * H * 4];
+    rp_read_pixels(px, W, H);
+    long sum = 0;
+    for (int i = 0; i < W * H * 4; i += 4)
+        sum += px[i] + px[i + 1] + px[i + 2];
+    return sum;
+}
+
 int main(void) {
     printf("=== test_render (headless GL) ===\n");
 
@@ -246,26 +273,10 @@ int main(void) {
         rp_end_frame();
         UT_ASSERT(hash_frame() == h1); /* unlit: byte-identical */
 
-        long lum(bool face_up) {
-            rp_begin_frame();
-            rp_push_quad(rp_white_texture(), t0, t1, t2, t3, 0, 0, 1, 1,
-                         ttint, 0);
-            rp_set_lit(1);
-            rp_set_normal(0, face_up ? 1.0f : -1.0f, 0);
-            rp_push_quad(rp_white_texture(), c0[0], c0[1], c0[2], c0[3],
-                         0, 0, 1, 1, red, 10);
-            rp_set_lit(0);
-            rp_push_quad(rp_white_texture(), c1[0], c1[1], c1[2], c1[3],
-                         0, 0, 1, 1, blue, 10);
-            text_draw_world(&hello, pose, tint_w, 20);
-            rp_end_frame();
-            rp_read_pixels(px, W, H);
-            long sum = 0;
-            for (int i = 0; i < W * H * 4; i += 4)
-                sum += px[i] + px[i + 1] + px[i + 2];
-            return sum;
-        }
-        long up = lum(true), down = lum(false);
+        long up = lum_case(true, t0, t1, t2, t3, ttint, c0, c1, red, blue,
+                            &hello, pose, tint_w),
+             down = lum_case(false, t0, t1, t2, t3, ttint, c0, c1, red, blue,
+                             &hello, pose, tint_w);
         printf("    lum facing=%ld away=%ld\n", up, down);
         UT_ASSERTF(up > down, "facing light must be brighter (%ld vs %ld)",
                    up, down);
