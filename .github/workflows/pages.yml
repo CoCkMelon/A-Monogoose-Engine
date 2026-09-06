@@ -1,0 +1,51 @@
+name: Deploy web companion to GitHub Pages
+
+# Builds the AME//WEB companion site (Vite + React, single-file build with
+# the engine's wasm ports inlined) and publishes dist/ to GitHub Pages.
+# The site is fully self-contained, so it works under the repo's /A-Monogoose-Engine/
+# subpath with no base-path configuration.
+
+on:
+  push:
+    branches: [agent/ame-next-20260905-4ad0fd06]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: install
+        run: npm ci
+
+      - name: build (vite -> dist/index.html, single file)
+        run: npm run build
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
