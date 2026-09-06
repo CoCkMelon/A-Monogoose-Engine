@@ -1008,3 +1008,146 @@ cmake --preset termux && ninja -C build-termux; tests need EGL
 surfaceless (termux has angle? if headless tests fail, use
 termux-engine-only preset). Clang sweep = standing practice now that
 a phone-sized contributor builds it.
+
+## SESSION 21 — DSDF SMOOTH FONTS (dual-face text) — <commit-sha>
+USER MILESTONE: "making pixel fonts crisp, smooth fonts like dejavu good
+looking in 2d and 3d with dsdf" (terminology LOCKED: DSDF, never SDF).
+
+What shipped:
+- tools/bake_font_dsdf.c: deterministic DSDF baker (DejaVuSans ->
+  generated/font_atlas_dsdf.c/h at build time, like bake_font).
+  BASE_PX 32, supersample 4, Felzenszwalb EDT (exact), RANGE 8 texels,
+  atlas 1024x~800 RGBA: R=dist/RANGE biased .5, GB=unit gradient biased
+  .5, A=255. Metrics = same advance/bearing/line-height semantics as the
+  pixel atlas (AME_DSDF_ASCENT/LINE_H mirror bake_font formulas).
+- render.c: FS DSDF branch (Acta Cybernetica 25 (2021) A1 first-order:
+  4-corner Taylor reconstruction from texelFetch, EXACT on straight
+  edges). Marker = nrm.y==1 && unlit, set ONLY by rp_push_text_quad.
+  INVARIANT FIX: unlit quads now get canonical normal (0,0,1) in
+  push_quad_common (normals are lighting data; rendering-lossless) so
+  NO public-API path can forge the marker (lit quads excluded by the
+  v_ndl_lit.y<0.5 guard; the memory-game table's (0,1,0) is lit).
+- text.c faces: AME_FONT_PIXEL (default, crisp nearest A8) and
+  AME_FONT_SMOOTH (DejaVu DSDF, linear). text_init_dsdf() uploads the
+  atlas (idempotent), text_set_font() switches (no-op fallback to pixel
+  if dsdf not inited; text_init() resets both faces on renderer restart).
+  Layout is FACE-AWARE (advance/line_h/ascent from the active table);
+  the snapped-pen GRID CONTRACT holds for both (tested in test_text).
+  Smooth draw in BOTH text_draw_screen (2D) and text_draw_world (3D
+  pose-transformed DSDF cells).
+- Editor hook: AME_ED_SMOOTH=1 runs the editor in DejaVu.
+- Tests: test_render DSDF case (mass band, AA band, determinism,
+  face-switch byte-identity, un-inited fallback, 2D screen path),
+  test_text dsdf table sanity + smooth-face grid contract.
+  19/19; frame1 hash 0x51efa331, lum facing 8100050/away 7974738,
+  editor pixel golden b463c3dd... BYTE-IDENTICAL (pixel path untouched).
+
+THE TWO LLVMPIPE LANDMINES (cost hours; both now designed around):
+1. OUT-OF-RANGE texelFetch KILLS the fragment (returns nothing, not
+   black). Identity/stale u_dsdf_tsize made p00=(-1|0) -> whole quads
+   vanished. Fix: fetch coords CLAMPED into the atlas (stale uniforms
+   degrade to no-ink, never kill) + uniforms CACHED in rp state and
+   uploaded EVERY frame in rp_end_frame's draw setup (bind-order
+   independent; callers may call rp_set_dsdf_atlas right after rp_init
+   when no program is current - the old direct-upload design silently
+   no-oped there, which is why the harness worked (its init ran after
+   frames) while apps failed).
+2. fwidth() on values defined only under divergent control flow is
+   undefined -> compute t_dsdf and aa_dsdf OUTSIDE the branch (uniform
+   flow). aa = max(fwidth(t.x), fwidth(t.y)) = texels-per-pixel; |grad
+   d| ~= 1 per texel by DSDF construction, so that IS the screen-space
+   edge width.
+ALSO: my python splice once landed the init-default assignments inside
+rp_end_frame's shadow-else (str.replace hit BOTH anchor occurrences) -
+watchpoint via gdb caught it; multi-frame vanish was the symptom.
+LESSON (s17 echo): probes with a constant bright channel "prove"
+rendering that isn't there - the V1..V8 shader bisect was misleading
+until every debug output channel was honest.
+QA RECIPE: /tmp probe over {render,camera,text} + raw SDL core-profile
+context + 3-frame loop + per-frame ink counts; gdb hardware watchpoint
+on S fields for cache-corruption suspects; live uniform dump via
+glGetUniformfv when suspecting uniform timing.
+
+## SESSION 22 — CARET-COORDINATES AUDIT RESPONSE (all findings fixed)
+User's second audit (uploads/AUDIT-caret-coords.md; ran against their
+branch tip a6537f2): "every finding from the last audit reproduces
+verbatim" — because session 21's commit 402e8a7 was DESTROYED by a
+workspace env reset (LOCAL COMMITS DO NOT SURVIVE RESETS; only pushed
+work is durable) and the fixes lived uncommitted. LESSON: commit AND
+push the moment credentials exist; verify the remote tip yourself.
+
+FIX LEDGER (each bound by a regression test on shipping source):
+- P0 line_first[64] OOB write on >64 '\n': line_first now bounded in
+  BOTH branches; overflow sets layout.truncated bit2 (line cap).
+  Test: 200-newline ASan run in test_text (built clean under ASan).
+- P1 tag/byte desync ("{c=FF0000}abc" caret pinned at tag bytes;
+  "{/c}" unparsed -> FFD700 leak): el.src_byte anchors (byte offset
+  per element) + {/c} parsed (len-4 close tag restores colour).
+  Editor glyph_cols/byte_at_glyph binary-search the anchors — NOTE
+  anchors are LINE-LOCAL: compare against (byte_idx -
+  g->line_of[line]), not buffer-global indices (24 two-ways failures
+  otherwise). Editor maps via text_layout_plain() (braces literal).
+- P1 float pen drift vs double oracle (flips at glyphs 159/258/303/
+  376...): pen accumulates in DOUBLE; pen_snap floors the double.
+  -ffp-contract=off confirmed already pinned on all engine targets
+  (CMakeLists AME_FP_FLAGS, line 37/82). Oracle test: 0 flips across
+  the full corpus + 512-'m' stress.
+- P2 phantom EOL w after 512-glyph cap (w=12270 = pen of glyph 600):
+  w = snapped pen after last STORED element (stored_line_end basis);
+  truncation bit1 set. Test: 600-'m' w == 512-'m' w.
+- P2 "a\n bc" indent space dropped: leading-space drop now fires only
+  after a WRAP (wrapped flag). NOTE: by construction a wrap is
+  triggered BY a non-space which then occupies pen 0, so a wrap can
+  never actually drop a leading space — the space stays TRAILING on
+  the previous line (test asserts exactly that, count 7); the drop
+  branch only guards the wrap path, the \n path never drops.
+- P2 caret("a\tb",2)=64.0 unmodelled tab: AME_TXT_TAB (-2) invisible
+  element, advance = 4*space via tab_advance; modelled in layout +
+  both draw paths skip it. CRLF: \r consumed.
+- P0 two-ways self-consistency -> PIXEL oracle in CI: test_render
+  draws "Aj" + solid 2px red caret bar at each caret column (k=0,
+  mid, EOL) and asserts on READBACK PIXELS: BOL all ink right of bar
+  within bearing (<=5px), mid first right-ink within 5px of bar, EOL
+  NO ink right of bar, bar crisp exactly 2 columns.
+- NEW odd-viewport soft text (1281x721/1365x767 screen_origin at
+  (-0.50,-0.50)): canonical ortho_tx_ty — floor pos FIRST, then floor
+  the translation (order matters: flooring tx first breaks the
+  sub-pixel snap contract; render_2d hash test catches it).
+  camera_world_origin() public; camera_build/camera_screen_to_world2d/
+  rp_screen_origin all share it. Even sizes byte-identical (frame1
+  hash 0x51efa331 intact), odd sizes integral (5-size test_camera
+  case, 117 checks).
+- P3 ci.yml printed pen_insert that Text.lean lacked: ADDED to Lean —
+  pen_insert (tags never move the pen; kernel-checked, no sorry) +
+  cap_width_eq_pen (clamped width = pen at cap) + rig_pen_insert
+  (native_decide closure on the "{c=FF0000}ab{/c}c" rig); ci.yml
+  axiom list now prints all three (standard axioms + native_decide).
+  Lean trap: realPen on an abstract cons pair needs obtain ⟨a,isReal⟩
+  + cases h2 : isReal + cases k before simp_all fires.
+TESTS: test_text 1913 checks (7-case audit battery), test_editor_geom
+green (corpus + "a\tb", tagged runs, full-interior multibyte — the
+boundary-skip the audit flagged is GONE), test_camera 117, test_render
+71 (incl. pixel caret oracle), ctest 19/19. ASan build of test_text
+clean. Editor golden b463c3dd + frame1 hash intact throughout.
+
+## SESSION 22 ADDENDUM — THIRD RESET, DURABLE DELIVERY (read this first)
+DATA POINT 3: the re-commit ac7fc95 was ALSO destroyed by an env reset
+(HEAD reverted cd1964b, working tree intact). Mechanism now clear:
+snapshots exclude .git/config (credential hygiene) - so EVERY reset
+wipes remotes/credentials - and local commit objects demonstrably do
+not survive either (402e8a7, ac7fc95). RULE: the working tree and
+regular files persist; .git state does not. Therefore:
+1. delivery/ (NOT committed - .gitignore'd, self-referential) carries
+   the fix as FILES: ame-next-audit-fixes.bundle (basis a6537f2, tip
+   89c4fa8'), audit-fixes-a6537f2-*.diff (git apply), 0001*.patch
+   (git am), audit_mirror.c/.out (the auditor's probes re-run:
+   ALL MIRRORED FINDINGS FIXED under ASan), SHA256SUMS.
+2. Consumer flow PROVEN end-to-end in /tmp/usertest: repo at a6537f2
+   (pen_insert=0 - the audit's exact state) -> fetch bundle HEAD ->
+   89c4fa8 landed, pen_insert=3.
+3. git 2.47.3 quirks hit here: bundle create REFUSES a raw-SHA tip
+   ("empty bundle") - use a ref name (a6537f2..HEAD works, and the
+   bundle ref is then literally HEAD); git fetch <repo> <non-tip-SHA>
+   fails ("couldn't find remote ref") - fetch a ref, then reset.
+4. The instant a remote+PAT exist: push, then verify the remote tip
+   via the branches API - an unpushed fix is a failure (user rule).

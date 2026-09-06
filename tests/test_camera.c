@@ -100,6 +100,35 @@ int main(void) {
         UT_ASSERT_NEAR(d[2], -1.0f, 1e-6);
     }
 
+    UT_CASE("odd viewports: world origin stays INTEGRAL (crisp text)");
+    {
+        /* regression (audit): 1281x721 centered camera used to put the
+         * origin at (-0.5,-0.5) - every glyph half a px off the grid,
+         * soft at any font size. The translation floors; the leftover
+         * half px falls at the far edge. */
+        int ws[] = { 1280, 1281, 1365, 1023, 641 };
+        int hs[] = { 720, 721, 767, 767, 641 };
+        for (int k = 0; k < 5; k++) {
+            ame_camera c2;
+            camera_viewport(
+                camera_ortho2d(camera_snap(camera_desc(&c2), true)),
+                ws[k], hs[k]);
+            camera_pos(&c2, (float)ws[k] * 0.5f, (float)hs[k] * 0.5f, 0);
+            camera_build(&c2);
+            float ox, oy;
+            camera_world_origin(&c2, &ox, &oy);
+            UT_ASSERTF(ox == floorf(ox) && oy == floorf(oy),
+                       "%dx%d origin (%.2f,%.2f) not integral", ws[k],
+                       hs[k], (double)ox, (double)oy);
+            /* world<->window round trip at the corners stays exact */
+            float out2[2];
+            camera_screen_to_world2d(&c2, 0, 0, out2);
+            UT_ASSERTF(out2[0] == floorf(out2[0]) && out2[1] == floorf(out2[1]),
+                       "%dx%d corner world (%.2f,%.2f) not integral",
+                       ws[k], hs[k], (double)out2[0], (double)out2[1]);
+        }
+    }
+
     UT_OK();
     return ut_done("test_camera");
 }

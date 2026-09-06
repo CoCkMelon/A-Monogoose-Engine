@@ -17,3 +17,4 @@ build-pkg*/
 render_golden.png
 tests/assets
 tests/assets/baked_sine_opus.h
+delivery/

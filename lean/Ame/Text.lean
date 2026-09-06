@@ -92,4 +92,68 @@ theorem rig_caret_ink :
       inkX rig i - caretX rig i = rig.xoff.getD i 0)) = true := by
   native_decide
 
+/-! ### Tag runs and the glyph cap (audit s22)
+
+The two C bug classes below were found by the caret-coordinates
+audit; both are now mirrored here so they cannot be RE-stated on
+the model.
+
+P1 tag desync: `{c=FF0000}abc` pinned the caret at the tag's byte
+offset. In the model, a tagged run interleaves real cells with TAG
+cells, and a tag cell contributes NO advance - so the pen of the
+k-th real glyph is the same number with or without the tags. On
+this model "the tag moved the caret" is not even expressible.
+
+P2 phantom width: a 512-glyph cap reported w as if the 600th glyph
+had been reached. The clamped width is the pen AT the cap - by
+definition, not by convention. -/
+
+/-- A tagged run: each cell is an advance plus "is a real glyph"
+    (tag cells carry `false` - they recolour, never advance). -/
+def TaggedRun := List (Rat × Bool)
+
+/-- Exact pen of the k-th real glyph in a tagged run. -/
+def realPen : TaggedRun → Nat → Rat
+  | [], _ => 0
+  | (_, true) :: _, 0 => 0
+  | (a, true) :: rest, k + 1 => a + realPen rest k
+  | (_, false) :: rest, k => realPen rest k
+
+/-- pen_insert: tags never move the pen. The pen of the k-th real
+    cell equals the pen of the k-th cell of the STRIPPED run - i.e.
+    `text_layout("{c=FF0000}abc")` and `text_layout_plain("abc")`
+    share every grid slot. This is the theorem ci.yml audits. -/
+theorem pen_insert (cells : TaggedRun) (k : Nat) :
+    realPen cells k
+      = pen { adv := (cells.filter (·.2)).map (·.1), xoff := [] } k := by
+  induction cells generalizing k with
+  | nil => simp [realPen, pen]
+  | cons c rest ih =>
+    obtain ⟨a, isReal⟩ := c
+    cases h2 : isReal <;> cases k <;>
+      simp_all [realPen, pen, List.take, List.filter]
+
+/-- Glyph-cap clamp: stopping after k stored elements reports the
+    pen AT k. A width leaking past the cap (the 600-'m' w=12270
+    phantom) contradicts this by rfl. -/
+theorem cap_width_eq_pen (f : Font) (k : Nat)
+    (h : k ≤ f.adv.length) :
+    width { adv := f.adv.take k, xoff := f.xoff.take k }
+      = snap (pen f k) := by
+  simp [width, pen, List.take_take, Nat.min_eq_left h]
+
+/-- Rig for the tag law: "{c=FF0000}ab{/c}c" as tagged cells with
+    the two tag cells marked false. -/
+def rigTags : TaggedRun :=
+  [(0, false), (17, true), (33/4, true), (0, false), (199/10, true)]
+
+/-- Closed instance: stripping the tags yields exactly the untagged
+    rig's pen at every real index (0, 1, 2) and at EOL. -/
+theorem rig_pen_insert :
+    ([0, 1, 2, 3].all (fun k =>
+      realPen rigTags k
+        = pen { adv := (rigTags.filter (·.2)).map (·.1), xoff := [] } k))
+      = true := by
+  native_decide
+
 end Ame.Text

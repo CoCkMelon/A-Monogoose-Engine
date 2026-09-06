@@ -57,33 +57,31 @@ typedef struct {
  * exactly. el[] is per GLYPH; the caret is per BYTE - conflating
  * them (an ASCII habit) is the Cyrillic caret bug the two-ways
  * test caught. */
-static int utf8_seq(const char *s, int len, int at) {
-    unsigned char b = (unsigned char)s[at];
-    int n = 1;
-    if ((b & 0xE0) == 0xC0) n = 2;
-    else if ((b & 0xF0) == 0xE0) n = 3;
-    else if ((b & 0xF8) == 0xF0) n = 4;
-    if (at + n > len)
-        return 1;
-    for (int k = 1; k < n; k++)
-        if (((unsigned char)s[at + k] & 0xC0) != 0x80)
-            return 1; /* malformed: one replacement glyph per byte */
-    return n;
-}
+/* byte -> element column and back, through the layout's OWN src_byte
+ * anchors (el[].src_byte = byte offset of each element's codepoint).
+ * The old pure-UTF-8 stepper re-derived columns tag-blind: with tabs,
+ * CRs or consumed markup the two alphabets desynced and the caret froze
+ * while ink kept moving. Anchors make the map exact BY CONSTRUCTION. */
 static int glyph_cols(const ed_geom *g, int line, int byte_idx) {
-    int start = g->line_of[line];
-    int at = start, cols = 0;
-    while (at < byte_idx && at < g->len) {
-        at += utf8_seq(g->text, g->len, at);
-        cols++;
+    const ame_text_layout *lay = &g->lay[line];
+    /* anchors are LOCAL to the line slice; byte_idx is buffer-global */
+    uint32_t local = (uint32_t)(byte_idx - g->line_of[line]);
+    int lo = 0, hi = lay->count;
+    while (lo < hi) { /* first element with src_byte >= local */
+        int m = (lo + hi) / 2;
+        if (lay->el[m].src_byte < local)
+            lo = m + 1;
+        else
+            hi = m;
     }
-    return cols;
+    return lo;
 }
 static int byte_at_glyph(const ed_geom *g, int line, int col) {
-    int at = g->line_of[line];
-    for (int k = 0; k < col && at < g->len; k++)
-        at += utf8_seq(g->text, g->len, at);
-    return at;
+    const ame_text_layout *lay = &g->lay[line];
+    if (col < lay->count)
+        return g->line_of[line] + (int)lay->el[col].src_byte;
+    /* EOL: the newline byte itself (or buffer end) */
+    return (line + 1 < g->line_count) ? g->line_of[line + 1] - 1 : g->len;
 }
 
 /* Each line is laid out ALONE. The buffer is terminated IN PLACE at
@@ -103,8 +101,8 @@ static void geom_rebuild(ed_geom *g, char *text, int len) {
             char saved = text[i];
             text[i] = '\0';
             g->line_of[g->line_count] = start;
-            text_layout(text + start, 0.0f, AME_TEXT_ALIGN_L, 1.0f,
-                        &g->lay[g->line_count]);
+            text_layout_plain(text + start, 0.0f, AME_TEXT_ALIGN_L,
+                               1.0f, &g->lay[g->line_count]);
             text[i] = saved;
             g->line_count++;
             start = i + 1;
@@ -257,6 +255,10 @@ int app_init(void) {
         printf("text_editor: font atlas unavailable\n");
         return 1;
     }
+    /* AME_ED_SMOOTH=1: the DSDF smooth face (DejaVu) - anti-aliased at
+     * any scale, same grid contract, carets still land on the pen grid */
+    if (getenv("AME_ED_SMOOTH") && text_init_dsdf() >= 0)
+        text_set_font(AME_FONT_SMOOTH);
     strcpy(buf,
            "ame-next text editor\n"
            "port of A-Monogoose text_editor\n"
@@ -607,6 +609,9 @@ int main(void) {
         "line\n\nnext",
         "trailing   \nlast",
         "0123456789 abcdefghijklmnop",
+        "a\tb",
+        "{c=FF0000}abc{/c}",
+        "a\r\nb",
         "угщ ютф",
     };
     int ncases = (int)(sizeof corpus / sizeof corpus[0]);
@@ -629,12 +634,12 @@ int main(void) {
             if ((unsigned char)b[k] >= 0x80)
                 ascii = 0;
         for (int i = 0; i <= len; i++) {
-            if (!ascii) {
-                /* boundaries only: start, end, or after '\n'/space */
-                int boundary = i == 0 || i == len || b[i - 1] == '\n'
-                               || b[i - 1] == ' ';
-                if (!boundary)
-                    continue;
+            if (!ascii && i < len) {
+                /* skip only mid-codepoint bytes: a caret rests on
+                 * CHARACTER starts; every real start IS tested */
+                unsigned char bk = (unsigned char)b[i];
+                if (i > 0 && (bk & 0xC0) == 0x80)
+                    continue; /* UTF-8 continuation byte */
             }
             two_ways_at(corpus[c], b, len, i);
         }

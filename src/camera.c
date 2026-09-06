@@ -54,19 +54,46 @@ ame_camera *camera_viewport(ame_camera *c, int w, int h) {
     return c;
 }
 
+/* ortho2d view translation: world px -> window px is x+tx (times zoom).
+ * With snap on, BOTH the position and the translation are integral, so
+ * integer world coordinates land on integer window pixels for ANY
+ * viewport size - an odd 1281x721 window must not soft-shift the whole
+ * scene by half a pixel (the tx below floors the .5 away: the leftover
+ * half px falls at the far edge, never under every glyph). */
+void camera_world_origin(const ame_camera *c, float *ox, float *oy);
+
+static void ortho_tx_ty(const ame_camera *c, float *tx, float *ty) {
+    float w = (float)(c->vw / c->zoom);
+    float h = (float)(c->vh / c->zoom);
+    float tX = w * 0.5f - c->pos.x, tY = h * 0.5f - c->pos.y;
+    if (c->snap) {
+        /* position snaps (sub-pixel moves don't shift pixels), THEN the
+         * translation floors - the odd-size half pixel lands at the far
+         * edge instead of under every glyph */
+        tX = floorf(w * 0.5f - floorf(c->pos.x));
+        tY = floorf(h * 0.5f - floorf(c->pos.y));
+    }
+    *tx = tX;
+    *ty = tY;
+}
+
+void camera_world_origin(const ame_camera *c, float *ox, float *oy) {
+    float tx, ty;
+    ortho_tx_ty(c, &tx, &ty);
+    if (ox) *ox = -tx;
+    if (oy) *oy = -ty;
+}
+
 void camera_build(ame_camera *c) {
     if (c->kind == AME_CAM_ORTHO2D) {
         /* pixel-perfect: snap position to whole world px, integer zoom.
          * pos = CENTER of the view; world y grows DOWN like screen px. */
-        float px = c->pos.x, py = c->pos.y;
-        if (c->snap) {
-            px = floorf(px);
-            py = floorf(py);
-        }
+        float tx, ty;
+        ortho_tx_ty(c, &tx, &ty);
         float w = (float)(c->vw / c->zoom);
         float h = (float)(c->vh / c->zoom);
         ame_m4 proj = ame_m4_ortho_px(w, h, c->zn, c->zf);
-        ame_m4 view = ame_m4_translate(ame_v3_(w * 0.5f - px, h * 0.5f - py, 0));
+        ame_m4 view = ame_m4_translate(ame_v3_(tx, ty, 0));
         c->vp = ame_m4_mul(proj, view);
         c->vp_inv = ame_m4_inverse(c->vp);
     } else {
@@ -80,11 +107,10 @@ void camera_build(ame_camera *c) {
 
 void camera_screen_to_world2d(const ame_camera *c, float sx, float sy,
                               float out[2]) {
-    float w = (float)(c->vw / c->zoom);
-    float h = (float)(c->vh / c->zoom);
-    float cx = floorf(c->pos.x), cy = floorf(c->pos.y);
-    out[0] = cx - w * 0.5f + sx / (float)c->zoom;
-    out[1] = cy - h * 0.5f + sy / (float)c->zoom;
+    float tx, ty;
+    ortho_tx_ty(c, &tx, &ty); /* SAME mapping camera_build bakes */
+    out[0] = sx / (float)c->zoom - tx;
+    out[1] = sy / (float)c->zoom - ty;
 }
 
 void camera_screen_ray(const ame_camera *c, float sx, float sy,

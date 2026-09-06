@@ -24,10 +24,34 @@ add_custom_command(
     VERBATIM)
 add_custom_target(generated_font DEPENDS ${CMAKE_SOURCE_DIR}/generated/font_atlas.c)
 
+# DSDF baker (dense first-order distance fields; Acta Cybernetica 25,
+# 2021). bakes DejaVuSans -> RGBA atlas (R=dist GB=gradient) + metrics.
+add_executable(bake_font_dsdf bake_font_dsdf.c)
+target_include_directories(bake_font_dsdf PRIVATE ${CMAKE_SOURCE_DIR}/external/stb)
+target_compile_options(bake_font_dsdf PRIVATE -Wall -Wextra -ffp-contract=off)
+if(UNIX AND NOT APPLE)
+    target_link_libraries(bake_font_dsdf PRIVATE m)
+endif()
+set_target_properties(bake_font_dsdf PROPERTIES C_STANDARD 23)
+add_custom_command(
+    OUTPUT  ${CMAKE_SOURCE_DIR}/generated/font_atlas_dsdf.c
+            ${CMAKE_SOURCE_DIR}/generated/font_atlas_dsdf.h
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_SOURCE_DIR}/generated
+    COMMAND ${CMAKE_COMMAND} -E chdir ${CMAKE_SOURCE_DIR}/generated
+            $<TARGET_FILE:bake_font_dsdf> ${CMAKE_SOURCE_DIR}/assets/fonts/DejaVuSans.ttf
+            font_atlas_dsdf
+    DEPENDS bake_font_dsdf ${CMAKE_SOURCE_DIR}/assets/fonts/DejaVuSans.ttf
+    COMMENT "baking DSDF font atlas (DejaVuSans)"
+    VERBATIM)
+add_custom_target(generated_font_dsdf
+    DEPENDS ${CMAKE_SOURCE_DIR}/generated/font_atlas_dsdf.c)
+
 # static lib the engine/game links to get the baked arrays
 add_library(ame_font STATIC ${CMAKE_SOURCE_DIR}/generated/font_atlas.c)
 target_include_directories(ame_font PUBLIC ${CMAKE_SOURCE_DIR}/generated)
 add_dependencies(ame_font generated_font)
+target_sources(ame_font PRIVATE ${CMAKE_SOURCE_DIR}/generated/font_atlas_dsdf.c)
+add_dependencies(ame_font generated_font_dsdf)
 target_compile_options(ame_font PRIVATE -w) # generated data: silence
 
 # assimp2c: build-time model baker (levels.txt Assimp rule). Optional -

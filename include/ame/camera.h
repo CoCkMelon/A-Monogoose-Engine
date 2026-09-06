@@ -57,6 +57,9 @@ void camera_build(ame_camera *c);
 /* --- queries (pure) -------------------------------------------------------- */
 
 /* 2D: window px -> world px on the z=0 plane. Returns world coords. */
+/* world px at the window's top-left corner (ortho2d). INTEGRAL whenever
+ * the camera snaps - the crisp-text guarantee for any viewport size. */
+void camera_world_origin(const ame_camera *c, float *ox, float *oy);
 void camera_screen_to_world2d(const ame_camera *c, float sx, float sy,
                               float out[2]);
 

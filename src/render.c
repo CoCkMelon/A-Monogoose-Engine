@@ -23,7 +23,7 @@
                                                           DrawArrays)       \
     X(DELETEFRAMEBUFFERS, DeleteFramebuffers)                                \
     X(DELETERENDERBUFFERS, DeleteRenderbuffers) \
-    X(UNIFORM3FV, Uniform3fv)       X(UNIFORM1F, Uniform1f) \
+    X(UNIFORM3FV, Uniform3fv)       X(UNIFORM1F, Uniform1f)                     X(UNIFORM2F, Uniform2f) \
     X(CREATESHADER, CreateShader)   X(SHADERSOURCE, ShaderSource)              \
     X(COMPILESHADER, CompileShader) X(GETSHADERIV, GetShaderiv)                 \
     X(GETSHADERINFOLOG, GetShaderInfoLog) X(CREATEPROGRAM, CreateProgram)       \
@@ -132,6 +132,9 @@ typedef struct {
     float sh_dir[3], sh_center[3], sh_extent;
     ame_m4 svp;
     GLint u_svp, u_stex, u_shadow_amt, u_stexel, u_shadow_pass;
+    GLint u_dsdf_tsize, u_dsdf_range;
+    float dsdf_range;    /* cached atlas params, uploaded every frame  */
+    float dsdf_tsize[2]; /* (bind-order independent, see rp_end_frame) */
     /* per-push stamps (like a tint: set, push, unset) */
     float stamp_nrm[3];
     float stamp_lit;
@@ -171,6 +174,7 @@ static void shadow_target_free(void);
     "out vec4 v_shadow;\n"                                               \
     "out vec3 v_diff;\n"                                                 \
     "out vec2 v_ndl_lit;\n"                                              \
+    "out float v_dsdf;\n"                                              \
     "void main() {\n"                                                    \
     "    v_uv = a_uv;\n"                                                 \
     "    vec3 n = normalize(a_nrm);\n"                                   \
@@ -188,6 +192,7 @@ static void shadow_target_free(void);
     "    v_shadow = u_svp * vec4(a_pos, 1.0);\n"                          \
     "    v_diff = a_col.rgb * (u_lcol * ndl * a_lit);\n"                  \
     "    v_ndl_lit = vec2(ndl, a_lit);\n"                                 \
+    "    v_dsdf = a_nrm.y; /* DSDF text quads stamp nrm.y=1 */\n"                                 \
     "    if (u_shadow_pass > 0.5 && a_lit < 0.5)\n"                       \
     "        gl_Position = vec4(2.0, 2.0, 2.0, 1.0); /* unlit=UI: no cast */\n" \
     "    else\n"                                                          \
@@ -200,6 +205,9 @@ static void shadow_target_free(void);
     "uniform float u_shadow_amt;\n"                                       \
     "uniform float u_stexel;\n"                                          \
     "in vec2 v_uv;\n"                                                    \
+    "uniform vec2 u_dsdf_tsize;\n" \
+    "uniform float u_dsdf_range;\n" \
+    "in float v_dsdf;\n" \
     "in vec4 v_col;\n"                                                   \
     "in vec4 v_shadow;\n"                                               \
     "in vec3 v_diff;\n"                                                 \
@@ -207,6 +215,39 @@ static void shadow_target_free(void);
     "out vec4 o_col;\n"                                                  \
     "void main() {\n"                                                    \
     "    vec4 c = texture(u_tex, v_uv) * v_col;\n"                       \
+    "    /* DSDF text (Acta Cybernetica 25 (2021): first-order densely" \
+    "     * sampled distance field). 4-corner Taylor reconstruction -" \
+    "     * EXACT for straight edges. Guarded: plain quads (v_dsdf=0)" \
+    "     * run the identical math as before (bit-identical frames)." \
+    "     * t and the AA width are computed OUTSIDE the branch: fwidth()" \
+    "     * on values defined only under divergent control flow is" \
+    "     * undefined, and llvmpipe kills fragments on out-of-range" \
+    "     * texelFetch - so the fetch coords are CLAMPED (stale uniforms" \
+    "     * degrade to no-ink, never kill the quad). */" \
+    "    vec2 t_dsdf = v_uv / u_dsdf_tsize - 0.5;" \
+    "    float aa_dsdf = max(fwidth(t_dsdf.x), fwidth(t_dsdf.y));" \
+    "    if (v_dsdf > 0.5 && v_ndl_lit.y < 0.5) {" \
+    "        vec2 cb = floor(t_dsdf);" \
+    "        vec2 f = t_dsdf - cb;" \
+    "        vec2 dims = vec2(1.0) / u_dsdf_tsize - 1.0;" \
+    "        ivec2 p00 = ivec2(clamp(cb, vec2(0.0), dims - 1.0));" \
+    "        vec4 s00 = texelFetch(u_tex, p00, 0);" \
+    "        vec4 s10 = texelFetch(u_tex, p00 + ivec2(1,0), 0);" \
+    "        vec4 s11 = texelFetch(u_tex, p00 + ivec2(1,1), 0);" \
+    "        vec4 s01 = texelFetch(u_tex, p00 + ivec2(0,1), 0);" \
+    "        float r = u_dsdf_range;" \
+    "        float d00 = (s00.r*2.0-1.0)*r + dot(s00.gb*2.0-1.0, f - vec2(0.5,0.5));" \
+    "        float d10 = (s10.r*2.0-1.0)*r + dot(s10.gb*2.0-1.0, f - vec2(1.5,0.5));" \
+    "        float d01 = (s01.r*2.0-1.0)*r + dot(s01.gb*2.0-1.0, f - vec2(0.5,1.5));" \
+    "        float d11 = (s11.r*2.0-1.0)*r + dot(s11.gb*2.0-1.0, f - vec2(1.5,1.5));" \
+    "        float w00 = (1.0-f.x)*(1.0-f.y);" \
+    "        float w10 = f.x*(1.0-f.y);" \
+    "        float w01 = (1.0-f.x)*f.y;" \
+    "        float w11 = f.x*f.y;" \
+    "        float d = w00*d00 + w10*d10 + w01*d01 + w11*d11;" \
+    "        float alpha = clamp(0.5 + d / max(aa_dsdf, 1e-5), 0.0, 1.0);" \
+    "        c = vec4(c.rgb, c.a * alpha);" \
+    "    }" \
     "    /* branchless shadow: amt = 0 subtracts exactly 0.0, so the\n"  \
     "     * one-pass output stays BIT-IDENTICAL when shadows are off.\n" \
     "     * Plain sampler2D depth reads + manual compare: shadow\n"      \
@@ -423,10 +464,14 @@ int rp_init(const ame_rp_desc *desc, const ame_camera *cam, int w, int h) {
     S.u_svp = glGetUniformLocation(S.prog, "u_svp");
     S.u_stex = glGetUniformLocation(S.prog, "u_stex");
     S.u_shadow_amt = glGetUniformLocation(S.prog, "u_shadow_amt");
+    S.u_dsdf_tsize = glGetUniformLocation(S.prog, "u_dsdf_tsize");
+    S.u_dsdf_range = glGetUniformLocation(S.prog, "u_dsdf_range");
     S.u_stexel = glGetUniformLocation(S.prog, "u_stexel");
     S.u_shadow_pass = glGetUniformLocation(S.prog, "u_shadow_pass");
     glUseProgram(S.prog);
     glUniform1f(S.u_shadow_amt, 0.0f);
+    S.dsdf_range = 8.0f; /* sane defaults until an atlas binds */
+    S.dsdf_tsize[0] = 1.0f; S.dsdf_tsize[1] = 1.0f;
     glUniform1f(S.u_shadow_pass, 0.0f);
     glUniform1f(S.u_stexel, 1.0f / 2048.0f);
     glUniformMatrix4fv(S.u_svp, 1, GL_FALSE,
@@ -666,7 +711,8 @@ static bool push_quad_common(int tex,
                              const float p0[3], const float p1[3],
                              const float p2[3], const float p3[3],
                              float u0, float v0, float u1, float v1,
-                             const float tint[4], float layer) {
+                             const float tint[4], float layer,
+                             bool dsdf_text) {
     if (S.batch.quad_count >= S.batch.quad_cap)
         return false; /* assert/drop: never silent overflow */
     if (tex < 0 || tex >= S.tex_count)
@@ -679,10 +725,17 @@ static bool push_quad_common(int tex,
         v[i].pos[0] = ps[i][0];
         v[i].pos[1] = ps[i][1];
         v[i].pos[2] = ps[i][2];
-        v[i].nrm[0] = S.stamp_nrm[0];
-        v[i].nrm[1] = S.stamp_nrm[1];
-        v[i].nrm[2] = S.stamp_nrm[2];
-        v[i].lit = S.stamp_lit;
+        if (dsdf_text) { /* text-module quad: THE ONLY marker source */
+            v[i].nrm[0] = 0; v[i].nrm[1] = 1; v[i].nrm[2] = 0;
+        } else if (S.stamp_lit >= 0.5f) {
+            v[i].nrm[0] = S.stamp_nrm[0];
+            v[i].nrm[1] = S.stamp_nrm[1];
+            v[i].nrm[2] = S.stamp_nrm[2];
+        } else { /* unlit: normals are lighting data - canonical (0,0,1).
+          * Guarantees no unlit quad can ever carry the DSDF marker. */
+            v[i].nrm[0] = 0; v[i].nrm[1] = 0; v[i].nrm[2] = 1;
+        }
+        v[i].lit = dsdf_text ? 0.0f : S.stamp_lit;
         v[i].uv[0] = uvs[i * 2];
         v[i].uv[1] = uvs[i * 2 + 1];
         v[i].col[0] = col_byte(tint[0]);
@@ -700,14 +753,24 @@ void rp_push_tri(int tex, const float p0[3], const float p1[3],
                  const float p2[3], float u0, float v0, float u1, float v1,
                  const float tint[4], float layer) {
     /* p3 = p0 makes the second index triangle degenerate (zero area) */
-    push_quad_common(tex, p0, p1, p2, p0, u0, v0, u1, v1, tint, layer);
+    push_quad_common(tex, p0, p1, p2, p0, u0, v0, u1, v1, tint, layer, false);
 }
 
 void rp_push_quad(int tex, const float p0[3], const float p1[3],
                   const float p2[3], const float p3[3],
                   float u0, float v0, float u1, float v1,
                   const float tint[4], float layer) {
-    push_quad_common(tex, p0, p1, p2, p3, u0, v0, u1, v1, tint, layer);
+    push_quad_common(tex, p0, p1, p2, p3, u0, v0, u1, v1, tint, layer, false);
+}
+
+/* Text-module glyph quad: identical batching, but stamped as DSDF-capable
+ * (nrm.y=1, unlit). The ONLY path that can set the marker - regular
+ * quads/sprites/tris can never collide with it. */
+void rp_push_text_quad(int tex, const float p0[3], const float p1[3],
+                       const float p2[3], const float p3[3],
+                       float u0, float v0, float u1, float v1,
+                       const float tint[4], float layer) {
+    push_quad_common(tex, p0, p1, p2, p3, u0, v0, u1, v1, tint, layer, true);
 }
 
 void rp_push_sprite(int tex, float x, float y, float w, float h,
@@ -718,7 +781,7 @@ void rp_push_sprite(int tex, float x, float y, float w, float h,
     float p1[3] = { x + w, y, z };
     float p2[3] = { x + w, y + h, z };
     float p3[3] = { x, y + h, z };
-    push_quad_common(tex, p0, p1, p2, p3, u0, v0, u1, v1, tint, layer);
+    push_quad_common(tex, p0, p1, p2, p3, u0, v0, u1, v1, tint, layer, false);
 }
 
 
@@ -892,6 +955,8 @@ void rp_end_frame(void) {
     glUseProgram(S.prog);
     glUniformMatrix4fv(S.u_vp, 1, GL_FALSE, S.cam.vp.m);
     glUniform1i(S.u_tex, 0);
+    glUniform2f(S.u_dsdf_tsize, S.dsdf_tsize[0], S.dsdf_tsize[1]);
+    glUniform1f(S.u_dsdf_range, S.dsdf_range);
     glActiveTexture(GL_TEXTURE0);
 
 #define RP_DRAW_RANGES()                                                   \
@@ -1054,12 +1119,9 @@ void rp_post_vignette(float strength) {
 }
 
 void rp_screen_origin(float *ox, float *oy) {
-    float w = (float)(S.cam.vw / S.cam.zoom);
-    float h = (float)(S.cam.vh / S.cam.zoom);
-    float cx = S.cam.snap ? floorf(S.cam.pos.x) : S.cam.pos.x;
-    float cy = S.cam.snap ? floorf(S.cam.pos.y) : S.cam.pos.y;
-    if (ox) *ox = cx - w * 0.5f;
-    if (oy) *oy = cy - h * 0.5f;
+    /* delegates to the camera's canonical mapping: build/origin/pick
+     * can never disagree (they once did, by half a pixel) */
+    camera_world_origin(&S.cam, ox, oy);
 }
 
 bool rp_read_pixels(uint8_t *rgba_out, int w, int h) {
@@ -1084,6 +1146,16 @@ int rp_quads_last_frame(void)      { return S.quads; }
 
 void rp_set_lit(int on) {
     S.stamp_lit = on ? 1.0f : 0.0f;
+}
+
+/* Cache DSDF atlas parameters (range in atlas texels, w/h atlas size).
+ * Cached only - rp_end_frame uploads them with the program bound, so
+ * callers never depend on WHICH program is current at call time (the
+ * text module binds right after rp_init, before any frame). */
+void rp_set_dsdf_atlas(float range, int w, int h) {
+    S.dsdf_range = range;
+    S.dsdf_tsize[0] = 1.0f / (float)w;
+    S.dsdf_tsize[1] = 1.0f / (float)h;
 }
 
 void rp_set_normal(float nx, float ny, float nz) {

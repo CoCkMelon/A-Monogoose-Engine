@@ -13,6 +13,7 @@
 #include <ame/math.h>
 #include <ame/render.h>
 #include <ame/text.h>
+#include "font_atlas_dsdf.h" /* dsdf case metrics */
 #include "font_atlas.h" /* generated: ground truth for orientation test */
 
 #include <EGL/egl.h>
@@ -352,6 +353,221 @@ int main(void) {
                a_under, b_under, a_far, b_far, hs1);
         rp_shadow_off();
         rp_lighting_off();
+    }
+
+    UT_CASE("DSDF smooth text: mass, AA band, determinism, face switch");
+    {
+        UT_ASSERT(text_init_dsdf() >= 0);
+        ame_text_layout lg;
+        text_layout("Ag", 0, 0, 2.0f, &lg); /* active-face metrics */
+        const float white[4] = { 1, 1, 1, 1 };
+        /* lay the string on the table plane like the card faces do */
+        const float ts2 = 2.0f / (float)text_font_px();
+        float pose2[16] = {
+            ts2, 0, 0, 0,
+            0, 0, ts2, 0,
+            0, 1, 0, 0,
+            -lg.w * ts2 * 0.5f, 0.012f, -lg.h * ts2 * 0.5f, 1,
+        };
+
+        /* empty reference frame: glyphs are measured as delta over it */
+        rp_begin_frame();
+        rp_end_frame();
+        rp_read_pixels(px, W, H);
+        static uint8_t bg[W * H * 4];
+        memcpy(bg, px, sizeof bg);
+        long bg_r = bg[0];
+
+        /* pixel reference (crisp path stays the default) */
+        UT_ASSERT(text_font_mode() == AME_FONT_PIXEL);
+        rp_begin_frame();
+        text_draw_world(&lg, pose2, white, 20);
+        rp_end_frame();
+        uint32_t hp = hash_frame();
+        rp_read_pixels(px, W, H);
+        long a8_mass = 0; /* red-channel delta = per-pixel coverage */
+        for (int i = 0; i < W * H * 4; i += 4) {
+            long d = (long)px[i] - bg_r;
+            a8_mass += d > 0 ? d : 0;
+        }
+
+        /* smooth face: same string/origin/scale */
+        text_set_font(AME_FONT_SMOOTH);
+        UT_ASSERT(text_font_mode() == AME_FONT_SMOOTH);
+        rp_begin_frame();
+        text_draw_world(&lg, pose2, white, 20);
+        rp_end_frame();
+        uint32_t hd = hash_frame();
+        rp_read_pixels(px, W, H);
+        long mass = 0;
+        int aa = 0, ink = 0;
+        for (int i = 0; i < W * H * 4; i += 4) {
+            long d = (long)px[i] - bg_r;
+            if (d < 0)
+                d = 0;
+            mass += d;
+            if (d > 8)
+                ink++;
+            if (d > 8 && d < 221)
+                aa++; /* partial coverage = the AA band */
+        }
+        printf("    dsdf mass=%ld (a8 %ld, %.2fx) ink=%d aa=%d\n",
+               mass, a8_mass, (double)mass / (double)a8_mass, ink, aa);
+        if (getenv("AME_DSDF_DUMP")) { /* visual QA hook */
+            FILE *f = fopen("/tmp/dsdf_case.ppm", "wb");
+            fprintf(f, "P6\n%d %d\n255\n", W, H);
+            for (int i = 0; i < W * H * 4; i += 4)
+                { fputc(px[i], f); fputc(px[i+1], f); fputc(px[i+2], f); }
+            fclose(f);
+        }
+        /* ink mass sane: different faces have different ink density
+         * (DejaVu vs Pixelify), so the band is wide - it exists to
+         * catch broken-alpha renders (garbage ~0.03x or blowout ~5x) */
+        UT_ASSERTF(mass > a8_mass * 2 / 5 && mass < a8_mass * 8 / 5,
+                   "dsdf ink mass drifted (a8=%ld dsdf=%ld)", a8_mass, mass);
+        /* the smooth path MUST produce a soft edge, the pixel path must not */
+        UT_ASSERTF(aa > 40, "no anti-aliasing band (%d px)", aa);
+        /* at 1:1 the solid interior dominates; under perspective
+         * minification EVERY visible px can be soft - allow aa == ink */
+        UT_ASSERTF(aa <= ink, "band wider than ink (%d vs %d)", aa, ink);
+        UT_ASSERTF(ink > 300, "too little ink (%d)", ink);
+        /* deterministic */
+        rp_begin_frame();
+        text_draw_world(&lg, pose2, white, 20);
+        rp_end_frame();
+        UT_ASSERT(hash_frame() == hd);
+
+        /* switching back to the pixel face is byte-identical to hp */
+        text_set_font(AME_FONT_PIXEL);
+        rp_begin_frame();
+        text_draw_world(&lg, pose2, white, 20);
+        rp_end_frame();
+        UT_ASSERT(hash_frame() == hp);
+
+        /* 2D screen-space smooth text (the text_editor path) */
+        {
+            ame_camera c2;
+            camera_viewport(camera_ortho2d(camera_desc(&c2)), W, H);
+            camera_pos(&c2, (float)W * 0.5f, (float)H * 0.5f, 0);
+            camera_build(&c2);
+            rp_set_camera(&c2);
+            rp_begin_frame();
+            rp_end_frame();
+            rp_read_pixels(px, W, H);
+            static uint8_t bg2[W * H * 4];
+            memcpy(bg2, px, sizeof bg2);
+            long bg2_r = bg2[0];
+            rp_begin_frame();
+            text_draw_screen(&lg, 20, 20, white, 0);
+            rp_end_frame();
+            rp_read_pixels(px, W, H);
+            long mass2 = 0;
+            int ink2 = 0, aa2 = 0;
+            for (int i = 0; i < W * H * 4; i += 4) {
+                long d = (long)px[i] - bg2_r;
+                if (d < 0)
+                    d = 0;
+                mass2 += d;
+                if (d > 8)
+                    ink2++;
+                if (d > 8 && d < 221)
+                    aa2++;
+            }
+            printf("    dsdf 2d screen: mass=%ld ink=%d aa=%d\n",
+                   mass2, ink2, aa2);
+            UT_ASSERTF(ink2 > 100, "2d smooth text invisible (%d px)", ink2);
+            UT_ASSERTF(aa2 > 20, "2d smooth text not anti-aliased (%d)", aa2);
+        }
+
+        /* ---- audit P0-2: the pixel-level caret oracle, IN CI ----
+         * drawn caret bar vs drawn glyph ink. Not a self-consistency
+         * check: the bar goes through the sprite path, the ink through
+         * the glyph path, and the comparison happens on READBACK
+         * PIXELS. This is the ratchet that catches any constant-offset
+         * regression the algebraic two-ways test is blind to. */
+        {
+            ame_text_layout lpc;
+            text_layout("Aj", 0, AME_TEXT_ALIGN_L, 1.0f, &lpc);
+            const float OX = 40, OY = 40;
+            for (int k = 0; k <= lpc.count; k++) {
+                float penx = k < lpc.count ? lpc.el[k].x : lpc.w;
+                rp_begin_frame();
+                text_draw_screen(&lpc, OX, OY, white, 0);
+                /* solid 2px caret bar at the element's snapped pen */
+                rp_push_sprite(rp_white_texture(), OX + penx, OY, 2,
+                               lpc.h, 0, 0, 1, 1,
+                               (float[4]){ 1, 0, 0, 1 }, 5);
+                rp_end_frame();
+                rp_read_pixels(px, W, H);
+                int bar_lo = -1, bar_hi = -1, ink_lo = -1, ink_hi = -1;
+                for (int x = 0; x < W; x++) {
+                    int is_bar = 0, is_ink = 0;
+                    for (int y = 20; y < 100; y++) {
+                        int i = (y * W + x) * 4;
+                        if (px[i] > 200 && px[i + 1] < 80
+                            && px[i + 2] < 80)
+                            is_bar = 1;
+                        if (px[i] > 200 && px[i + 1] > 200)
+                            is_ink = 1;
+                    }
+                    if (is_bar) {
+                        if (bar_lo < 0) bar_lo = x;
+                        bar_hi = x;
+                    }
+                    if (is_ink) {
+                        if (ink_lo < 0) ink_lo = x;
+                        ink_hi = x;
+                    }
+                }
+                UT_ASSERTF(bar_lo >= 0, "k=%d: no drawn bar", k);
+                UT_ASSERTF(bar_hi - bar_lo == 1,
+                           "k=%d: bar not crisp 2px (%d..%d)", k, bar_lo,
+                           bar_hi);
+                if (k == 0) {
+                    /* BOL: ALL ink is right of the bar, adjacent */
+                    UT_ASSERTF(ink_lo >= bar_hi,
+                               "k=%d: ink %d left of bar %d", k, ink_lo,
+                               bar_hi);
+                    UT_ASSERTF(ink_lo - bar_hi <= 5,
+                               "k=%d: ink %d too far from bar %d", k,
+                               ink_lo, bar_hi);
+                } else if (k < lpc.count) {
+                    /* mid: first ink RIGHT of the bar is the next
+                     * glyph's, within its bearing distance */
+                    int rink = -1;
+                    for (int x = bar_hi + 1; x < W; x++) {
+                        int is_ink = 0;
+                        for (int y = 20; y < 100; y++) {
+                            int i = (y * W + x) * 4;
+                            if (px[i] > 200 && px[i + 1] > 200)
+                                is_ink = 1;
+                        }
+                        if (is_ink) { rink = x; break; }
+                    }
+                    UT_ASSERTF(rink >= 0, "k=%d: no ink right of bar",
+                               k);
+                    UT_ASSERTF(rink - bar_hi <= 5,
+                               "k=%d: right ink %d too far from bar %d",
+                               k, rink, bar_hi);
+                } else {
+                    /* EOL: NO ink at/right of the caret */
+                    UT_ASSERTF(ink_hi < bar_lo,
+                               "EOL: ink %d at/right of bar %d", ink_hi,
+                               bar_lo);
+                }
+            }
+            printf("    caret-vs-ink pixels: %d cols verified\n",
+                   lpc.count + 1);
+        }
+
+        /* un-inited fallback: without init_dsdf the smooth request is a
+         * no-op (proved by a fresh shutdown/init cycle) */
+        rp_shutdown();
+        UT_ASSERT(rp_init(rp_desc_clear(rp_desc_begin(&d), 0, 0, 0, 1),
+                          &cam3, W, H) == 0);
+        text_init(true);
+        text_set_font(AME_FONT_SMOOTH);
+        UT_ASSERT(text_font_mode() == AME_FONT_PIXEL);
     }
 
     UT_CASE("Stage 2 post: offscreen round trip is pixel-exact");

@@ -68,7 +68,7 @@ set_tests_properties(mem_net PROPERTIES TIMEOUT 180)
 
 # text layout (pure CPU; glyph metrics from the baked atlas)
 add_executable(test_text test_text.c)
-target_link_libraries(test_text PRIVATE ame::3d)
+target_link_libraries(test_text PRIVATE ame::3d ame_font)
 add_test(NAME text COMMAND test_text)
 
 # golden render: headless EGL surfaceless + llvmpipe (Linux CI job)

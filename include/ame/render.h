@@ -66,6 +66,12 @@ void rp_push_tri(int tex,
                  float u0, float v0, float u1, float v1,
                  const float tint[4], float layer);
 /* 3D/general: explicit corners in world space (column order: p0..p3 CCW) */
+/* DSDF text glyph quad (text module only): stamps the nrm.y marker. */
+void rp_push_text_quad(int tex,
+                       const float p0[3], const float p1[3],
+                       const float p2[3], const float p3[3],
+                       float u0, float v0, float u1, float v1,
+                       const float tint[4], float layer);
 void rp_push_quad(int tex,
                   const float p0[3], const float p1[3],
                   const float p2[3], const float p3[3],
@@ -76,6 +82,9 @@ void rp_push_quad(int tex,
 int  rp_load_texture(const uint8_t *pixels, int w, int h, int comps,
                      bool nearest_sampling);
 void rp_free_texture(int id);
+/* DSDF (densely sampled distance field) text atlas parameters - call
+ * once after loading the DSDF font texture (see text_init_dsdf). */
+void rp_set_dsdf_atlas(float range, int w, int h);
 /* Update an existing texture in place (same id/dims/format) - the
  * dynamic-texture path for software-shaded content (a CPU raymarcher
  * uploading each frame, video frames later). false on mismatch. */

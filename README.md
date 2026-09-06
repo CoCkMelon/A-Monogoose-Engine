@@ -13,7 +13,7 @@ the same single-pass renderer.
 |---|---|---|
 | 0 | local game, headless screenshots, packaged unit + clean-machine smoke | **done** |
 | 1 | server-authoritative **online** Memory over TCP (loopback-tested) | **done** |
-| 2 | advanced rendering: forward lighting ✓, offscreen + post pass ✓, particles ✓, shadow maps ✓ (materials next) | in progress |
+| 2 | advanced rendering: forward lighting ✓, offscreen + post pass ✓, particles ✓, shadow maps ✓, dual-font text (crisp pixel A8 + smooth **DSDF** anti-aliased in 2D and 3D) ✓ (materials next) | in progress |
 | — | A-Monogoose parity: audio occlusion raytracer ✓, decoded PCM + wav + **opus** ✓, tilemap (.tmj) ✓, dialogue ✓, Assimp mesh import ✓, example ports: audio_pan/audio_opus/audio_ray/line_draw/tilemap_render/raymarch_arcade/text_editor ✓ (`examples/`) | done |
 | — | Math layer: cglm-parity API (m3/quat/frustum/curves) + SSE2 fast paths **bit-identical** to the scalar bodies; cglm is a test-only oracle/benchmark (`tests/test_math_cglm.c`), never an engine dependency | done |
 | — | Lean 4 formal model (geometry/picking/shader contracts + game rules) | done, `lean/` |
@@ -32,6 +32,36 @@ Needs: CMake ≥3.16, Ninja, SDL3 dev, EGL/GLES dev (`libsdl3-dev libegl1
 libgl1-mesa-dri libgles-dev` on Debian/Ubuntu). Optional: `libfyaml-dev`
 (dialogue module; engine builds without it), `libassimp-dev` (the
 `assimp2c` bake tool; baked assets are committed).
+
+## The text coordinate contract (audited)
+
+One snapped pen is the single coordinate stream for glyphs, carets,
+selection and hit-testing (`lean/Ame/Text.lean` mirrors it; the
+editor's two-ways law tests it against the shipping source):
+
+- the pen accumulates advances in **double**, stores `floor(pen+1/2)`
+  per element — the C now matches the exact-Rat oracle bit-for-bit on
+  the full corpus (`-ffp-contract=off` is pinned engine-wide);
+- every layout element carries `src_byte` (byte offset of its
+  codepoint), so byte↔glyph-column mapping is a binary search over
+  the layout's own anchors — tags recolour but never advance
+  (`{/c}` restores; `lean: pen_insert` proves tags can't move the pen);
+- `text_layout_plain()` is the no-markup entry (braces are literal
+  ink, elements map 1:1 to bytes) — the editor's path;
+- `\t` is a modelled invisible element (`AME_TXT_TAB`, 4-space
+  advance), `\r\n` collapses to `\n`, indentation after an explicit
+  newline is content (a leading space is dropped only after a *wrap*,
+  which by construction can never drop one);
+- `w` is the snapped pen after the last STORED element; if the
+  glyph/line cap truncated the run, `layout.truncated` says which
+  (`lean: cap_width_eq_pen`) — no phantom EOL carets;
+- 2D screen origin: `camera_world_origin()` — floor the camera
+  position, then floor the translation: integral origins at odd
+  viewport sizes too (no half-pixel soft text at 1281×721).
+
+Regression tests bind every line of this to the shipping source —
+including a **pixel-level caret oracle** in `test_render`: the drawn
+caret bar vs the drawn glyph ink, compared on readback pixels, in CI.
 
 ## Play
 
@@ -101,7 +131,7 @@ include/ame/  engine headers (math, pool, events, camera, render, text, …)
 src/          engine core (C23; per-dimension build via AME_2D/AME_3D)
 examples/memory_game/  the FIRST GAME (own CMakeLists) + mem_server
 tests/        ctest suites (logic, geometry, camera, text, render, net)
-tools/        bake_font, pack.sh, smoke.sh
+tools/        bake_font, bake_font_dsdf, pack.sh, smoke.sh
 lean/         Lean 4 model (pure core, no mathlib, zero sorry)
 docs/         THE SPEC (README.txt first)
 ```
