@@ -1,0 +1,228 @@
+@import "tailwindcss";
+
+@theme {
+  --color-void: #04070a;
+  --color-carbon: #070b0e;
+  --color-panel: #0a1014;
+  --color-hairline: rgba(120, 255, 180, 0.14);
+  --color-phosphor: #33ff80;
+  --color-ember: #ff33cc;
+  --color-amber: #ffb020;
+  --color-ice: #57d7ff;
+  --color-ink: #e6f4ec;
+  --color-dim: #7d968a;
+  --font-display: "Space Grotesk", sans-serif;
+  --font-mono: "JetBrains Mono", monospace;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  background: var(--color-void);
+  color: var(--color-ink);
+  font-family: var(--font-display);
+  overflow-x: hidden;
+  -webkit-font-smoothing: antialiased;
+}
+
+::selection {
+  background: rgba(51, 255, 128, 0.28);
+  color: #eafff2;
+}
+
+/* ---------- scrollbar ---------- */
+::-webkit-scrollbar { width: 10px; }
+::-webkit-scrollbar-track { background: #04070a; }
+::-webkit-scrollbar-thumb {
+  background: #14231b;
+  border: 2px solid #04070a;
+  border-radius: 8px;
+}
+::-webkit-scrollbar-thumb:hover { background: #1f3a2b; }
+
+/* ---------- global texture layers ---------- */
+.noise-layer {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 70;
+  opacity: 0.05;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/%3E%3C/filter%3E%3Crect width='160' height='160' filter='url(%23n)' opacity='1'/%3E%3C/svg%3E");
+}
+
+.grid-bg {
+  background-image:
+    linear-gradient(rgba(51, 255, 128, 0.045) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(51, 255, 128, 0.045) 1px, transparent 1px);
+  background-size: 56px 56px;
+}
+
+/* ---------- terminal / phosphor text ---------- */
+.glow-green {
+  text-shadow: 0 0 14px rgba(51, 255, 128, 0.55), 0 0 42px rgba(51, 255, 128, 0.22);
+}
+.glow-magenta {
+  text-shadow: 0 0 14px rgba(255, 51, 204, 0.5), 0 0 42px rgba(255, 51, 204, 0.2);
+}
+
+/* ---------- scanline sweep ---------- */
+@keyframes scan-sweep {
+  0% { transform: translateY(-100%); }
+  100% { transform: translateY(100vh); }
+}
+.scanline-beam {
+  position: fixed;
+  left: 0;
+  right: 0;
+  height: 120px;
+  z-index: 60;
+  pointer-events: none;
+  background: linear-gradient(
+    to bottom,
+    transparent,
+    rgba(51, 255, 128, 0.03) 60%,
+    rgba(51, 255, 128, 0.065) 90%,
+    transparent
+  );
+  animation: scan-sweep 9s linear infinite;
+}
+
+/* ---------- reveal on scroll ---------- */
+.rv {
+  opacity: 0;
+  transform: translateY(34px);
+  transition: opacity 0.9s cubic-bezier(0.22, 1, 0.36, 1), transform 0.9s cubic-bezier(0.22, 1, 0.36, 1);
+  transition-delay: var(--rv-delay, 0ms);
+}
+.rv.rv-in {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+/* ---------- marquee ---------- */
+@keyframes marquee-x {
+  from { transform: translateX(0); }
+  to { transform: translateX(-50%); }
+}
+.marquee-track {
+  display: flex;
+  width: max-content;
+  animation: marquee-x 36s linear infinite;
+}
+
+/* ---------- caret blink ---------- */
+@keyframes caret-blink {
+  0%, 54% { opacity: 1; }
+  55%, 100% { opacity: 0; }
+}
+.caret { animation: caret-blink 1.1s steps(1) infinite; }
+
+/* ---------- boot ---------- */
+@keyframes boot-line-in {
+  from { opacity: 0; transform: translateX(-8px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+.boot-line {
+  opacity: 0;
+  animation: boot-line-in 0.18s ease-out forwards;
+}
+@keyframes boot-out {
+  to { opacity: 0; visibility: hidden; }
+}
+
+/* ---------- 3D memory card ---------- */
+.mem-scene { perspective: 1100px; }
+.mem-card {
+  transform-style: preserve-3d;
+  transition: transform 0.09s linear;
+  will-change: transform;
+}
+.mem-face {
+  position: absolute;
+  inset: 0;
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.mem-face-back {
+  transform: rotateY(180deg);
+}
+
+/* ---------- cabinet ---------- */
+.cabinet {
+  background:
+    linear-gradient(180deg, rgba(18, 28, 23, 0.35), rgba(5, 8, 10, 0.9)),
+    repeating-linear-gradient(0deg, transparent 0 3px, rgba(0, 0, 0, 0.16) 3px 4px);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.05),
+    inset 0 0 80px rgba(0, 0, 0, 0.55),
+    0 0 0 1px rgba(120, 255, 180, 0.12),
+    0 30px 80px rgba(0, 0, 0, 0.55);
+}
+.crt-mask::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: repeating-linear-gradient(
+    0deg,
+    rgba(0, 0, 0, 0.12) 0 1px,
+    transparent 1px 3px
+  );
+  mix-blend-mode: overlay;
+  z-index: 5;
+  border-radius: inherit;
+}
+
+/* ---------- key chip ---------- */
+.kbd {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  line-height: 1;
+  padding: 5px 7px;
+  border-radius: 5px;
+  border: 1px solid rgba(120, 255, 180, 0.25);
+  border-bottom-width: 2px;
+  background: rgba(10, 18, 14, 0.9);
+  color: #9ff5c4;
+  letter-spacing: 0.04em;
+}
+
+/* ---------- pulse dot ---------- */
+@keyframes pulse-dot {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(51, 255, 128, 0.5); }
+  60% { box-shadow: 0 0 0 7px rgba(51, 255, 128, 0); }
+}
+.pulse-dot { animation: pulse-dot 2.2s ease-out infinite; }
+
+/* ---------- hero outline text ---------- */
+.stroke-text {
+  -webkit-text-stroke: 1px rgba(51, 255, 128, 0.35);
+  color: transparent;
+}
+
+/* ---------- rotate badge ---------- */
+@keyframes spin-slow {
+  to { transform: rotate(360deg); }
+}
+.spin-slow { animation: spin-slow 16s linear infinite; }
+
+/* ---------- window flicker on load ---------- */
+@keyframes crt-on {
+  0% { opacity: 0; transform: scaleY(0.02) scaleX(0.9); filter: brightness(6); }
+  40% { opacity: 1; transform: scaleY(1.04) scaleX(1); filter: brightness(2.2); }
+  70% { transform: scaleY(0.99); filter: brightness(1.1); }
+  100% { transform: scaleY(1); filter: brightness(1); }
+}
+.crt-on { animation: crt-on 0.7s cubic-bezier(0.23, 1, 0.32, 1) both; }
+
+@media (prefers-reduced-motion: reduce) {
+  .scanline-beam, .marquee-track, .spin-slow { animation: none !important; }
+  html { scroll-behavior: auto; }
+  .rv { transition: none; opacity: 1; transform: none; }
+}
