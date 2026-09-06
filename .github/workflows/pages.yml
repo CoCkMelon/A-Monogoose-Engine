@@ -1,26 +1,36 @@
-name: Deploy web companion to GitHub Pages
+name: Rebuild web companion for GitHub Pages
 
-# Builds the AME//WEB companion site (Vite + React, single-file build with
-# the engine's wasm ports inlined) and publishes dist/ to GitHub Pages.
-# The site is fully self-contained, so it works under the repo's /A-Monogoose-Engine/
-# subpath with no base-path configuration.
+# GitHub Pages serves /docs from this branch (legacy source). The site is a
+# Vite single-file build with the engine's wasm ports inlined, so this job
+# rebuilds dist/ and refreshes docs/index.html whenever the web sources
+# change. Path filters prevent loops: the bot commit only touches docs/**,
+# which is not a trigger path.
 
 on:
   push:
     branches: [agent/ame-next-20260905-4ad0fd06]
+    paths:
+      - "index.html"
+      - "package.json"
+      - "package-lock.json"
+      - "vite.config.ts"
+      - "tsconfig.json"
+      - "src/**/*.ts"
+      - "src/**/*.tsx"
+      - "src/**/*.css"
+      - "src/wasm/**"
+      - ".github/workflows/pages.yml"
   workflow_dispatch:
 
 permissions:
-  contents: read
-  pages: write
-  id-token: write
+  contents: write
 
 concurrency:
-  group: pages
+  group: pages-docs
   cancel-in-progress: true
 
 jobs:
-  build:
+  rebuild:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -36,16 +46,16 @@ jobs:
       - name: build (vite -> dist/index.html, single file)
         run: npm run build
 
-      - uses: actions/upload-pages-artifact@v3
-        with:
-          path: dist
-
-  deploy:
-    needs: build
-    runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    steps:
-      - id: deployment
-        uses: actions/deploy-pages@v4
+      - name: refresh docs/index.html when the build changed
+        run: |
+          cp dist/index.html docs/index.html
+          touch docs/.nojekyll
+          if git diff --quiet -- docs/; then
+            echo "docs already up to date"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add docs/index.html docs/.nojekyll
+          git commit -m "chore(pages): rebuild web companion (docs/index.html)"
+          git push
