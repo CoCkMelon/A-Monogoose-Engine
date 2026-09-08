@@ -1,0 +1,9 @@
+== bench_render_sort ==
+nquads     old_ns/frame     new_ns/frame     speedup   
+16         5203.0           92.7             56.12     x
+64         5290.3           249.0            21.24     x
+256        5563.2           566.2            9.83      x
+1024       7341.0           1705.5           4.30      x
+4096       19775.4          7307.3           2.71      x
+16384      92759.7          29974.4          3.09      x
+(stable order verified identical for all sizes)

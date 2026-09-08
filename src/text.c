@@ -36,7 +36,19 @@ static void fallback_box(float *w, float *h) {
     *h = g_scale_font_px * 0.62f;
 }
 
-static int glyph_find(uint32_t cp) {
+/* ASCII fast path: game/UI text is overwhelmingly ASCII, so cache the
+ * binary-search answers for U+0000..U+007F in flat LUTs (both faces).
+ * LUTs are built once on first use; the baked tables are process-lifetime
+ * constants so entries never go stale. Thread safety: an atomic_flag
+ * spinlock guards the one-time build (TSan-clean); a thread that finds
+ * the lock held simply falls back to binary search for that lookup
+ * rather than blocking the text hot path. */
+static int g_ascii_lut[128];
+static int g_ascii_lut_dsdf[128];
+static atomic_flag g_lut_lock = ATOMIC_FLAG_INIT;
+static _Atomic bool g_lut_ready = false;
+
+static int glyph_find_slow(uint32_t cp) {
     /* binary search over sorted baked table */
     int lo = 0, hi = ame_font_glyph_count - 1;
     while (lo <= hi) {
@@ -51,7 +63,7 @@ static int glyph_find(uint32_t cp) {
     return -1;
 }
 
-static int dsdf_glyph_find(uint32_t cp) {
+static int dsdf_glyph_find_slow(uint32_t cp) {
     int lo = 0, hi = ame_dsdf_glyph_count - 1;
     while (lo <= hi) {
         int mid = (lo + hi) / 2;
@@ -63,6 +75,43 @@ static int dsdf_glyph_find(uint32_t cp) {
             hi = mid - 1;
     }
     return -1;
+}
+
+static void glyph_lut_ensure(void) {
+    if (atomic_load_explicit(&g_lut_ready, memory_order_acquire))
+        return;
+    if (atomic_flag_test_and_set_explicit(&g_lut_lock, memory_order_acquire))
+        return; /* someone else is building; caller falls back to slow */
+    if (!atomic_load_explicit(&g_lut_ready, memory_order_relaxed)) {
+        for (uint32_t cp = 0; cp < 128; cp++) {
+            g_ascii_lut[cp] = glyph_find_slow(cp);
+            g_ascii_lut_dsdf[cp] = dsdf_glyph_find_slow(cp);
+        }
+        atomic_store_explicit(&g_lut_ready, true, memory_order_release);
+    }
+    atomic_flag_clear_explicit(&g_lut_lock, memory_order_release);
+}
+
+static int glyph_find(uint32_t cp) {
+    if (cp < 128) {
+        if (atomic_load_explicit(&g_lut_ready, memory_order_acquire))
+            return g_ascii_lut[cp];
+        glyph_lut_ensure();
+        if (atomic_load_explicit(&g_lut_ready, memory_order_acquire))
+            return g_ascii_lut[cp];
+    }
+    return glyph_find_slow(cp);
+}
+
+static int dsdf_glyph_find(uint32_t cp) {
+    if (cp < 128) {
+        if (atomic_load_explicit(&g_lut_ready, memory_order_acquire))
+            return g_ascii_lut_dsdf[cp];
+        glyph_lut_ensure();
+        if (atomic_load_explicit(&g_lut_ready, memory_order_acquire))
+            return g_ascii_lut_dsdf[cp];
+    }
+    return dsdf_glyph_find_slow(cp);
 }
 
 int text_init_dsdf(void) {

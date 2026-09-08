@@ -57,12 +57,20 @@ typedef struct {
     uint16_t pend_head;
     uint16_t overflow_drops;        /* deferred-queue overflow (debug view) */
     uint16_t coalesced;             /* duplicate free requests coalesced */
+    /* O(1) duplicate detection: pend_gen[i] == gen[i] (nonzero) iff slot i
+     * is already queued in this apply window. Cleared on apply/reset so a
+     * stale tag can never match a future generation (no wraparound
+     * hazard even after 65535 alloc/free cycles on one slot). Costs
+     * 2*CAP bytes; slots_free drops from O(pend_head) to O(1), so freeing
+     * N distinct handles drops from O(N^2) to O(N). */
+    uint16_t pend_gen[AME_POOL_CAP];
 } AME_P(slots);
 
 static inline void AME_P(slots_reset)(AME_P(slots) *s) {
     for (uint16_t i = 0; i < (uint16_t)AME_POOL_CAP; i++) {
         s->gen[i] = 0;
         s->alive[i] = 0;
+        s->pend_gen[i] = 0;
         s->free_list[i] = (uint16_t)(AME_POOL_CAP - 1 - i); /* pop ascending */
     }
     s->free_head = (uint16_t)AME_POOL_CAP;
@@ -91,20 +99,21 @@ static inline bool AME_P(slots_valid)(const AME_P(slots) *s, ame_handle h) {
  * Exact duplicates coalesce (external-review fix: free(a), free(a) used
  * to fill two queue slots and could push a DISTINCT free out - losing a
  * despawn). The handle stays valid until apply, so a second request for
- * the same slot+generation is always redundant. */
+ * the same slot+generation is always redundant. Duplicate detection is
+ * O(1) via the pend_gen tag (the old linear scan over the queue made
+ * freeing N distinct handles O(N^2)). */
 static inline void AME_P(slots_free)(AME_P(slots) *s, ame_handle h) {
     if (!AME_P(slots_valid)(s, h))
         return;
-    for (uint16_t i = 0; i < s->pend_head; i++) {
-        if (s->pend_free[i].idx == h.idx && s->pend_free[i].gen == h.gen) {
-            s->coalesced++;
-            return;
-        }
+    if (s->pend_gen[h.idx] == h.gen) {
+        s->coalesced++;
+        return;
     }
     if (s->pend_head >= (uint16_t)AME_POOL_MAX_FREE) {
         s->overflow_drops++; /* only > MAX_FREE DISTINCT frees per window */
         return;
     }
+    s->pend_gen[h.idx] = h.gen;
     s->pend_free[s->pend_head++] = h;
 }
 
@@ -112,6 +121,7 @@ static inline void AME_P(slots_free)(AME_P(slots) *s, ame_handle h) {
 static inline void AME_P(slots_apply_frees)(AME_P(slots) *s) {
     while (s->pend_head > 0) {
         ame_handle h = s->pend_free[--s->pend_head];
+        s->pend_gen[h.idx] = 0; /* clear the tag even if stale (see below) */
         if (!AME_P(slots_valid)(s, h))
             continue;
         s->alive[h.idx] = 0;

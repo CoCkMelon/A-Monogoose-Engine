@@ -29,6 +29,7 @@
 
 #include "mem_sim.h"
 #include "mem_net.h"
+#include "mem_config.h"
 
 #define GRID_COLS 4
 #define GRID_ROWS 4
@@ -75,6 +76,8 @@ static int CLI_FD = -1;
 static mem_net_rx CLI_RX;
 static int g_online;
 static int g_srv_gone;
+static mem_config CFG; /* launch config, read once at boot (no getenv later) */
+static int g_autoplay;
 
 /* pick intent: main thread publishes click px, logic consumes */
 static _Atomic uint32_t pick_flag;
@@ -212,26 +215,18 @@ int app_init(void) {
         .release = 0.3f, .loop = false };
     au_win = audio_new_synth(&win);
 
+    /* launch config: the whole AME_* env surface, parsed once (pure
+     * libc, no SDL) — app wiring never calls getenv after this. */
+    mem_config_from_env(&CFG);
+    g_autoplay = CFG.autoplay.enabled ? 1 : 0;
+
     ame_geo_reset();
     /* Stage 1: online mode. The server owns the game; the local sim
      * becomes a render-only mirror. Any failure falls back to local
      * hot-seat so the app never dead-ends. */
-    const char *srv = SDL_getenv("AME_SERVER");
-    if (srv && srv[0]) {
-        char host[64] = "127.0.0.1";
-        unsigned port = 7777;
-        char *colon = SDL_strchr(srv, ':');
-        if (colon) {
-            size_t hl = (size_t)(colon - srv);
-            if (hl >= sizeof host)
-                hl = sizeof host - 1;
-            memcpy(host, srv, hl);
-            host[hl] = 0;
-            port = (unsigned)SDL_strtoul(colon + 1, NULL, 0);
-        } else {
-            /* "port" only: loopback */
-            port = (unsigned)SDL_strtoul(srv, NULL, 0);
-        }
+    if (CFG.server.enabled) {
+        const char *host = CFG.server.host;
+        unsigned port = CFG.server.port;
         mem_client_init(&CLI);
         mem_net_rx_init(&CLI_RX);
         for (int try = 0; try < 3 && CLI_FD < 0; try++) {
@@ -269,10 +264,7 @@ int app_init(void) {
         /* Stage 0 exit: "replay with a fixed seed is deterministic".
          * Default keeps the classic board (golden tests); AME_SEED
          * replays any specific shuffle. */
-        uint32_t seed = 0xC0FFEE;
-        const char *sd = SDL_getenv("AME_SEED");
-        if (sd && sd[0])
-            seed = (uint32_t)SDL_strtoul(sd, NULL, 0);
+        uint32_t seed = CFG.seed.seed;
         printf("ame: memory board seed=0x%08" PRIx32 "\n", seed);
         mem_reset(&G, GRID_COLS, GRID_ROWS, seed);
     }
@@ -293,22 +285,13 @@ int app_init(void) {
     /* software cursor: the game draws its own; hide the system one */
     SDL_HideCursor();
 
-    const char *fm = SDL_getenv("AME_FAKE_MOUSE");
-    if (fm) {
-        float fx = 0, fy = 0;
-        if (sscanf(fm, "%f,%f", &fx, &fy) == 2)
-            in_on_mouse_move(fx, fy); /* logic thread picks it up next step */
-    }
+    if (CFG.fakemouse.present)
+        in_on_mouse_move(CFG.fakemouse.x,
+                         CFG.fakemouse.y); /* logic thread picks it up next step */
 
-    const char *shot = SDL_getenv("AME_SCREENSHOT");
-    if (shot && shot[0]) {
-        snprintf(g_shot_path, sizeof g_shot_path, "%s", shot);
-        g_shot_frames_left = 5;
-        const char *fr = SDL_getenv("AME_SCREENSHOT_FRAMES");
-        if (fr && fr[0])
-            g_shot_frames_left = (int)SDL_strtol(fr, NULL, 0);
-        if (g_shot_frames_left < 1)
-            g_shot_frames_left = 1;
+    if (CFG.shot.present) {
+        snprintf(g_shot_path, sizeof g_shot_path, "%s", CFG.shot.path);
+        g_shot_frames_left = CFG.shot.frames;
     }
     return 0;
 }
@@ -407,8 +390,9 @@ int app_fixed(float dt) {
 
     /* AME_AUTOPLAY=1 (local mode only): deterministic honest-memory
      * bot drives the game so headless captures (with
-     * AME_FIXED_FRAME_DT) can prove effects/animation byte-exactly. */
-    if (!g_online && SDL_getenv("AME_AUTOPLAY")) {
+     * AME_FIXED_FRAME_DT) can prove effects/animation byte-exactly.
+     * Read once at boot (g_autoplay): no getenv on the 1000 Hz path. */
+    if (!g_online && g_autoplay) {
         static double acc = 0;
         acc += dt;
         if (acc > 0.35) {
