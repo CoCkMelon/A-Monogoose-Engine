@@ -320,6 +320,19 @@ void audio_render(float *out, int frames) {
 
     const float dt = 1.0f / (float)S.rate;
 
+    /* per-voice pan gains are CONSTANT across the block (commands apply
+     * only at the block head), so compute the cosf/sinf pair ONCE per
+     * voice here instead of per voice per sample. Same inputs, same
+     * call order as before -> BIT-IDENTICAL output, ~2 fewer
+     * transcendentals per voice-sample. */
+    float pan_l[AME_AUDIO_VOICES], pan_r[AME_AUDIO_VOICES];
+    for (int i = 0; i < AME_AUDIO_VOICES; i++) {
+        float pan = ame_clampf(S.v[i].cfg.pan, -1.0f, 1.0f)
+                  * 0.7853981634f; /* pi/4 scale: constant-power */
+        pan_l[i] = cosf(pan) - sinf(pan);
+        pan_r[i] = cosf(pan) + sinf(pan);
+    }
+
     for (int f = 0; f < frames; f++) {
         float mix_l = 0.0f, mix_r = 0.0f;
         for (int i = 0; i < AME_AUDIO_VOICES; i++) {
@@ -364,23 +377,15 @@ void audio_render(float *out, int frames) {
                 s = v->pcm[(size_t)v->pcm_pos * 2] * v->cfg.gain;
                 float sr = v->pcm[(size_t)v->pcm_pos * 2 + 1] * v->cfg.gain;
                 v->pcm_pos++;
-                float pan2 = ame_clampf(v->cfg.pan, -1.0f, 1.0f)
-                           * 0.7853981634f;
-                float pl = cosf(pan2) - sinf(pan2);
-                float pr = cosf(pan2) + sinf(pan2);
-                mix_l += s * pl;
-                mix_r += sr * pr;
+                mix_l += s * pan_l[i];
+                mix_r += sr * pan_r[i];
                 atomic_store_explicit(&v->env_pub, 1024u,
                                       memory_order_relaxed);
                 continue;
             }
             s = au_wave_sample(v) * env * v->cfg.gain;
-            /* constant-power pan */
-            float pan = ame_clampf(v->cfg.pan, -1.0f, 1.0f) * 0.7853981634f; /* pi/4 scale */
-            float l = cosf(pan) - sinf(pan);
-            float r = cosf(pan) + sinf(pan);
-            mix_l += s * l;
-            mix_r += s * r;
+            mix_l += s * pan_l[i];
+            mix_r += s * pan_r[i];
             /* advance phase: freq cycles/sec * dt sec per sample */
             double step = (double)v->cfg.freq * dt;
             v->phase += (int64_t)(step * (double)AU_PHASE_ONE);

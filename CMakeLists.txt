@@ -17,6 +17,7 @@ endif()
 
 option(AME_BUILD_EXAMPLES "Build examples" ON)
 option(AME_BUILD_TESTS    "Build tests"    ON)
+option(AME_BUILD_BENCHES  "Build microbenchmarks" ON)
 option(AME_ENABLE_ASAN    "ASan/UBSan debug build" OFF)
 option(AME_BUILD_ASYNCINPUT_GAME "Build the asyncinput-backend game variant" OFF)
 
@@ -214,5 +215,9 @@ endif()
 
 if(AME_BUILD_EXAMPLES)
     add_subdirectory(examples)
+endif()
+
+if(AME_BUILD_BENCHES)
+    add_subdirectory(benches)
 endif()
 

@@ -96,9 +96,15 @@ typedef struct {
     /* per-quad sort keys; counting sort into draw order */
     uint16_t *q_tex;
     uint8_t *q_layer;
+    uint32_t *q_key;   /* precomputed at push: tex*RP_LAYERS + layer */
     uint32_t *q_order;
-    uint32_t *bucket_head; /* key+1 -> first quad index in draw order */
-    uint32_t *bucket_next;
+    /* counting-sort workspace: counts/starts are per-bucket, touched
+     * lists the buckets used by the current frame so clearing is
+     * O(used) instead of O(8193). Same total footprint as the old
+     * linked-list head/next tables. */
+    uint32_t *counts;
+    uint32_t *starts;
+    uint32_t *touched;
     int bucket_count;
 } rp_batch;
 
@@ -343,9 +349,11 @@ static void rp_free_batch(void) {
     free(S.batch.idx);
     free(S.batch.q_tex);
     free(S.batch.q_layer);
+    free(S.batch.q_key);
     free(S.batch.q_order);
-    free(S.batch.bucket_head);
-    free(S.batch.bucket_next);
+    free(S.batch.counts);
+    free(S.batch.starts);
+    free(S.batch.touched);
     memset(&S.batch, 0, sizeof S.batch);
 }
 
@@ -483,15 +491,19 @@ int rp_init(const ame_rp_desc *desc, const ame_camera *cam, int w, int h) {
     S.batch.idx = malloc(sizeof(uint32_t) * (size_t)S.batch.quad_cap * 6);
     S.batch.q_tex = malloc(sizeof(uint16_t) * (size_t)S.batch.quad_cap);
     S.batch.q_layer = malloc(sizeof(uint8_t) * (size_t)S.batch.quad_cap);
+    S.batch.q_key = malloc(sizeof(uint32_t) * (size_t)S.batch.quad_cap);
     S.batch.q_order = malloc(sizeof(uint32_t) * (size_t)S.batch.quad_cap);
     S.batch.bucket_count = RP_PAGES * RP_LAYERS + 1;
-    S.batch.bucket_head = malloc(sizeof(uint32_t) * (size_t)S.batch.bucket_count);
-    S.batch.bucket_next = malloc(sizeof(uint32_t) * (size_t)S.batch.quad_cap);
+    S.batch.counts = malloc(sizeof(uint32_t) * (size_t)S.batch.bucket_count);
+    S.batch.starts = malloc(sizeof(uint32_t) * (size_t)S.batch.bucket_count);
+    S.batch.touched = malloc(sizeof(uint32_t) * (size_t)S.batch.bucket_count);
     if (!S.batch.verts || !S.batch.idx || !S.batch.q_tex || !S.batch.q_layer
-        || !S.batch.q_order || !S.batch.bucket_head || !S.batch.bucket_next) {
+        || !S.batch.q_key || !S.batch.q_order || !S.batch.counts
+        || !S.batch.starts || !S.batch.touched) {
         rp_free_batch();
         return -5;
     }
+    memset(S.batch.counts, 0, sizeof(uint32_t) * (size_t)S.batch.bucket_count);
     for (int i = 0; i < S.batch.quad_cap * 6; i += 6) {
         uint32_t q = (uint32_t)i / 6;
         S.batch.idx[i + 0] = q * 4 + 0;
@@ -707,6 +719,10 @@ static uint8_t col_byte(float c) {
     return (uint8_t)(c < 0 ? 0 : c > 1 ? 255 : c * 255.0f);
 }
 
+static uint8_t layer_clamp(float layer) {
+    return (uint8_t)(layer < 0 ? 0 : layer > 255 ? 255 : layer);
+}
+
 static bool push_quad_common(int tex,
                              const float p0[3], const float p1[3],
                              const float p2[3], const float p3[3],
@@ -721,31 +737,43 @@ static bool push_quad_common(int tex,
     rp_vertex *v = &S.batch.verts[q * 4];
     const float *ps[4] = { p0, p1, p2, p3 };
     float uvs[8] = { u0, v0, u1, v0, u1, v1, u0, v1 };
+    /* per-quad constants, hoisted out of the 4-vertex loop: the packed
+     * tint (4 col_byte clamps instead of 16) and the normal stamp
+     * (one branch instead of four). Same bytes out. */
+    uint8_t cr = col_byte(tint[0]), cg = col_byte(tint[1]);
+    uint8_t cb = col_byte(tint[2]), ca = col_byte(tint[3]);
+    float nn[3];
+    float lit;
+    if (dsdf_text) { /* text-module quad: THE ONLY marker source */
+        nn[0] = 0; nn[1] = 1; nn[2] = 0;
+        lit = 0.0f;
+    } else if (S.stamp_lit >= 0.5f) {
+        nn[0] = S.stamp_nrm[0]; nn[1] = S.stamp_nrm[1]; nn[2] = S.stamp_nrm[2];
+        lit = S.stamp_lit;
+    } else { /* unlit: normals are lighting data - canonical (0,0,1).
+      * Guarantees no unlit quad can ever carry the DSDF marker. */
+        nn[0] = 0; nn[1] = 0; nn[2] = 1;
+        lit = S.stamp_lit;
+    }
     for (int i = 0; i < 4; i++) {
         v[i].pos[0] = ps[i][0];
         v[i].pos[1] = ps[i][1];
         v[i].pos[2] = ps[i][2];
-        if (dsdf_text) { /* text-module quad: THE ONLY marker source */
-            v[i].nrm[0] = 0; v[i].nrm[1] = 1; v[i].nrm[2] = 0;
-        } else if (S.stamp_lit >= 0.5f) {
-            v[i].nrm[0] = S.stamp_nrm[0];
-            v[i].nrm[1] = S.stamp_nrm[1];
-            v[i].nrm[2] = S.stamp_nrm[2];
-        } else { /* unlit: normals are lighting data - canonical (0,0,1).
-          * Guarantees no unlit quad can ever carry the DSDF marker. */
-            v[i].nrm[0] = 0; v[i].nrm[1] = 0; v[i].nrm[2] = 1;
-        }
-        v[i].lit = dsdf_text ? 0.0f : S.stamp_lit;
+        v[i].nrm[0] = nn[0];
+        v[i].nrm[1] = nn[1];
+        v[i].nrm[2] = nn[2];
+        v[i].lit = lit;
         v[i].uv[0] = uvs[i * 2];
         v[i].uv[1] = uvs[i * 2 + 1];
-        v[i].col[0] = col_byte(tint[0]);
-        v[i].col[1] = col_byte(tint[1]);
-        v[i].col[2] = col_byte(tint[2]);
-        v[i].col[3] = col_byte(tint[3]);
+        v[i].col[0] = cr;
+        v[i].col[1] = cg;
+        v[i].col[2] = cb;
+        v[i].col[3] = ca;
         v[i].layer = layer;
     }
     S.batch.q_tex[q] = (uint16_t)tex;
-    S.batch.q_layer[q] = (uint8_t)(layer < 0 ? 0 : layer > 255 ? 255 : layer);
+    S.batch.q_layer[q] = layer_clamp(layer);
+    S.batch.q_key[q] = (uint32_t)tex * RP_LAYERS + S.batch.q_layer[q];
     return true;
 }
 
@@ -906,32 +934,58 @@ void rp_end_frame(void) {
     glUniform1f(S.u_prange, S.p_range);
 
     if (n > 0) {
-    /* counting sort quads by key = tex * RP_LAYERS + layer (stable) */
+    /* counting sort quads by key = tex * RP_LAYERS + layer (stable).
+     * Prefix-sum kernel over precomputed q_key: the count phase records
+     * touched buckets so clearing is O(used), not O(8193). Few distinct
+     * keys (the common case: a handful of textures x layers) take the
+     * touched-list path; many distinct keys fall back to a linear
+     * prefix scan (insertion-sorting a huge touched list would be
+     * O(n^2)). Both produce the identical stable order as the old
+     * linked-list + per-bucket-reverse kernel (proven by
+     * benches/bench_render_sort). */
     int buckets = S.batch.bucket_count;
-    memset(S.batch.bucket_head, 0xFF, sizeof(uint32_t) * (size_t)buckets);
+    uint32_t *counts = S.batch.counts;
+    uint32_t *starts = S.batch.starts;
+    uint32_t *touched = S.batch.touched;
+    int ntouched = 0;
     for (int i = 0; i < n; i++) {
-        uint32_t key = (uint32_t)S.batch.q_tex[i] * RP_LAYERS + S.batch.q_layer[i];
-        S.batch.bucket_next[i] = S.batch.bucket_head[key];
-        S.batch.bucket_head[key] = (uint32_t)i;
+        uint32_t key = S.batch.q_key[i];
+        if (counts[key] == 0)
+            touched[ntouched++] = key;
+        counts[key]++;
     }
-    /* buckets were built by descending index; walk ascending key and REVERSE
-     * each bucket chain so push order is preserved (stable) */
-    uint32_t *order = S.batch.q_order;
-    int m = 0;
-    for (int key = 0; key < buckets; key++) {
-        uint32_t i = S.batch.bucket_head[key];
-        if (i == 0xFFFFFFFFu)
-            continue;
-        int cnt = 0;
-        for (uint32_t j = i; j != 0xFFFFFFFFu; j = S.batch.bucket_next[j])
-            cnt++;
-        uint32_t j = i;
-        for (int k = cnt - 1; k >= 0; k--) {
-            order[m + k] = j;
-            j = S.batch.bucket_next[j];
+    if (ntouched <= 256) {
+        /* insertion sort the tiny touched list by key */
+        for (int i = 1; i < ntouched; i++) {
+            uint32_t k = touched[i];
+            int j = i;
+            while (j > 0 && touched[j - 1] > k) {
+                touched[j] = touched[j - 1];
+                j--;
+            }
+            touched[j] = k;
         }
-        m += cnt;
+        uint32_t acc = 0;
+        for (int i = 0; i < ntouched; i++) {
+            uint32_t k = touched[i];
+            starts[k] = acc;
+            acc += counts[k];
+        }
+    } else {
+        /* many distinct keys: linear prefix over the full range */
+        uint32_t acc = 0;
+        for (int key = 0; key < buckets; key++) {
+            starts[key] = acc;
+            acc += counts[key];
+        }
     }
+    uint32_t *order = S.batch.q_order;
+    for (int i = 0; i < n; i++) {
+        uint32_t key = S.batch.q_key[i];
+        order[starts[key]++] = (uint32_t)i;
+    }
+    for (int i = 0; i < ntouched; i++)
+        counts[touched[i]] = 0; /* O(used) clear; invariant: all zero */
 
     /* upload verts (per-quad gather into draw order in place of idx rebuild) */
     glBindVertexArray(S.vao);
@@ -1045,6 +1099,11 @@ int rp_push_mesh(int tex, const ame_mesh_vert *verts, int vert_count,
     if (tex < 0 || tex >= S.tex_count)
         tex = 0;
     const float *M = xform_or_null;
+    /* packed tint once per MESH (not per tri): same bytes out */
+    uint8_t mcr = col_byte(tint[0]), mcg = col_byte(tint[1]);
+    uint8_t mcb = col_byte(tint[2]), mca = col_byte(tint[3]);
+    uint8_t mlayer = layer_clamp(layer);
+    uint32_t mkey = (uint32_t)tex * RP_LAYERS + mlayer;
     int tris = 0;
     for (int i = 0; i + 2 < idx_count; i += 3) {
         if (S.batch.quad_count >= S.batch.quad_cap)
@@ -1077,10 +1136,10 @@ int rp_push_mesh(int tex, const ame_mesh_vert *verts, int vert_count,
             v[k].nrm[0] = n[0]; v[k].nrm[1] = n[1]; v[k].nrm[2] = n[2];
             v[k].uv[0] = mv->uv[0];
             v[k].uv[1] = mv->uv[1];
-            v[k].col[0] = col_byte(tint[0]);
-            v[k].col[1] = col_byte(tint[1]);
-            v[k].col[2] = col_byte(tint[2]);
-            v[k].col[3] = col_byte(tint[3]);
+            v[k].col[0] = mcr;
+            v[k].col[1] = mcg;
+            v[k].col[2] = mcb;
+            v[k].col[3] = mca;
             v[k].layer = layer;
             v[k].lit = S.stamp_lit; /* lit only under rp_set_lit(1) */
         }
@@ -1099,8 +1158,8 @@ int rp_push_mesh(int tex, const ame_mesh_vert *verts, int vert_count,
                        / (vv1 - vv0 > 1e-9f ? vv1 - vv0 : 1);
         }
         S.batch.q_tex[q] = (uint16_t)tex;
-        S.batch.q_layer[q] =
-            (uint8_t)(layer < 0 ? 0 : layer > 255 ? 255 : layer);
+        S.batch.q_layer[q] = mlayer;
+        S.batch.q_key[q] = mkey;
         tris++;
     }
     return tris;

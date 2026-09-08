@@ -1,0 +1,6 @@
+=== MACHINE ===
+2
+model name	: Intel(R) Xeon(R) Processor @ 2.60GHz
+               total        used        free      shared  buff/cache   available
+Mem:            1984         461         763           1         944        1522
+cc (Debian 14.2.0-19) 14.2.0

@@ -1,0 +1,47 @@
+== ame-next bench_core ==
+(higher ops/s is better; single-threaded, CLOCK_MONOTONIC)
+
+--- math ---
+m4_mul                                6.2 ns/op    160176066 ops/s
+m4_mul_scalar                         7.7 ns/op    130257689 ops/s
+m4_inverse                           25.5 ns/op     39186642 ops/s
+m4_xform_point                        3.1 ns/op    327723078 ops/s
+quat_mul                              3.6 ns/op    281453350 ops/s
+quat_slerp                           29.8 ns/op     33578434 ops/s
+quat_rotate_v3                        8.5 ns/op    117577619 ops/s
+look_at                              19.7 ns/op     50647939 ops/s
+
+--- pool (cap 1024) ---
+pool_alloc_1024+apply            187811.1 ns/op         5324 ops/s
+pool_free_scan_256                24296.5 ns/op        41158 ops/s
+
+--- events ---
+events_push+drain_64               1934.0 ns/op       517058 ops/s
+
+--- geometry ---
+aabb_overlap                          6.9 ns/op    145324250 ops/s
+sphere_overlap                        4.6 ns/op    219282569 ops/s
+capsule_aabb                        384.2 ns/op      2602731 ops/s
+obb_overlap                         216.5 ns/op      4619238 ops/s
+ray_aabb                              9.8 ns/op    102201157 ops/s
+overlap_world_512                    77.0 ns/op     12994945 ops/s
+raycast_512                         129.7 ns/op      7709120 ops/s
+
+--- input (per fixed step @1000Hz) ---
+in_begin_step+4xheld                235.1 ns/op      4253514 ops/s
+
+--- snapshot (1 KiB seqlock) ---
+snap_publish+copy                   221.0 ns/op      4524360 ops/s
+
+--- audio mixer (48 kHz stereo) ---
+audio_render_8sine_x512fr         75538.7 ns/op        13238 ops/s
+
+--- text layout ---
+text_layout_short                   780.1 ns/op      1281824 ops/s
+text_layout_long_tags             13430.2 ns/op        74459 ops/s
+text_layout_plain_editor          18302.9 ns/op        54636 ops/s
+
+--- mem sim ---
+mem_full_game_4x4                969490.0 ns/op         1031 ops/s
+
+(sink=87539289.772993 — ignore, anti-DCE)

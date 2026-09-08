@@ -24,6 +24,13 @@ typedef struct {
     /* bindings: action -> keys (static table, set at init) */
     int binds[AME_ACTION_MAX][AME_BIND_PER_ACTION];
     int bind_count[AME_ACTION_MAX];
+    /* deduped list of every bound key: in_begin_step polls ONLY these
+     * (a game binds dozens of keys, not 512). Unbound entries of
+     * keys[]/prev_keys[] stay 0 forever, which is exactly what the
+     * action queries would read anyway — same results, ~10x fewer
+     * atomic loads per 1000 Hz step. Rebuilt on bind; reset clears. */
+    int bound_keys[AME_ACTION_MAX * AME_BIND_PER_ACTION];
+    int bound_count;
 } input_state;
 
 static input_state S;
@@ -53,6 +60,19 @@ bool in_bind_key(int action, int key) {
     if (S.bind_count[action] >= AME_BIND_PER_ACTION)
         return false;
     S.binds[action][S.bind_count[action]++] = key;
+    /* keep the poll list deduped (two actions may share one key) */
+    for (int i = 0; i < S.bound_count; i++) {
+        if (S.bound_keys[i] == key)
+            return true;
+    }
+    /* snapshot live state so a mid-game rebind never synthesises a
+     * pressed/released edge for a key that was already held/released
+     * (the old full-scan tracked unbound keys too) */
+    uint8_t live =
+        atomic_load_explicit(&S.key_down[key], memory_order_acquire);
+    S.keys[key] = live;
+    S.prev_keys[key] = live;
+    S.bound_keys[S.bound_count++] = key;
     return true;
 }
 
@@ -96,10 +116,15 @@ bool in_mouse_button_raw(int button) {
 }
 
 void in_begin_step(void) {
-    memcpy(S.prev_keys, S.keys, sizeof S.keys);
+    /* poll bound keys only (see bound_keys): same edge semantics for
+     * every action query, without 512 atomic loads + a 512-byte memcpy
+     * on each of the 1000 steps/second. */
+    for (int i = 0; i < S.bound_count; i++) {
+        int k = S.bound_keys[i];
+        S.prev_keys[k] = S.keys[k];
+        S.keys[k] = atomic_load_explicit(&S.key_down[k], memory_order_acquire);
+    }
     memcpy(S.prev_btn, S.btns, sizeof S.btns);
-    for (int i = 0; i < AME_KEYS_MAX; i++)
-        S.keys[i] = atomic_load_explicit(&S.key_down[i], memory_order_acquire);
     for (int i = 0; i < 8; i++)
         S.btns[i] = atomic_load_explicit(&S.btn_down[i], memory_order_acquire);
     int32_t w = atomic_load_explicit(&S.wheel_accum, memory_order_acquire);

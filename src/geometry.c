@@ -233,42 +233,121 @@ bool ame_geo_capsule_overlap_sphere(ame_capsule c, ame_sphere s) {
 }
 
 bool ame_geo_capsule_overlap_aabb(ame_capsule c, ame_aabb b) {
-    /* dist2(segment, box) is CONVEX along the segment -> golden-section
-     * search converges to the true minimum (deterministic, ~machine
-     * precision in 48 steps, no allocation). */
-    const float gr = 0.6180339887498949f; /* 1/phi */
-    float t0 = 0.0f, t1 = 1.0f;
-    float d0 = ame_geo_point_aabb_dist2(c.seg.a, b);
-    if (d0 == 0.0f)
-        return true;
-    float d1 = ame_geo_point_aabb_dist2(c.seg.b, b);
-    if (d1 == 0.0f)
-        return true;
-    float span = t1 - t0;
-    float tm = t0 + span * (1.0f - gr);
-    float tM = t0 + span * gr;
-    float dm = 0.0f;
-    for (int it = 0; it < 48; it++) {
-        float pm[AME_DIM], pM[AME_DIM];
-        for (int i = 0; i < AME_DIM; i++) {
-            pm[i] = c.seg.a[i] + (c.seg.b[i] - c.seg.a[i]) * tm;
-            pM[i] = c.seg.a[i] + (c.seg.b[i] - c.seg.a[i]) * tM;
-        }
-        dm = ame_geo_point_aabb_dist2(pm, b);
-        float dM = ame_geo_point_aabb_dist2(pM, b);
-        if (dm < dM) {
-            t1 = tM;
-            tM = tm;
-            tm = t0 + (t1 - t0) * (1.0f - gr);
-        } else {
-            t0 = tm;
-            tm = tM;
-            tM = t0 + (t1 - t0) * gr;
-        }
-        if (t1 - t0 < 1e-6f)
-            break;
+    /* EXACT segment-vs-AABB squared distance, no iteration.
+     *
+     * dist2(P(t), box) over P(t) = a + t*(b-a) is convex and piecewise
+     * quadratic; its kinks are exactly the slab crossings (where P(t)
+     * enters/leaves [mn,mx] on some axis), at most 2 per axis. The
+     * minimum is therefore either at t=0, t=1, a slab crossing, or a
+     * per-piece stationary point (linear equation in t). We evaluate
+     * all candidates (<= 2*DIM+2 kinks + one stationary point per
+     * interval) — ~10 point evals instead of the old 48-step
+     * golden-section search's ~96, and exact rather than 1e-6-span
+     * approximate. Deterministic, no allocation. */
+    float d2[AME_DIM], mn[AME_DIM], mx[AME_DIM];
+    for (int i = 0; i < AME_DIM; i++) {
+        d2[i] = c.seg.b[i] - c.seg.a[i];
+        mn[i] = b.c[i] - b.h[i];
+        mx[i] = b.c[i] + b.h[i];
     }
-    return dm <= c.r * c.r || d0 <= c.r * c.r || d1 <= c.r * c.r;
+    float rr = c.r * c.r;
+
+    /* degenerate segment: plain point test */
+    float dlen2 = 0.0f;
+    for (int i = 0; i < AME_DIM; i++)
+        dlen2 += d2[i] * d2[i];
+    if (dlen2 < 1e-24f)
+        return ame_geo_point_aabb_dist2(c.seg.a, b) <= rr;
+
+    /* candidate kink parameters (endpoints + slab crossings in (0,1)) */
+    float ts[2 + 2 * 3]; /* AME_DIM <= 3 */
+    int nts = 0;
+    ts[nts++] = 0.0f;
+    ts[nts++] = 1.0f;
+    for (int i = 0; i < AME_DIM; i++) {
+        if (fabsf(d2[i]) < 1e-30f)
+            continue; /* parallel to this slab pair: no crossing */
+        float t_lo = (mn[i] - c.seg.a[i]) / d2[i];
+        float t_hi = (mx[i] - c.seg.a[i]) / d2[i];
+        if (t_lo > 0.0f && t_lo < 1.0f)
+            ts[nts++] = t_lo;
+        if (t_hi > 0.0f && t_hi < 1.0f)
+            ts[nts++] = t_hi;
+    }
+    /* insertion sort the (tiny) kink list */
+    for (int i = 1; i < nts; i++) {
+        float k = ts[i];
+        int j = i;
+        while (j > 0 && ts[j - 1] > k) {
+            ts[j] = ts[j - 1];
+            j--;
+        }
+        ts[j] = k;
+    }
+
+    float best = ame_geo_point_aabb_dist2(c.seg.a, b);
+    if (best <= rr)
+        return true;
+    {
+        float d1 = ame_geo_point_aabb_dist2(c.seg.b, b);
+        if (d1 < best)
+            best = d1;
+        if (best <= rr)
+            return true;
+    }
+    for (int k = 2; k < nts; k++) { /* kinks (0/1 already evaluated) */
+        float p[AME_DIM];
+        for (int i = 0; i < AME_DIM; i++)
+            p[i] = c.seg.a[i] + d2[i] * ts[k];
+        float dk = ame_geo_point_aabb_dist2(p, b);
+        if (dk < best)
+            best = dk;
+        if (best <= rr)
+            return true;
+    }
+    /* per-interval stationary points: on an interval with a fixed
+     * outside-axis set O, d/dt dist2 = 2*sum_{i in O}(a_i + t*d_i -
+     * clamp_i)*d_i = 0 is linear in t; clamp the root into the
+     * interval and evaluate it. */
+    for (int k = 0; k + 1 < nts; k++) {
+        float t0 = ts[k], t1 = ts[k + 1];
+        if (t1 - t0 < 1e-9f)
+            continue; /* duplicate kink */
+        float tm = 0.5f * (t0 + t1);
+        float num = 0.0f, den = 0.0f;
+        int outside = 0;
+        for (int i = 0; i < AME_DIM; i++) {
+            float pm = c.seg.a[i] + d2[i] * tm;
+            float cl;
+            if (pm < mn[i])
+                cl = mn[i];
+            else if (pm > mx[i])
+                cl = mx[i];
+            else
+                continue; /* inside this slab on the whole interval */
+            outside++;
+            num += (cl - c.seg.a[i]) * d2[i];
+            den += d2[i] * d2[i];
+        }
+        if (!outside)
+            return true; /* interval midpoint is inside the box */
+        if (den < 1e-30f)
+            continue;
+        float tstar = num / den;
+        if (tstar < t0)
+            tstar = t0;
+        else if (tstar > t1)
+            tstar = t1;
+        float p[AME_DIM];
+        for (int i = 0; i < AME_DIM; i++)
+            p[i] = c.seg.a[i] + d2[i] * tstar;
+        float ds = ame_geo_point_aabb_dist2(p, b);
+        if (ds < best)
+            best = ds;
+        if (best <= rr)
+            return true;
+    }
+    return best <= rr;
 }
 
 /* --- oriented box -------------------------------------------------------- */
