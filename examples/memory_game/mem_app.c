@@ -188,6 +188,12 @@ int app_init(void) {
     rp_shadow(ldir, (float[3]){ 0.0f, 0.0f, 0.0f }, 5.0f);
 
     if (text_init(true) >= 0) {
+        /* face labels use the SMOOTH face (DSDF DejaVu, anti-aliased at
+         * any scale): laid out AND drawn under it. If the DSDF atlas is
+         * unavailable text_set_font falls back to PIXEL for both, so
+         * layout metrics and draw stay consistent either way. */
+        text_init_dsdf();
+        text_set_font(AME_FONT_SMOOTH);
         char buf[16];
         pair_layout_count = (GRID_COLS * GRID_ROWS) / 2;
         if (pair_layout_count > 32)
@@ -196,6 +202,7 @@ int app_init(void) {
             snprintf(buf, sizeof buf, "%d", p + 1);
             text_layout(buf, 0, AME_TEXT_ALIGN_C, 1.2f, &pair_layout[p]);
         }
+        text_set_font(AME_FONT_PIXEL);
     }
 
     ame_synth_cfg flip = { .wave = AME_WAVE_TRIANGLE, .freq = 660.0f,
@@ -513,17 +520,22 @@ static void card_quad(const mem_snap *s, int i, float layer) {
 }
 
 /* pose mapping text layout space onto the card's flipping face.
- * panel basis at angle a (R_x(-a) from flat): v=(0,sa,ca) is the panel's
- * "down" direction (toward the viewer at a=180), n=(0,-ca,sa) the FACE
- * normal (up when open). Layout +y is text-down -> +v; label sits on the
- * face: offset along +n. */
+ * The label rotates WITH the flip: recomputed from the live angle every
+ * frame. Basis: right=+x (screen-right from this camera), text-down =
+ * (0,-sa,-ca) so that at a=180 layout +y maps to +z, i.e. toward the
+ * viewer = screen-down, and the digit reads correctly (the panel's own
+ * "down" (0,sa,ca) points screen-up here and would flip the text). The
+ * basis is left-handed (a reflection, not a rotation): exactly what the
+ * face-up side needs, and the engine does no face culling. n=(0,-ca,sa)
+ * is the FACE normal (up when open); the label sits on the face: offset
+ * along +n. */
 static void card_label_pose(const mem_snap *s, int i,
                             const ame_text_layout *l, float pose[16]) {
     float a = s->angle[i] * (float)AME_PI / 180.0f;
     float sa = sinf(a), ca = cosf(a);
     float lift = s->lift[i];
     ame_v3 right = ame_v3_(1, 0, 0);
-    ame_v3 ydir  = ame_v3_(0, sa, ca);
+    ame_v3 ydir  = ame_v3_(0, -sa, -ca);
     ame_v3 nrm   = ame_v3_(0, -ca, sa);
     /* px metrics -> card units */
     const float gs = 1.15f / (float)text_font_px();
@@ -708,7 +720,10 @@ int app_render(void) {
     for (int i = 0; i < s->count; i++)
         card_quad(s, i, 10);
 
-    /* card face labels: text ON the card plane (same flip transform) */
+    /* card face labels: SMOOTH-face text ON the card plane (same flip
+     * transform, recomputed from the live angle every frame, so the
+     * label rotates with the card through the flip) */
+    text_set_font(AME_FONT_SMOOTH);
     for (int i = 0; i < s->count; i++) {
         if (s->angle[i] > 120.0f && s->pair[i] < (uint32_t)pair_layout_count) {
             const ame_text_layout *l = &pair_layout[s->pair[i]];
@@ -718,8 +733,11 @@ int app_render(void) {
             text_draw_world(l, pose, tint, 20);
         }
     }
+    text_set_font(AME_FONT_PIXEL);
 
-    /* scoreboard: in-scene billboard above the far table edge */
+    /* scoreboard: in-scene billboard above the far table edge.
+     * PIXEL face (explicit: the label block above runs SMOOTH). */
+    text_set_font(AME_FONT_PIXEL);
     char line[96];
     const char *left = "P1", *right = "P2";
     const char *phase_txt;
