@@ -62,6 +62,9 @@ file(GLOB AME_ENGINE_SRC CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/src/*.c"
 # the SDL bootstrap is THIN PER-TARGET glue (input backend is a target
 # choice, build.txt rule 7): games compile it themselves via AME_BOOTSTRAP_SRC
 list(FILTER AME_ENGINE_SRC EXCLUDE REGEX ".*/app_sdl\.c$")
+# the Emscripten bootstrap is web-only (needs <emscripten/*>, built by
+# web/build.sh, never by desktop CMake): keep it out of the glob too
+list(FILTER AME_ENGINE_SRC EXCLUDE REGEX ".*/app_web\.c$")
 set(AME_BOOTSTRAP_SRC "${CMAKE_CURRENT_SOURCE_DIR}/src/app_sdl.c")
 
 # dialogue needs libfyaml (dialogue.txt; system package OK). Without it

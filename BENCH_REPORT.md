@@ -163,13 +163,15 @@ followed — rare.
 A-Mongoose), tools before libs (bake order correct), tests per module, `docs/*.txt` spec is the
 source of truth and code comments cite it.
 
-**Smell: `src/` mixes the C engine with the TypeScript web companion** (`src/*.tsx`, `src/components/`,
-`src/wasm/*.js`). Consequences: (a) spec tension — `docs/README.txt` bans "a second copy of a feature
-in another language (no TS port, no hand-written WASM twin)", yet `src/wasm/` ships JS twins; (b) every
-C `GLOB`/grep/`wc` trips over web files; (c) the Pages workflow hardcodes `src/**/*.tsx` paths.
-**Proposed (not done — it would churn `vite.config.ts`, `tsconfig.json`, `package.json`, `index.html`
-and the Pages workflow in one go):** move web sources to `web/`, keep `src/` C-only, update the five
-configs + workflow paths atomically. Happy to do that as a follow-up branch.
+**Smell (FIXED on this branch): `src/` mixed the C engine with the TypeScript web companion.**
+The whole twin is gone — `src/*.tsx`, `src/components/`, `src/wasm/*.js`, `vite.config.ts`,
+`tsconfig.json`, `package.json`, root `index.html` deleted; `src/` is C-only again. The web
+companion is now `web/build.sh` (emcc, one single-file JS+WASM per game from the SAME C
+sources) + `web/index.html` + `web/loader.js` (~70 hand-written lines), published to `docs/`,
+and the Pages workflow rebuilds it with emsdk instead of npm. All three consequences from
+the original note are resolved: (a) no second copy of any feature in another language —
+`docs/README.txt` holds again; (b) C globs/greps see C only; (c) no `src/**/*.tsx` paths
+anywhere in CI.
 
 Minor: `benches/results/*.txt` are committed deliberately (small, the evidence for this report).
 
