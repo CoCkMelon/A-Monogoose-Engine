@@ -141,6 +141,9 @@ static uint32_t hash_frame(void) {
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include <stb_image_write.h>
 
+/* app-created passes under test (recreated after every rp_init cycle) */
+static int g_lit = -1;
+
 /* luminance of one lit-card frame (was a GCC nested function - clang
  * rejects those in C23; hoisted to file scope with explicit params) */
 static long lum_case(bool face_up, const float t0[3], const float t1[3],
@@ -149,15 +152,33 @@ static long lum_case(bool face_up, const float t0[3], const float t1[3],
                      const float c1[4][3], const float red[4],
                      const float blue[4], const ame_text_layout *hello,
                      const float pose[16], const float tint_w[4]) {
+    ame_rp_pass_frame ui = { 0 }, lit = { g_lit };
     rp_begin_frame();
-    rp_push_quad(rp_white_texture(), t0, t1, t2, t3, 0, 0, 1, 1, ttint, 0);
+    rp_pass_begin(&ui);
+    rp_push_quad(&(ame_rp_quad){ .tex = rp_white_texture(),
+        .p0 = { t0[0], t0[1], t0[2] }, .p1 = { t1[0], t1[1], t1[2] },
+        .p2 = { t2[0], t2[1], t2[2] }, .p3 = { t3[0], t3[1], t3[2] },
+        .u0 = 0, .v0 = 0, .u1 = 1, .v1 = 1,
+        .tint = { ttint[0], ttint[1], ttint[2], ttint[3] }, .layer = 0 });
+    rp_pass_begin(&lit);
     rp_set_lit(1);
-    rp_set_normal(0, face_up ? 1.0f : -1.0f, 0);
-    rp_push_quad(rp_white_texture(), c0[0], c0[1], c0[2], c0[3], 0, 0, 1, 1,
-                 red, 10);
+    rp_set_normal((float[3]){ 0, face_up ? 1.0f : -1.0f, 0 });
+    rp_push_quad(&(ame_rp_quad){ .tex = rp_white_texture(),
+        .p0 = { c0[0][0], c0[0][1], c0[0][2] },
+        .p1 = { c0[1][0], c0[1][1], c0[1][2] },
+        .p2 = { c0[2][0], c0[2][1], c0[2][2] },
+        .p3 = { c0[3][0], c0[3][1], c0[3][2] },
+        .u0 = 0, .v0 = 0, .u1 = 1, .v1 = 1,
+        .tint = { red[0], red[1], red[2], red[3] }, .layer = 10 });
     rp_set_lit(0);
-    rp_push_quad(rp_white_texture(), c1[0], c1[1], c1[2], c1[3], 0, 0, 1, 1,
-                 blue, 10);
+    rp_pass_begin(&ui);
+    rp_push_quad(&(ame_rp_quad){ .tex = rp_white_texture(),
+        .p0 = { c1[0][0], c1[0][1], c1[0][2] },
+        .p1 = { c1[1][0], c1[1][1], c1[1][2] },
+        .p2 = { c1[2][0], c1[2][1], c1[2][2] },
+        .p3 = { c1[3][0], c1[3][1], c1[3][2] },
+        .u0 = 0, .v0 = 0, .u1 = 1, .v1 = 1,
+        .tint = { blue[0], blue[1], blue[2], blue[3] }, .layer = 10 });
     text_draw_world(hello, pose, tint_w, 20);
     rp_end_frame();
     static uint8_t px[W * H * 4];
@@ -205,10 +226,18 @@ int main(void) {
 
     rp_set_gl_loader(egl_proc);
     ame_rp_desc d;
-    int rc = rp_init(rp_desc_clear(rp_desc_begin(&d), 0.10f, 0.12f, 0.16f, 1.0f),
-                     &cam3, W, H);
+    rp_desc_begin(&d);
+    rp_desc_clear(&d, 0.10f, 0.12f, 0.16f, 1.0f);
+    rp_desc_size(&d, W, H);
+    rp_desc_camera(&d, &cam3);
+    int rc = rp_init(&d);
     UT_ASSERTF(rc == 0, "rp_init rc=%d (renderer=%s)", rc, rp_gl_renderer());
     printf("    GL_RENDERER = %s\n", rp_gl_renderer());
+    /* the app creates its own passes: lit scene here, shadow/post/DSDF
+     * where their cases need them */
+    ame_rp_pass_desc litd = { .kind = AME_RP_PASS_LIT };
+    g_lit = rp_pass_create(&litd);
+    UT_ASSERTF(g_lit >= 0, "lit pass creation failed");
 
     UT_CASE("single pass: 3D quad + world text draws");
     ame_text_layout hello;
@@ -231,13 +260,29 @@ int main(void) {
     float t0[3] = { -3, 0, -3 }, t1[3] = { 3, 0, -3 };
     float t2[3] = { 3, 0, 3 }, t3[3] = { -3, 0, 3 };
     float ttint[4] = { 0.2f, 0.24f, 0.32f, 1 };
-    rp_push_quad(rp_white_texture(), t0, t1, t2, t3, 0, 0, 1, 1, ttint, 0);
+    rp_push_quad(&(ame_rp_quad){ .tex = rp_white_texture(),
+        .p0 = { t0[0], t0[1], t0[2] }, .p1 = { t1[0], t1[1], t1[2] },
+        .p2 = { t2[0], t2[1], t2[2] }, .p3 = { t3[0], t3[1], t3[2] },
+        .u0 = 0, .v0 = 0, .u1 = 1, .v1 = 1,
+        .tint = { ttint[0], ttint[1], ttint[2], ttint[3] }, .layer = 0 });
     /* two "cards" */
     float c0[4][3] = { {-0.9f,0.01f,-0.5f},{-0.1f,0.01f,-0.5f},{-0.1f,0.01f,0.3f},{-0.9f,0.01f,0.3f} };
     float c1[4][3] = { { 0.1f,0.01f,-0.5f},{0.9f,0.01f,-0.5f},{0.9f,0.01f,0.3f},{0.1f,0.01f,0.3f} };
     float red[4] = { 0.9f, 0.3f, 0.3f, 1 }, blue[4] = { 0.3f, 0.5f, 0.95f, 1 };
-    rp_push_quad(rp_white_texture(), c0[0], c0[1], c0[2], c0[3], 0, 0, 1, 1, red, 10);
-    rp_push_quad(rp_white_texture(), c1[0], c1[1], c1[2], c1[3], 0, 0, 1, 1, blue, 10);
+    rp_push_quad(&(ame_rp_quad){ .tex = rp_white_texture(),
+        .p0 = { c0[0][0], c0[0][1], c0[0][2] },
+        .p1 = { c0[1][0], c0[1][1], c0[1][2] },
+        .p2 = { c0[2][0], c0[2][1], c0[2][2] },
+        .p3 = { c0[3][0], c0[3][1], c0[3][2] },
+        .u0 = 0, .v0 = 0, .u1 = 1, .v1 = 1,
+        .tint = { red[0], red[1], red[2], red[3] }, .layer = 10 });
+    rp_push_quad(&(ame_rp_quad){ .tex = rp_white_texture(),
+        .p0 = { c1[0][0], c1[0][1], c1[0][2] },
+        .p1 = { c1[1][0], c1[1][1], c1[1][2] },
+        .p2 = { c1[2][0], c1[2][1], c1[2][2] },
+        .p3 = { c1[3][0], c1[3][1], c1[3][2] },
+        .u0 = 0, .v0 = 0, .u1 = 1, .v1 = 1,
+        .tint = { blue[0], blue[1], blue[2], blue[3] }, .layer = 10 });
     text_draw_world(&hello, pose, tint_w, 20);
     rp_end_frame();
     uint32_t h1 = hash_frame();
@@ -248,9 +293,25 @@ int main(void) {
 
     UT_CASE("deterministic: second frame hashes identically");
     rp_begin_frame();
-    rp_push_quad(rp_white_texture(), t0, t1, t2, t3, 0, 0, 1, 1, ttint, 0);
-    rp_push_quad(rp_white_texture(), c0[0], c0[1], c0[2], c0[3], 0, 0, 1, 1, red, 10);
-    rp_push_quad(rp_white_texture(), c1[0], c1[1], c1[2], c1[3], 0, 0, 1, 1, blue, 10);
+    rp_push_quad(&(ame_rp_quad){ .tex = rp_white_texture(),
+        .p0 = { t0[0], t0[1], t0[2] }, .p1 = { t1[0], t1[1], t1[2] },
+        .p2 = { t2[0], t2[1], t2[2] }, .p3 = { t3[0], t3[1], t3[2] },
+        .u0 = 0, .v0 = 0, .u1 = 1, .v1 = 1,
+        .tint = { ttint[0], ttint[1], ttint[2], ttint[3] }, .layer = 0 });
+    rp_push_quad(&(ame_rp_quad){ .tex = rp_white_texture(),
+        .p0 = { c0[0][0], c0[0][1], c0[0][2] },
+        .p1 = { c0[1][0], c0[1][1], c0[1][2] },
+        .p2 = { c0[2][0], c0[2][1], c0[2][2] },
+        .p3 = { c0[3][0], c0[3][1], c0[3][2] },
+        .u0 = 0, .v0 = 0, .u1 = 1, .v1 = 1,
+        .tint = { red[0], red[1], red[2], red[3] }, .layer = 10 });
+    rp_push_quad(&(ame_rp_quad){ .tex = rp_white_texture(),
+        .p0 = { c1[0][0], c1[0][1], c1[0][2] },
+        .p1 = { c1[1][0], c1[1][1], c1[1][2] },
+        .p2 = { c1[2][0], c1[2][1], c1[2][2] },
+        .p3 = { c1[3][0], c1[3][1], c1[3][2] },
+        .u0 = 0, .v0 = 0, .u1 = 1, .v1 = 1,
+        .tint = { blue[0], blue[1], blue[2], blue[3] }, .layer = 10 });
     text_draw_world(&hello, pose, tint_w, 20);
     rp_end_frame();
     uint32_t h2 = hash_frame();
@@ -260,16 +321,31 @@ int main(void) {
     {
         /* baseline: unlit frame AFTER setting lights must equal the
          * pre-lighting hash (lit=0 ignores the uniforms entirely) */
-        float ldir[3] = { 0, -1, 0 }, lcol[3] = { 1, 1, 1 };
-        float lamb[3] = { 0.1f, 0.1f, 0.1f };
-        rp_lighting(ldir, lcol, lamb);
+        ame_rp_light li = { .dir = { 0, -1, 0 }, .col = { 1, 1, 1 },
+            .amb = { 0.1f, 0.1f, 0.1f } };
+        rp_lighting(&li);
         rp_begin_frame();
-        rp_push_quad(rp_white_texture(), t0, t1, t2, t3, 0, 0, 1, 1,
-                     ttint, 0);
-        rp_push_quad(rp_white_texture(), c0[0], c0[1], c0[2], c0[3], 0, 0,
-                     1, 1, red, 10);
-        rp_push_quad(rp_white_texture(), c1[0], c1[1], c1[2], c1[3], 0, 0,
-                     1, 1, blue, 10);
+        rp_push_quad(&(ame_rp_quad){ .tex = rp_white_texture(),
+            .p0 = { t0[0], t0[1], t0[2] }, .p1 = { t1[0], t1[1], t1[2] },
+            .p2 = { t2[0], t2[1], t2[2] }, .p3 = { t3[0], t3[1], t3[2] },
+            .u0 = 0, .v0 = 0, .u1 = 1, .v1 = 1,
+            .tint = { ttint[0], ttint[1], ttint[2], ttint[3] },
+            .layer = 0 });
+        rp_push_quad(&(ame_rp_quad){ .tex = rp_white_texture(),
+            .p0 = { c0[0][0], c0[0][1], c0[0][2] },
+            .p1 = { c0[1][0], c0[1][1], c0[1][2] },
+            .p2 = { c0[2][0], c0[2][1], c0[2][2] },
+            .p3 = { c0[3][0], c0[3][1], c0[3][2] },
+            .u0 = 0, .v0 = 0, .u1 = 1, .v1 = 1,
+            .tint = { red[0], red[1], red[2], red[3] }, .layer = 10 });
+        rp_push_quad(&(ame_rp_quad){ .tex = rp_white_texture(),
+            .p0 = { c1[0][0], c1[0][1], c1[0][2] },
+            .p1 = { c1[1][0], c1[1][1], c1[1][2] },
+            .p2 = { c1[2][0], c1[2][1], c1[2][2] },
+            .p3 = { c1[3][0], c1[3][1], c1[3][2] },
+            .u0 = 0, .v0 = 0, .u1 = 1, .v1 = 1,
+            .tint = { blue[0], blue[1], blue[2], blue[3] },
+            .layer = 10 });
         text_draw_world(&hello, pose, tint_w, 20);
         rp_end_frame();
         UT_ASSERT(hash_frame() == h1); /* unlit: byte-identical */
@@ -290,9 +366,11 @@ int main(void) {
 
     UT_CASE("Stage 2 shadow: caster darkens ground; outside bit-exact");
     {
-        float ldir[3] = { 0, -1, 0 }, lcol[3] = { 1, 1, 1 };
-        float lamb[3] = { 0.15f, 0.15f, 0.15f };
-        rp_lighting(ldir, lcol, lamb);
+        ame_rp_light li = { .dir = { 0, -1, 0 }, .col = { 1, 1, 1 },
+            .amb = { 0.15f, 0.15f, 0.15f } };
+        rp_lighting(&li);
+        ame_rp_pass_desc shd = { .kind = AME_RP_PASS_SHADOW, .src = g_lit };
+        UT_ASSERTF(rp_pass_create(&shd) >= 0, "shadow pass creation failed");
         float gtint[4] = { 0.55f, 0.55f, 0.55f, 1 };
         float g0[3] = { -4, 0, -4 }, g1[3] = { 4, 0, -4 };
         float g2[3] = { 4, 0, 4 }, g3[3] = { -4, 0, 4 };
@@ -308,35 +386,73 @@ int main(void) {
     ((long)px[((Y) * W + (X)) * 4] + px[((Y) * W + (X)) * 4 + 1] +            \
         px[((Y) * W + (X)) * 4 + 2])
         rp_begin_frame();
+        ame_rp_pass_frame lit = { g_lit };
+        rp_pass_begin(&lit);
         rp_set_lit(1);
-        rp_set_normal(0, 1, 0);
-        rp_push_quad(rp_white_texture(), g0, g1, g2, g3, 0, 0, 1, 1, gtint, 0);
-        rp_push_quad(rp_white_texture(), cs[0], cs[1], cs[2], cs[3],
-                     0, 0, 1, 1, ctint, 10);
+        rp_set_normal((float[3]){ 0, 1, 0 });
+        rp_push_quad(&(ame_rp_quad){ .tex = rp_white_texture(),
+            .p0 = { g0[0], g0[1], g0[2] }, .p1 = { g1[0], g1[1], g1[2] },
+            .p2 = { g2[0], g2[1], g2[2] }, .p3 = { g3[0], g3[1], g3[2] },
+            .u0 = 0, .v0 = 0, .u1 = 1, .v1 = 1,
+            .tint = { gtint[0], gtint[1], gtint[2], gtint[3] },
+            .layer = 0 });
+        rp_push_quad(&(ame_rp_quad){ .tex = rp_white_texture(),
+            .p0 = { cs[0][0], cs[0][1], cs[0][2] },
+            .p1 = { cs[1][0], cs[1][1], cs[1][2] },
+            .p2 = { cs[2][0], cs[2][1], cs[2][2] },
+            .p3 = { cs[3][0], cs[3][1], cs[3][2] },
+            .u0 = 0, .v0 = 0, .u1 = 1, .v1 = 1,
+            .tint = { ctint[0], ctint[1], ctint[2], ctint[3] },
+            .layer = 10 });
         rp_set_lit(0);
         rp_end_frame();
         rp_read_pixels(px, W, H);
         long a_under = RP_LUM(iu, iuy), a_far = RP_LUM(ifx, ify);
 
         /* same scene WITH the shadow pass (light travels straight down) */
-        rp_shadow(ldir, (float[3]){ 0, 0, 0 }, 5.0f);
+        rp_shadow(&(ame_rp_shadow){ .dir = { 0, -1, 0 },
+            .center = { 0, 0, 0 }, .extent = 5.0f });
         rp_begin_frame();
+        rp_pass_begin(&lit);
         rp_set_lit(1);
-        rp_set_normal(0, 1, 0);
-        rp_push_quad(rp_white_texture(), g0, g1, g2, g3, 0, 0, 1, 1, gtint, 0);
-        rp_push_quad(rp_white_texture(), cs[0], cs[1], cs[2], cs[3],
-                     0, 0, 1, 1, ctint, 10);
+        rp_set_normal((float[3]){ 0, 1, 0 });
+        rp_push_quad(&(ame_rp_quad){ .tex = rp_white_texture(),
+            .p0 = { g0[0], g0[1], g0[2] }, .p1 = { g1[0], g1[1], g1[2] },
+            .p2 = { g2[0], g2[1], g2[2] }, .p3 = { g3[0], g3[1], g3[2] },
+            .u0 = 0, .v0 = 0, .u1 = 1, .v1 = 1,
+            .tint = { gtint[0], gtint[1], gtint[2], gtint[3] },
+            .layer = 0 });
+        rp_push_quad(&(ame_rp_quad){ .tex = rp_white_texture(),
+            .p0 = { cs[0][0], cs[0][1], cs[0][2] },
+            .p1 = { cs[1][0], cs[1][1], cs[1][2] },
+            .p2 = { cs[2][0], cs[2][1], cs[2][2] },
+            .p3 = { cs[3][0], cs[3][1], cs[3][2] },
+            .u0 = 0, .v0 = 0, .u1 = 1, .v1 = 1,
+            .tint = { ctint[0], ctint[1], ctint[2], ctint[3] },
+            .layer = 10 });
         rp_set_lit(0);
         rp_end_frame();
         uint32_t hs1 = hash_frame();
         rp_read_pixels(px, W, H);
         long b_under = RP_LUM(iu, iuy), b_far = RP_LUM(ifx, ify);
         rp_begin_frame();
+        rp_pass_begin(&lit);
         rp_set_lit(1);
-        rp_set_normal(0, 1, 0);
-        rp_push_quad(rp_white_texture(), g0, g1, g2, g3, 0, 0, 1, 1, gtint, 0);
-        rp_push_quad(rp_white_texture(), cs[0], cs[1], cs[2], cs[3],
-                     0, 0, 1, 1, ctint, 10);
+        rp_set_normal((float[3]){ 0, 1, 0 });
+        rp_push_quad(&(ame_rp_quad){ .tex = rp_white_texture(),
+            .p0 = { g0[0], g0[1], g0[2] }, .p1 = { g1[0], g1[1], g1[2] },
+            .p2 = { g2[0], g2[1], g2[2] }, .p3 = { g3[0], g3[1], g3[2] },
+            .u0 = 0, .v0 = 0, .u1 = 1, .v1 = 1,
+            .tint = { gtint[0], gtint[1], gtint[2], gtint[3] },
+            .layer = 0 });
+        rp_push_quad(&(ame_rp_quad){ .tex = rp_white_texture(),
+            .p0 = { cs[0][0], cs[0][1], cs[0][2] },
+            .p1 = { cs[1][0], cs[1][1], cs[1][2] },
+            .p2 = { cs[2][0], cs[2][1], cs[2][2] },
+            .p3 = { cs[3][0], cs[3][1], cs[3][2] },
+            .u0 = 0, .v0 = 0, .u1 = 1, .v1 = 1,
+            .tint = { ctint[0], ctint[1], ctint[2], ctint[3] },
+            .layer = 10 });
         rp_set_lit(0);
         rp_end_frame();
         uint32_t hs2 = hash_frame();
@@ -355,9 +471,9 @@ int main(void) {
         rp_lighting_off();
     }
 
-    UT_CASE("DSDF smooth text: mass, AA band, determinism, face switch");
+    UT_CASE("hires smooth text: mass, AA band, determinism, face switch");
     {
-        UT_ASSERT(text_init_dsdf() >= 0);
+        UT_ASSERT(text_init_hires() >= 0);
         ame_text_layout lg;
         text_layout("Ag", 0, 0, 2.0f, &lg); /* active-face metrics */
         const float white[4] = { 1, 1, 1, 1 };
@@ -391,7 +507,7 @@ int main(void) {
             a8_mass += d > 0 ? d : 0;
         }
 
-        /* smooth face: same string/origin/scale */
+        /* smooth face: same string/origin/scale (plain textured pass) */
         text_set_font(AME_FONT_SMOOTH);
         UT_ASSERT(text_font_mode() == AME_FONT_SMOOTH);
         rp_begin_frame();
@@ -411,10 +527,10 @@ int main(void) {
             if (d > 8 && d < 221)
                 aa++; /* partial coverage = the AA band */
         }
-        printf("    dsdf mass=%ld (a8 %ld, %.2fx) ink=%d aa=%d\n",
+        printf("    hires mass=%ld (a8 %ld, %.2fx) ink=%d aa=%d\n",
                mass, a8_mass, (double)mass / (double)a8_mass, ink, aa);
-        if (getenv("AME_DSDF_DUMP")) { /* visual QA hook */
-            FILE *f = fopen("/tmp/dsdf_case.ppm", "wb");
+        if (getenv("AME_HIRES_DUMP")) { /* visual QA hook */
+            FILE *f = fopen("/tmp/hires_case.ppm", "wb");
             fprintf(f, "P6\n%d %d\n255\n", W, H);
             for (int i = 0; i < W * H * 4; i += 4)
                 { fputc(px[i], f); fputc(px[i+1], f); fputc(px[i+2], f); }
@@ -424,7 +540,7 @@ int main(void) {
          * (DejaVu vs Pixelify), so the band is wide - it exists to
          * catch broken-alpha renders (garbage ~0.03x or blowout ~5x) */
         UT_ASSERTF(mass > a8_mass * 2 / 5 && mass < a8_mass * 8 / 5,
-                   "dsdf ink mass drifted (a8=%ld dsdf=%ld)", a8_mass, mass);
+                   "hires ink mass drifted (a8=%ld hires=%ld)", a8_mass, mass);
         /* the smooth path MUST produce a soft edge, the pixel path must not */
         UT_ASSERTF(aa > 40, "no anti-aliasing band (%d px)", aa);
         /* at 1:1 the solid interior dominates; under perspective
@@ -444,9 +560,12 @@ int main(void) {
         rp_end_frame();
         UT_ASSERT(hash_frame() == hp);
 
-        /* 2D screen-space smooth text (the text_editor path) */
+        /* 2D screen-space smooth text (the text_editor path), drawn
+         * under the SMOOTH face (the pre-pass-suite version of this
+         * block accidentally drew pixel here) */
         {
             ame_camera c2;
+            text_set_font(AME_FONT_SMOOTH);
             camera_viewport(camera_ortho2d(camera_desc(&c2)), W, H);
             camera_pos(&c2, (float)W * 0.5f, (float)H * 0.5f, 0);
             camera_build(&c2);
@@ -473,10 +592,64 @@ int main(void) {
                 if (d > 8 && d < 221)
                     aa2++;
             }
-            printf("    dsdf 2d screen: mass=%ld ink=%d aa=%d\n",
+            printf("    hires 2d screen: mass=%ld ink=%d aa=%d\n",
                    mass2, ink2, aa2);
             UT_ASSERTF(ink2 > 100, "2d smooth text invisible (%d px)", ink2);
             UT_ASSERTF(aa2 > 20, "2d smooth text not anti-aliased (%d)", aa2);
+            text_set_font(AME_FONT_PIXEL);
+        }
+
+        /* ---- DSDF face: an app-created DSDF pass (experimental) ----
+         * The reconstruction module is untouched (improving DSDF is
+         * another agent's task); this proves the PASS plumbing: marked
+         * quads through the DSDF program render ink, deterministically,
+         * with a soft edge. */
+        {
+            ame_rp_pass_desc dsdfd = { .kind = AME_RP_PASS_DSDF };
+            int dsdf_pass = rp_pass_create(&dsdfd);
+            UT_ASSERTF(dsdf_pass >= 0, "DSDF pass creation failed");
+            UT_ASSERT(text_init_dsdf() >= 0);
+            text_set_font(AME_FONT_DSDF);
+            UT_ASSERT(text_font_mode() == AME_FONT_DSDF);
+            ame_rp_pass_frame dsdf = { dsdf_pass };
+            rp_pass_begin(&dsdf);
+            rp_set_camera(&cam3); /* world pose needs the 3D camera */
+            rp_begin_frame();
+            rp_end_frame();
+            rp_read_pixels(px, W, H);
+            long bg3_r = px[0];
+            rp_begin_frame();
+            text_draw_world(&lg, pose2, white, 20);
+            rp_end_frame();
+            uint32_t hd3 = hash_frame();
+            rp_read_pixels(px, W, H);
+            long mass3 = 0;
+            int ink3 = 0, aa3 = 0;
+            for (int i = 0; i < W * H * 4; i += 4) {
+                long d = (long)px[i] - bg3_r;
+                if (d < 0)
+                    d = 0;
+                mass3 += d;
+                if (d > 8)
+                    ink3++;
+                if (d > 8 && d < 221)
+                    aa3++;
+            }
+            printf("    dsdf pass: mass=%ld (a8 %ld) ink=%d aa=%d\n",
+                   mass3, a8_mass, ink3, aa3);
+            UT_ASSERTF(mass3 > a8_mass * 2 / 5 && mass3 < a8_mass * 8 / 5,
+                       "dsdf ink mass drifted (a8=%ld dsdf=%ld)",
+                       a8_mass, mass3);
+            UT_ASSERTF(aa3 > 40, "dsdf pass: no AA band (%d px)", aa3);
+            UT_ASSERTF(ink3 > 300, "dsdf pass: too little ink (%d)", ink3);
+            rp_begin_frame();
+            text_draw_world(&lg, pose2, white, 20);
+            rp_end_frame();
+            UT_ASSERT(hash_frame() == hd3);
+            /* back to the UI pass + pixel face for the cases below */
+            text_set_font(AME_FONT_PIXEL);
+            ame_rp_pass_frame ui = { 0 };
+            rp_pass_begin(&ui);
         }
 
         /* ---- audit P0-2: the pixel-level caret oracle, IN CI ----
@@ -494,9 +667,10 @@ int main(void) {
                 rp_begin_frame();
                 text_draw_screen(&lpc, OX, OY, white, 0);
                 /* solid 2px caret bar at the element's snapped pen */
-                rp_push_sprite(rp_white_texture(), OX + penx, OY, 2,
-                               lpc.h, 0, 0, 1, 1,
-                               (float[4]){ 1, 0, 0, 1 }, 5);
+                rp_push_sprite(&(ame_rp_sprite){
+                    .tex = rp_white_texture(), .x = OX + penx, .y = OY,
+                    .w = 2, .h = lpc.h, .u0 = 0, .v0 = 0, .u1 = 1,
+                    .v1 = 1, .tint = { 1, 0, 0, 1 }, .layer = 5 });
                 rp_end_frame();
                 rp_read_pixels(px, W, H);
                 int bar_lo = -1, bar_hi = -1, ink_lo = -1, ink_hi = -1;
@@ -560,11 +734,14 @@ int main(void) {
                    lpc.count + 1);
         }
 
-        /* un-inited fallback: without init_dsdf the smooth request is a
-         * no-op (proved by a fresh shutdown/init cycle) */
+        /* un-inited fallback: without init_hires the smooth request is
+         * a no-op (proved by a fresh shutdown/init cycle) */
         rp_shutdown();
-        UT_ASSERT(rp_init(rp_desc_clear(rp_desc_begin(&d), 0, 0, 0, 1),
-                          &cam3, W, H) == 0);
+        rp_desc_begin(&d);
+        rp_desc_clear(&d, 0, 0, 0, 1);
+        rp_desc_size(&d, W, H);
+        rp_desc_camera(&d, &cam3);
+        UT_ASSERT(rp_init(&d) == 0);
         text_init(true);
         text_set_font(AME_FONT_SMOOTH);
         UT_ASSERT(text_font_mode() == AME_FONT_PIXEL);
@@ -573,19 +750,38 @@ int main(void) {
     UT_CASE("Stage 2 post: offscreen round trip is pixel-exact");
     {
         rp_shutdown();
-        int rc = rp_init(
-            rp_desc_post(
-                rp_desc_clear(rp_desc_begin(&d), 0.10f, 0.12f, 0.16f, 1.0f),
-                true),
-            &cam3, W, H);
+        rp_desc_begin(&d);
+        rp_desc_clear(&d, 0.10f, 0.12f, 0.16f, 1.0f);
+        rp_desc_size(&d, W, H);
+        rp_desc_camera(&d, &cam3);
+        int rc = rp_init(&d);
         UT_ASSERTF(rc == 0, "post rp_init rc=%d", rc);
+        ame_rp_pass_desc postd = { .kind = AME_RP_PASS_POST };
+        UT_ASSERTF(rp_pass_create(&postd) >= 0,
+                   "post pass creation failed");
         UT_ASSERT(text_init(true) >= 0); /* re-register the atlas */
         rp_begin_frame();
-        rp_push_quad(rp_white_texture(), t0, t1, t2, t3, 0, 0, 1, 1, ttint, 0);
-        rp_push_quad(rp_white_texture(), c0[0], c0[1], c0[2], c0[3], 0, 0, 1, 1,
-                     red, 10);
-        rp_push_quad(rp_white_texture(), c1[0], c1[1], c1[2], c1[3], 0, 0, 1, 1,
-                     blue, 10);
+        rp_push_quad(&(ame_rp_quad){ .tex = rp_white_texture(),
+            .p0 = { t0[0], t0[1], t0[2] }, .p1 = { t1[0], t1[1], t1[2] },
+            .p2 = { t2[0], t2[1], t2[2] }, .p3 = { t3[0], t3[1], t3[2] },
+            .u0 = 0, .v0 = 0, .u1 = 1, .v1 = 1,
+            .tint = { ttint[0], ttint[1], ttint[2], ttint[3] },
+            .layer = 0 });
+        rp_push_quad(&(ame_rp_quad){ .tex = rp_white_texture(),
+            .p0 = { c0[0][0], c0[0][1], c0[0][2] },
+            .p1 = { c0[1][0], c0[1][1], c0[1][2] },
+            .p2 = { c0[2][0], c0[2][1], c0[2][2] },
+            .p3 = { c0[3][0], c0[3][1], c0[3][2] },
+            .u0 = 0, .v0 = 0, .u1 = 1, .v1 = 1,
+            .tint = { red[0], red[1], red[2], red[3] }, .layer = 10 });
+        rp_push_quad(&(ame_rp_quad){ .tex = rp_white_texture(),
+            .p0 = { c1[0][0], c1[0][1], c1[0][2] },
+            .p1 = { c1[1][0], c1[1][1], c1[1][2] },
+            .p2 = { c1[2][0], c1[2][1], c1[2][2] },
+            .p3 = { c1[3][0], c1[3][1], c1[3][2] },
+            .u0 = 0, .v0 = 0, .u1 = 1, .v1 = 1,
+            .tint = { blue[0], blue[1], blue[2], blue[3] },
+            .layer = 10 });
         text_draw_world(&hello, pose, tint_w, 20);
         rp_end_frame();
         UT_ASSERTF(hash_frame() == h1,
@@ -598,23 +794,56 @@ int main(void) {
         rp_end_frame();
         rp_viewport(W, H);
         rp_begin_frame();
-        rp_push_quad(rp_white_texture(), t0, t1, t2, t3, 0, 0, 1, 1, ttint, 0);
-        rp_push_quad(rp_white_texture(), c0[0], c0[1], c0[2], c0[3], 0, 0, 1, 1,
-                     red, 10);
-        rp_push_quad(rp_white_texture(), c1[0], c1[1], c1[2], c1[3], 0, 0, 1, 1,
-                     blue, 10);
+        rp_push_quad(&(ame_rp_quad){ .tex = rp_white_texture(),
+            .p0 = { t0[0], t0[1], t0[2] }, .p1 = { t1[0], t1[1], t1[2] },
+            .p2 = { t2[0], t2[1], t2[2] }, .p3 = { t3[0], t3[1], t3[2] },
+            .u0 = 0, .v0 = 0, .u1 = 1, .v1 = 1,
+            .tint = { ttint[0], ttint[1], ttint[2], ttint[3] },
+            .layer = 0 });
+        rp_push_quad(&(ame_rp_quad){ .tex = rp_white_texture(),
+            .p0 = { c0[0][0], c0[0][1], c0[0][2] },
+            .p1 = { c0[1][0], c0[1][1], c0[1][2] },
+            .p2 = { c0[2][0], c0[2][1], c0[2][2] },
+            .p3 = { c0[3][0], c0[3][1], c0[3][2] },
+            .u0 = 0, .v0 = 0, .u1 = 1, .v1 = 1,
+            .tint = { red[0], red[1], red[2], red[3] }, .layer = 10 });
+        rp_push_quad(&(ame_rp_quad){ .tex = rp_white_texture(),
+            .p0 = { c1[0][0], c1[0][1], c1[0][2] },
+            .p1 = { c1[1][0], c1[1][1], c1[1][2] },
+            .p2 = { c1[2][0], c1[2][1], c1[2][2] },
+            .p3 = { c1[3][0], c1[3][1], c1[3][2] },
+            .u0 = 0, .v0 = 0, .u1 = 1, .v1 = 1,
+            .tint = { blue[0], blue[1], blue[2], blue[3] },
+            .layer = 10 });
         text_draw_world(&hello, pose, tint_w, 20);
         rp_end_frame();
         UT_ASSERTF(hash_frame() == h1, "resize cycle must not change pixels");
 
         /* vignette: corners darken, the center is untouched */
-        rp_post_vignette(0.45f);
+        rp_post(&(ame_rp_post){ .tint = { 1, 1, 1 },
+            .vignette = 0.45f });
         rp_begin_frame();
-        rp_push_quad(rp_white_texture(), t0, t1, t2, t3, 0, 0, 1, 1, ttint, 0);
-        rp_push_quad(rp_white_texture(), c0[0], c0[1], c0[2], c0[3], 0, 0, 1, 1,
-                     red, 10);
-        rp_push_quad(rp_white_texture(), c1[0], c1[1], c1[2], c1[3], 0, 0, 1, 1,
-                     blue, 10);
+        rp_push_quad(&(ame_rp_quad){ .tex = rp_white_texture(),
+            .p0 = { t0[0], t0[1], t0[2] }, .p1 = { t1[0], t1[1], t1[2] },
+            .p2 = { t2[0], t2[1], t2[2] }, .p3 = { t3[0], t3[1], t3[2] },
+            .u0 = 0, .v0 = 0, .u1 = 1, .v1 = 1,
+            .tint = { ttint[0], ttint[1], ttint[2], ttint[3] },
+            .layer = 0 });
+        rp_push_quad(&(ame_rp_quad){ .tex = rp_white_texture(),
+            .p0 = { c0[0][0], c0[0][1], c0[0][2] },
+            .p1 = { c0[1][0], c0[1][1], c0[1][2] },
+            .p2 = { c0[2][0], c0[2][1], c0[2][2] },
+            .p3 = { c0[3][0], c0[3][1], c0[3][2] },
+            .u0 = 0, .v0 = 0, .u1 = 1, .v1 = 1,
+            .tint = { red[0], red[1], red[2], red[3] }, .layer = 10 });
+        rp_push_quad(&(ame_rp_quad){ .tex = rp_white_texture(),
+            .p0 = { c1[0][0], c1[0][1], c1[0][2] },
+            .p1 = { c1[1][0], c1[1][1], c1[1][2] },
+            .p2 = { c1[2][0], c1[2][1], c1[2][2] },
+            .p3 = { c1[3][0], c1[3][1], c1[3][2] },
+            .u0 = 0, .v0 = 0, .u1 = 1, .v1 = 1,
+            .tint = { blue[0], blue[1], blue[2], blue[3] },
+            .layer = 10 });
         text_draw_world(&hello, pose, tint_w, 20);
         rp_end_frame();
         rp_read_pixels(px, W, H);
@@ -625,13 +854,19 @@ int main(void) {
         printf("    vignette center=%ld corner=%ld\n", l_c, l_k);
         UT_ASSERTF(l_k < l_c, "corner (%ld) must be darker than center (%ld)",
                    l_k, l_c);
-        rp_post_vignette(0);
+        rp_post(&(ame_rp_post){ .tint = { 1, 1, 1 },
+            .vignette = 0 });
         rp_shutdown();
-        rc = rp_init(
-            rp_desc_clear(rp_desc_begin(&d), 0.10f, 0.12f, 0.16f, 1.0f),
-            &cam3, W, H);
+        rp_desc_begin(&d);
+        rp_desc_clear(&d, 0.10f, 0.12f, 0.16f, 1.0f);
+        rp_desc_size(&d, W, H);
+        rp_desc_camera(&d, &cam3);
+        rc = rp_init(&d);
         UT_ASSERTF(rc == 0, "restore direct rp_init rc=%d", rc);
         UT_ASSERT(text_init(true) >= 0);
+        ame_rp_pass_desc litd2 = { .kind = AME_RP_PASS_LIT };
+        g_lit = rp_pass_create(&litd2);
+        UT_ASSERTF(g_lit >= 0, "lit pass re-creation failed");
     }
 
     UT_CASE("output not the clear color (something drew)");
@@ -705,15 +940,21 @@ int main(void) {
                          -1.6f, 0.9f, 0, 1 }; /* column-major */
         float tint[4] = { 0.8f, 0.7f, 0.95f, 1 };
         rp_begin_frame();
+        ame_rp_pass_frame lit = { g_lit };
+        rp_pass_begin(&lit);
         rp_set_lit(1);
-        int tris = rp_push_mesh(rp_white_texture(),
-                                (const ame_mesh_vert *)baked_cube_verts,
-                                baked_cube_vert_count, baked_cube_idx,
-                                baked_cube_idx_count, id, tint, 5);
-        int tris2 = rp_push_mesh(rp_white_texture(),
-                                 (const ame_mesh_vert *)baked_cube_verts,
-                                 baked_cube_vert_count, baked_cube_idx,
-                                 baked_cube_idx_count, mv, tint, 5);
+        ame_rp_mesh m1 = { .tex = rp_white_texture(),
+            .verts = (const ame_mesh_vert *)baked_cube_verts,
+            .vert_count = baked_cube_vert_count, .idx = baked_cube_idx,
+            .idx_count = baked_cube_idx_count, .xform = id,
+            .tint = { tint[0], tint[1], tint[2], tint[3] }, .layer = 5 };
+        int tris = rp_push_mesh(&m1);
+        ame_rp_mesh m2 = { .tex = rp_white_texture(),
+            .verts = (const ame_mesh_vert *)baked_cube_verts,
+            .vert_count = baked_cube_vert_count, .idx = baked_cube_idx,
+            .idx_count = baked_cube_idx_count, .xform = mv,
+            .tint = { tint[0], tint[1], tint[2], tint[3] }, .layer = 5 };
+        int tris2 = rp_push_mesh(&m2);
         rp_set_lit(0);
         rp_end_frame();
         UT_ASSERTF(tris == baked_cube_idx_count / 3 && tris2 == tris,
@@ -723,15 +964,10 @@ int main(void) {
         uint32_t mh = hash_frame();
         /* determinism: identical draw -> identical frame */
         rp_begin_frame();
+        rp_pass_begin(&lit);
         rp_set_lit(1);
-        rp_push_mesh(rp_white_texture(),
-                     (const ame_mesh_vert *)baked_cube_verts,
-                     baked_cube_vert_count, baked_cube_idx,
-                     baked_cube_idx_count, id, tint, 5);
-        rp_push_mesh(rp_white_texture(),
-                     (const ame_mesh_vert *)baked_cube_verts,
-                     baked_cube_vert_count, baked_cube_idx,
-                     baked_cube_idx_count, mv, tint, 5);
+        rp_push_mesh(&m1);
+        rp_push_mesh(&m2);
         rp_set_lit(0);
         rp_end_frame();
         UT_ASSERTF(hash_frame() == mh, "mesh frame must be stable");

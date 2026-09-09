@@ -23,7 +23,11 @@ int app_init(void) {
     camera_pos(&CAM, (float)800 * 0.5f, (float)600 * 0.5f, 0);
     camera_build(&CAM);
     ame_rp_desc d;
-    if (rp_init(rp_desc_blend(rp_desc_begin(&d), true), &CAM, 800, 600))
+    rp_desc_begin(&d);
+    rp_desc_blend(&d, true);
+    rp_desc_size(&d, 800, 600);
+    rp_desc_camera(&d, &CAM);
+    if (rp_init(&d))
         return 1;
     char err[128];
     if (!ame_tilemap_load_tmj("sample.tmj", &TM, err, sizeof err)) {

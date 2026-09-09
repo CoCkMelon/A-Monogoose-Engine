@@ -253,9 +253,17 @@ int ame_tilemap_draw(const ame_tilemap *tm, int tex, float ox, float oy,
                 } else {
                     gid_tint(gid, tint);
                 }
-                rp_push_sprite(tex, ox + (float)x * tw, oy + (float)y * th,
-                               tw, th, u0, v0, u1, v1, tint,
-                               layer_z + (float)l);
+                ame_rp_sprite sp;
+                sp.tex = tex;
+                sp.x = ox + (float)x * tw;
+                sp.y = oy + (float)y * th;
+                sp.w = tw;
+                sp.h = th;
+                sp.u0 = u0; sp.v0 = v0; sp.u1 = u1; sp.v1 = v1;
+                sp.tint[0] = tint[0]; sp.tint[1] = tint[1];
+                sp.tint[2] = tint[2]; sp.tint[3] = tint[3];
+                sp.layer = layer_z + (float)l;
+                rp_push_sprite(&sp);
                 pushed++;
             }
         }

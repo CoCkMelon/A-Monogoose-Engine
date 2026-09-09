@@ -21,7 +21,11 @@ int app_init(void) {
     camera_pos(&CAM, (float)800 * 0.5f, (float)600 * 0.5f, 0);
     camera_build(&CAM);
     ame_rp_desc d;
-    if (rp_init(rp_desc_blend(rp_desc_begin(&d), true), &CAM, 800, 600))
+    rp_desc_begin(&d);
+    rp_desc_blend(&d, true);
+    rp_desc_size(&d, 800, 600);
+    rp_desc_camera(&d, &CAM);
+    if (rp_init(&d))
         return 1;
     return 0;
 }
@@ -58,12 +62,13 @@ int app_render(void) {
         if (len < 0.01f)
             continue;
         float nx = -dy / len * 2.0f, ny = dx / len * 2.0f; /* half-width 2px */
-        rp_push_quad(rp_white_texture(),
-                     (float[3]){ g_px[i - 1] + nx, g_py[i - 1] + ny, 0 },
-                     (float[3]){ g_px[i] + nx, g_py[i] + ny, 0 },
-                     (float[3]){ g_px[i] - nx, g_py[i] - ny, 0 },
-                     (float[3]){ g_px[i - 1] - nx, g_py[i - 1] - ny, 0 },
-                     0, 0, 1, 1, (float[4]){ 0.9f, 0.85f, 0.4f, 1 }, 0);
+        rp_push_quad(&(ame_rp_quad){ .tex = rp_white_texture(),
+            .p0 = { g_px[i - 1] + nx, g_py[i - 1] + ny, 0 },
+            .p1 = { g_px[i] + nx, g_py[i] + ny, 0 },
+            .p2 = { g_px[i] - nx, g_py[i] - ny, 0 },
+            .p3 = { g_px[i - 1] - nx, g_py[i - 1] - ny, 0 },
+            .u0 = 0, .v0 = 0, .u1 = 1, .v1 = 1,
+            .tint = { 0.9f, 0.85f, 0.4f, 1 }, .layer = 0 });
     }
     rp_end_frame();
     return 0;

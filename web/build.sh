@@ -30,7 +30,8 @@ fi
 # host bake step is needed.
 ENGINE="src/audio.c src/audio_ray.c src/camera.c src/events.c src/geometry.c
     src/input.c src/particles.c src/render.c src/text.c src/tilemap.c
-    generated/font_atlas.c generated/font_atlas_dsdf.c"
+    generated/font_atlas.c generated/font_atlas_dsdf.c
+    generated/font_atlas_hires.c generated/shaders_gen.c"
 
 # Engine's OWN code stays warnings-as-errors; FP contraction stays off
 # (per-binary determinism, same as desktop).

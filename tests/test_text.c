@@ -5,7 +5,8 @@
 #include <ame/ame.h>
 #include <ame/text.h>
 #include "font_atlas.h" /* advance oracle (audit P1) */
-#include "font_atlas_dsdf.h" /* baked smooth-face table */
+#include "font_atlas_dsdf.h" /* baked DSDF-face table */
+#include "font_atlas_hires.h" /* baked smooth-face table */
 
 int main(void) {
     printf("=== test_text ===\n");
@@ -248,14 +249,32 @@ int main(void) {
         }
     }
 
+    UT_CASE("hires table: sorted by cp, sane metrics (bsearch precond)");
+    {
+        extern const ame_hires_glyph ame_hires_glyphs[];
+        extern const int ame_hires_glyph_count;
+        UT_ASSERT(ame_hires_glyph_count > 500);
+        for (int i = 1; i < ame_hires_glyph_count; i++)
+            UT_ASSERTF(ame_hires_glyphs[i].cp > ame_hires_glyphs[i - 1].cp,
+                       "hires table unsorted at %d", i);
+        for (int i = 0; i < ame_hires_glyph_count; i++) {
+            const ame_hires_glyph *g = &ame_hires_glyphs[i];
+            UT_ASSERTF(g->advance >= 0 && g->advance < 64,
+                       "hires advance insane for U+%04X", g->cp);
+            UT_ASSERTF((g->aw > 0 && g->ah > 0)
+                           || (g->aw == 0 && g->ah == 0),
+                       "half cell for U+%04X", g->cp);
+        }
+    }
+
     UT_CASE("smooth face: metrics switch, grid contract still holds");
     {
         ame_text_layout ls;
-        text_set_font(AME_FONT_SMOOTH); /* no GL/dsdf init: must no-op */
+        text_set_font(AME_FONT_SMOOTH); /* no GL/hires init: must no-op */
         UT_ASSERT(text_font_mode() == AME_FONT_PIXEL);
         /* pretend-init: point the module at the baked data directly */
-        extern int text_test_force_dsdf(void);
-        text_test_force_dsdf();
+        extern int text_test_force_hires(void);
+        text_test_force_hires();
         text_set_font(AME_FONT_SMOOTH);
         UT_ASSERT(text_font_mode() == AME_FONT_SMOOTH);
         int ns = text_layout("hello typed text", 0, AME_TEXT_ALIGN_L, 1.0f, &ls);
@@ -270,6 +289,31 @@ int main(void) {
                        "smooth el[%d].y fractional (%.3f)", i, ls.el[i].y);
         }
         UT_ASSERT(ls.w == floorf(ls.w));
+        text_set_font(AME_FONT_PIXEL);
+        UT_ASSERT(text_font_mode() == AME_FONT_PIXEL);
+    }
+
+    UT_CASE("dsdf face: metrics switch, grid contract still holds");
+    {
+        ame_text_layout ld;
+        text_set_font(AME_FONT_DSDF); /* no GL/dsdf init: must no-op */
+        UT_ASSERT(text_font_mode() == AME_FONT_PIXEL);
+        extern int text_test_force_dsdf(void);
+        text_test_force_dsdf();
+        text_set_font(AME_FONT_DSDF);
+        UT_ASSERT(text_font_mode() == AME_FONT_DSDF);
+        int nd = text_layout("hello typed text", 0, AME_TEXT_ALIGN_L,
+                             1.0f, &ld);
+        UT_ASSERT(nd == 16);
+        UT_ASSERTF(ld.w != l.w, "dsdf layout identical to pixel (%.1f)",
+                   (double)ld.w);
+        for (int i = 0; i < nd; i++) {
+            UT_ASSERTF(ld.el[i].x == floorf(ld.el[i].x),
+                       "dsdf el[%d].x fractional (%.3f)", i, ld.el[i].x);
+            UT_ASSERTF(ld.el[i].y == floorf(ld.el[i].y),
+                       "dsdf el[%d].y fractional (%.3f)", i, ld.el[i].y);
+        }
+        UT_ASSERT(ld.w == floorf(ld.w));
         text_set_font(AME_FONT_PIXEL);
         UT_ASSERT(text_font_mode() == AME_FONT_PIXEL);
     }

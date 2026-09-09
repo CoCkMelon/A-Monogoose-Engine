@@ -27,7 +27,11 @@ int app_init(void) {
     camera_pos(&CAM, (float)800 * 0.5f, (float)450 * 0.5f, 0);
     camera_build(&CAM);
     ame_rp_desc d;
-    if (rp_init(rp_desc_blend(rp_desc_begin(&d), true), &CAM, 800, 450))
+    rp_desc_begin(&d);
+    rp_desc_blend(&d, true);
+    rp_desc_size(&d, 800, 450);
+    rp_desc_camera(&d, &CAM);
+    if (rp_init(&d))
         return 1;
     audio_init(48000, 2);
     ame_geo_reset();
@@ -76,8 +80,10 @@ void app_resize(int w, int h) {
 static void world_rect(float cx, float cy, float hw, float hh,
                        const float col[4], float layer) {
     float px = 400.0f + cx * SCALE, py = 225.0f - cy * SCALE;
-    rp_push_sprite(rp_white_texture(), px - hw * SCALE, py - hh * SCALE,
-                   hw * 2 * SCALE, hh * 2 * SCALE, 0, 0, 1, 1, col, layer);
+    rp_push_sprite(&(ame_rp_sprite){ .tex = rp_white_texture(),
+        .x = px - hw * SCALE, .y = py - hh * SCALE, .w = hw * 2 * SCALE,
+        .h = hh * 2 * SCALE, .u0 = 0, .v0 = 0, .u1 = 1, .v1 = 1,
+        .tint = { col[0], col[1], col[2], col[3] }, .layer = layer });
 }
 
 int app_render(void) {
@@ -89,13 +95,16 @@ int app_render(void) {
     float mx = 400, my = 225;
     in_mouse_pos(&mx, &my);
     float lvl = (g_l + g_r) * 0.5f;
-    rp_push_sprite(rp_white_texture(), mx - 18, my - 18, 36, 36, 0, 0, 1, 1,
-                   (float[4]){ 0.2f + 0.8f * lvl, 0.5f, 0.5f, 1 }, 2);
+    rp_push_sprite(&(ame_rp_sprite){ .tex = rp_white_texture(), .x = mx - 18,
+        .y = my - 18, .w = 36, .h = 36, .u0 = 0, .v0 = 0, .u1 = 1, .v1 = 1,
+        .tint = { 0.2f + 0.8f * lvl, 0.5f, 0.5f, 1 }, .layer = 2 });
     /* gain bars: L / R */
-    rp_push_sprite(rp_white_texture(), 20, 20, 120 * g_l, 14, 0, 0, 1, 1,
-                   (float[4]){ 0.9f, 0.4f, 0.3f, 1 }, 4);
-    rp_push_sprite(rp_white_texture(), 20, 40, 120 * g_r, 14, 0, 0, 1, 1,
-                   (float[4]){ 0.3f, 0.5f, 0.95f, 1 }, 4);
+    rp_push_sprite(&(ame_rp_sprite){ .tex = rp_white_texture(), .x = 20,
+        .y = 20, .w = 120 * g_l, .h = 14, .u0 = 0, .v0 = 0, .u1 = 1,
+        .v1 = 1, .tint = { 0.9f, 0.4f, 0.3f, 1 }, .layer = 4 });
+    rp_push_sprite(&(ame_rp_sprite){ .tex = rp_white_texture(), .x = 20,
+        .y = 40, .w = 120 * g_r, .h = 14, .u0 = 0, .v0 = 0, .u1 = 1,
+        .v1 = 1, .tint = { 0.3f, 0.5f, 0.95f, 1 }, .layer = 4 });
     rp_end_frame();
     return 0;
 }

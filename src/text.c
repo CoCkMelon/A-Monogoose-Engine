@@ -5,6 +5,7 @@
 #include <ame/math.h>
 #include "font_atlas.h"
 #include "font_atlas_dsdf.h"
+#include "font_atlas_hires.h"
 
 #include <math.h>
 #include <stdio.h>
@@ -12,17 +13,28 @@
 #include <string.h>
 
 static int g_atlas_tex = -1;
-static int g_dsdf_tex = -1;   /* -1: smooth face unavailable */
+static int g_dsdf_tex = -1;   /* -1: DSDF face unavailable */
+static int g_hires_tex = -1;  /* -1: smooth (hires) face unavailable */
 static int g_font_mode = AME_FONT_PIXEL;
 
-/* face-aware vertical metrics (both baked at the same base size) */
+/* hires cells are baked 2x (64px) over 32px layout metrics: quads span
+ * layout px while UVs span the full-res cell (text.txt smooth face) */
+#define HIRES_CELL_K (AME_HIRES_LAYOUT_PX / (float)AME_HIRES_PX)
+
+/* face-aware vertical metrics (all faces share 32px layout units) */
 static float cur_line_h(void) {
-    return g_font_mode == AME_FONT_SMOOTH ? AME_DSDF_LINE_H
-                                          : (float)AME_FONT_LINE_H;
+    if (g_font_mode == AME_FONT_DSDF)
+        return AME_DSDF_LINE_H;
+    if (g_font_mode == AME_FONT_SMOOTH)
+        return AME_HIRES_LINE_H;
+    return (float)AME_FONT_LINE_H;
 }
 static float cur_ascent(void) {
-    return g_font_mode == AME_FONT_SMOOTH ? AME_DSDF_ASCENT
-                                          : (float)AME_FONT_ASCENT;
+    if (g_font_mode == AME_FONT_DSDF)
+        return AME_DSDF_ASCENT;
+    if (g_font_mode == AME_FONT_SMOOTH)
+        return AME_HIRES_ASCENT;
+    return (float)AME_FONT_ASCENT;
 }
 /* metrics come straight from the BAKED constants so layout works with no
  * GL/init (text.txt: layout is pure CPU, headless-testable) */
@@ -45,6 +57,7 @@ static void fallback_box(float *w, float *h) {
  * rather than blocking the text hot path. */
 static int g_ascii_lut[128];
 static int g_ascii_lut_dsdf[128];
+static int g_ascii_lut_hires[128];
 static atomic_flag g_lut_lock = ATOMIC_FLAG_INIT;
 static _Atomic bool g_lut_ready = false;
 
@@ -77,6 +90,20 @@ static int dsdf_glyph_find_slow(uint32_t cp) {
     return -1;
 }
 
+static int hires_glyph_find_slow(uint32_t cp) {
+    int lo = 0, hi = ame_hires_glyph_count - 1;
+    while (lo <= hi) {
+        int mid = (lo + hi) / 2;
+        if (ame_hires_glyphs[mid].cp == cp)
+            return mid;
+        if (ame_hires_glyphs[mid].cp < cp)
+            lo = mid + 1;
+        else
+            hi = mid - 1;
+    }
+    return -1;
+}
+
 static void glyph_lut_ensure(void) {
     if (atomic_load_explicit(&g_lut_ready, memory_order_acquire))
         return;
@@ -86,6 +113,7 @@ static void glyph_lut_ensure(void) {
         for (uint32_t cp = 0; cp < 128; cp++) {
             g_ascii_lut[cp] = glyph_find_slow(cp);
             g_ascii_lut_dsdf[cp] = dsdf_glyph_find_slow(cp);
+            g_ascii_lut_hires[cp] = hires_glyph_find_slow(cp);
         }
         atomic_store_explicit(&g_lut_ready, true, memory_order_release);
     }
@@ -114,6 +142,17 @@ static int dsdf_glyph_find(uint32_t cp) {
     return dsdf_glyph_find_slow(cp);
 }
 
+static int hires_glyph_find(uint32_t cp) {
+    if (cp < 128) {
+        if (atomic_load_explicit(&g_lut_ready, memory_order_acquire))
+            return g_ascii_lut_hires[cp];
+        glyph_lut_ensure();
+        if (atomic_load_explicit(&g_lut_ready, memory_order_acquire))
+            return g_ascii_lut_hires[cp];
+    }
+    return hires_glyph_find_slow(cp);
+}
+
 int text_init_dsdf(void) {
     if (g_dsdf_tex >= 0)
         return g_dsdf_tex;
@@ -122,13 +161,32 @@ int text_init_dsdf(void) {
                                  AME_DSDF_ATLAS_H, 4, false /*linear*/);
     if (g_dsdf_tex < 0)
         return -1;
-    rp_set_dsdf_atlas(AME_DSDF_RANGE, AME_DSDF_ATLAS_W, AME_DSDF_ATLAS_H);
+    ame_rp_dsdf_atlas a = { AME_DSDF_RANGE, AME_DSDF_ATLAS_W,
+                            AME_DSDF_ATLAS_H };
+    rp_set_dsdf_atlas(&a);
     return g_dsdf_tex;
 }
 
+int text_init_hires(void) {
+    if (g_hires_tex >= 0)
+        return g_hires_tex;
+    /* A8 coverage, uploaded DIRECTLY (comps=1: white ink, RED swizzled
+     * to alpha) with linear sampling: the smooth face renders through
+     * the plain branchless textured pipeline, no shader reconstruction */
+    g_hires_tex = rp_load_texture(ame_hires_atlas_a8, AME_HIRES_ATLAS_WIDTH,
+                                  AME_HIRES_ATLAS_HEIGHT, 1,
+                                  false /*linear*/);
+    return g_hires_tex;
+}
+
 void text_set_font(int face) {
-    if (face == AME_FONT_SMOOTH && g_dsdf_tex < 0)
+    if (face != AME_FONT_PIXEL && face != AME_FONT_SMOOTH
+        && face != AME_FONT_DSDF)
+        return;
+    if (face == AME_FONT_SMOOTH && g_hires_tex < 0)
         return; /* not inited: stay pixel, never half-smooth */
+    if (face == AME_FONT_DSDF && g_dsdf_tex < 0)
+        return;
     g_font_mode = face;
 }
 
@@ -136,20 +194,27 @@ int text_font_mode(void) { return g_font_mode; }
 
 
 
-/* test-only: mark the smooth face AVAILABLE without a GL upload, so
- * pure-CPU layout tests can exercise smooth-face metrics (draw is NOT
- * valid in that state - the texture id is a stub). */
+/* test-only: mark a face AVAILABLE without a GL upload, so pure-CPU
+ * layout tests can exercise its metrics (draw is NOT valid in that
+ * state - the texture id is a stub). */
 int text_test_force_dsdf(void) {
     if (g_dsdf_tex < 0)
         g_dsdf_tex = 0;
     return g_dsdf_tex;
 }
 
+int text_test_force_hires(void) {
+    if (g_hires_tex < 0)
+        g_hires_tex = 0;
+    return g_hires_tex;
+}
+
 int text_init(bool nearest_sampling) {
-    /* renderer-restart re-entry: BOTH faces went stale with the GL
+    /* renderer-restart re-entry: ALL faces went stale with the GL
      * context; re-registering the pixel atlas is the reset point (the
-     * smooth face needs an explicit text_init_dsdf again) */
+     * smooth/DSDF faces need an explicit text_init_* again) */
     g_dsdf_tex = -1;
+    g_hires_tex = -1;
     g_font_mode = AME_FONT_PIXEL;
 
     /* expand A8 to RGBA (white, alpha = coverage) once, upload, free */
@@ -458,6 +523,19 @@ static void col4(uint32_t c, const float tint[4], float out[4]) {
     out[3] = tint[3];
 }
 
+static void push_sprite(int tex, float x, float y, float w, float h,
+                        float u0, float v0, float u1, float v1,
+                        const float col[4], float layer) {
+    ame_rp_sprite sp;
+    sp.tex = tex;
+    sp.x = x; sp.y = y; sp.w = w; sp.h = h;
+    sp.u0 = u0; sp.v0 = v0; sp.u1 = u1; sp.v1 = v1;
+    sp.tint[0] = col[0]; sp.tint[1] = col[1];
+    sp.tint[2] = col[2]; sp.tint[3] = col[3];
+    sp.layer = layer;
+    rp_push_sprite(&sp);
+}
+
 static void draw_glyph(const ame_txt_el *e, float x, float y, float scale,
                        const float tint[4], float layer) {
     if (e->glyph == AME_TXT_TAB)
@@ -469,46 +547,74 @@ static void draw_glyph(const ame_txt_el *e, float x, float y, float scale,
         fallback_box(&w, &h);
         w *= scale;
         h *= scale;
-        rp_push_sprite(g_atlas_tex >= 0 ? g_atlas_tex : rp_white_texture(),
-                       x + e->x, y + e->y + cur_ascent() * scale - h, w, h,
-                       0.5f, 0.5f, 0.504f, 0.504f, col, layer);
+        push_sprite(g_atlas_tex >= 0 ? g_atlas_tex : rp_white_texture(),
+                    x + e->x, y + e->y + cur_ascent() * scale - h, w, h,
+                    0.5f, 0.5f, 0.504f, 0.504f, col, layer);
         return;
     }
     const ame_font_glyph *g = &ame_font_glyphs[e->glyph];
 
-    if (g_font_mode == AME_FONT_SMOOTH && g_dsdf_tex >= 0) {
-        int di = dsdf_glyph_find(g->cp);
-        if (di >= 0) {
-            const ame_dsdf_glyph *d = &ame_dsdf_glyphs[di];
-            /* cell INCLUDES the DSDF margin; xoff/yoff already carry it */
-            float u0 = (float)d->ax / (float)AME_DSDF_ATLAS_W;
-            float v0 = (float)d->ay / (float)AME_DSDF_ATLAS_H;
-            float u1 = (float)(d->ax + d->aw) / (float)AME_DSDF_ATLAS_W;
-            float v1 = (float)(d->ay + d->ah) / (float)AME_DSDF_ATLAS_H;
-            float px = x + e->x + d->xoff * scale;
-            float py = y + e->y + AME_DSDF_ASCENT * scale + d->yoff * scale;
-            float qz = 0.001f * layer; /* match rp_push_sprite z */
-            float q0[3] = { px, py, qz },
-                  q1[3] = { px + (float)d->aw * scale, py, qz },
-                  q2[3] = { px + (float)d->aw * scale,
-                            py + (float)d->ah * scale, qz },
-                  q3[3] = { px, py + (float)d->ah * scale, qz };
-            rp_push_text_quad(g_dsdf_tex, q0, q1, q2, q3,
-                              u0, v0, u1, v1, col, layer);
+    if (g_font_mode == AME_FONT_SMOOTH && g_hires_tex >= 0) {
+        int hi = hires_glyph_find(g->cp);
+        if (hi >= 0) {
+            const ame_hires_glyph *d = &ame_hires_glyphs[hi];
+            /* hires: the QUAD spans layout px (metrics carry the bake
+             * divisor) while the UVs span the full-res 2x cell; plain
+             * textured pipeline (bilinear), no marker, no DSDF math */
+            float u0 = (float)d->ax / (float)AME_HIRES_ATLAS_WIDTH;
+            float v0 = (float)d->ay / (float)AME_HIRES_ATLAS_HEIGHT;
+            float u1 = (float)(d->ax + d->aw) / (float)AME_HIRES_ATLAS_WIDTH;
+            float v1 = (float)(d->ay + d->ah) / (float)AME_HIRES_ATLAS_HEIGHT;
+            push_sprite(g_hires_tex,
+                        x + e->x + d->xoff * scale,
+                        y + e->y + AME_HIRES_ASCENT * scale + d->yoff * scale,
+                        (float)d->aw * HIRES_CELL_K * scale,
+                        (float)d->ah * HIRES_CELL_K * scale,
+                        u0, v0, u1, v1, col, layer);
             return;
         }
         /* missing in the smooth table: fall through to the pixel glyph */
+    }
+
+    if (g_font_mode == AME_FONT_DSDF && g_dsdf_tex >= 0) {
+        int di = dsdf_glyph_find(g->cp);
+        if (di >= 0) {
+            const ame_dsdf_glyph *d = &ame_dsdf_glyphs[di];
+            /* cell INCLUDES the DSDF margin; xoff/yoff already carry it.
+             * Marked quad: only a DSDF pass reconstructs it (pushes
+             * target the current pass - the app begins it). */
+            ame_rp_quad q;
+            q.tex = g_dsdf_tex;
+            q.u0 = (float)d->ax / (float)AME_DSDF_ATLAS_W;
+            q.v0 = (float)d->ay / (float)AME_DSDF_ATLAS_H;
+            q.u1 = (float)(d->ax + d->aw) / (float)AME_DSDF_ATLAS_W;
+            q.v1 = (float)(d->ay + d->ah) / (float)AME_DSDF_ATLAS_H;
+            float px = x + e->x + d->xoff * scale;
+            float py = y + e->y + AME_DSDF_ASCENT * scale + d->yoff * scale;
+            float qz = 0.001f * layer; /* match rp_push_sprite z */
+            float qw = (float)d->aw * scale, qh = (float)d->ah * scale;
+            q.p0[0] = px;      q.p0[1] = py;      q.p0[2] = qz;
+            q.p1[0] = px + qw; q.p1[1] = py;      q.p1[2] = qz;
+            q.p2[0] = px + qw; q.p2[1] = py + qh; q.p2[2] = qz;
+            q.p3[0] = px;      q.p3[1] = py + qh; q.p3[2] = qz;
+            q.tint[0] = col[0]; q.tint[1] = col[1];
+            q.tint[2] = col[2]; q.tint[3] = col[3];
+            q.layer = layer;
+            rp_push_text_quad(&q);
+            return;
+        }
+        /* missing in the DSDF table: fall through to the pixel glyph */
     }
 
     float u0 = (float)g->ax / (float)AME_FONT_ATLAS_WIDTH;
     float v0 = (float)g->ay / (float)AME_FONT_ATLAS_HEIGHT;
     float u1 = (float)(g->ax + g->aw) / (float)AME_FONT_ATLAS_WIDTH;
     float v1 = (float)(g->ay + g->ah) / (float)AME_FONT_ATLAS_HEIGHT;
-    rp_push_sprite(g_atlas_tex,
-                   x + e->x + g->xoff * scale,
-                   y + e->y + cur_ascent() * scale + g->yoff * scale,
-                   (float)g->aw * scale, (float)g->ah * scale,
-                   u0, v0, u1, v1, col, layer);
+    push_sprite(g_atlas_tex,
+                x + e->x + g->xoff * scale,
+                y + e->y + cur_ascent() * scale + g->yoff * scale,
+                (float)g->aw * scale, (float)g->ah * scale,
+                u0, v0, u1, v1, col, layer);
 }
 
 void text_draw_screen(const ame_text_layout *l, float x, float y,
@@ -542,13 +648,32 @@ void text_draw_world(const ame_text_layout *l, const float pose[16],
         float col[4];
         col4(e->color, tint, col);
         float x0, y0, w, h, u0, v0, u1, v1;
+        int tex = g_atlas_tex >= 0 ? g_atlas_tex : rp_white_texture();
+        bool marked = false; /* DSDF face: marked quad for a DSDF pass */
         if (e->glyph < 0) {
             fallback_box(&w, &h);
             u0 = v0 = 0.5f;
             u1 = v1 = 0.504f;
-        } else if (g_font_mode == AME_FONT_SMOOTH && g_dsdf_tex >= 0
+            x0 = e->x;
+            y0 = e->y + cur_ascent() - h;
+        } else if (g_font_mode == AME_FONT_SMOOTH && g_hires_tex >= 0
+                   && hires_glyph_find(ame_font_glyphs[e->glyph].cp) >= 0) {
+            /* smooth face in WORLD space: pose-transformed hires cell
+             * (quad spans layout px, UVs the full-res 2x cell) */
+            const ame_hires_glyph *d =
+                &ame_hires_glyphs[hires_glyph_find(ame_font_glyphs[e->glyph].cp)];
+            w = (float)d->aw * HIRES_CELL_K;
+            h = (float)d->ah * HIRES_CELL_K;
+            u0 = (float)d->ax / (float)AME_HIRES_ATLAS_WIDTH;
+            v0 = (float)d->ay / (float)AME_HIRES_ATLAS_HEIGHT;
+            u1 = (float)(d->ax + d->aw) / (float)AME_HIRES_ATLAS_WIDTH;
+            v1 = (float)(d->ay + d->ah) / (float)AME_HIRES_ATLAS_HEIGHT;
+            x0 = e->x + (float)d->xoff;
+            y0 = e->y + AME_HIRES_ASCENT + (float)d->yoff;
+            tex = g_hires_tex;
+        } else if (g_font_mode == AME_FONT_DSDF && g_dsdf_tex >= 0
                    && dsdf_glyph_find(ame_font_glyphs[e->glyph].cp) >= 0) {
-            /* smooth face in WORLD space: pose-transformed DSDF cell
+            /* DSDF face in WORLD space: pose-transformed DSDF cell
              * (margins included; bearings already carry them) */
             const ame_dsdf_glyph *d =
                 &ame_dsdf_glyphs[dsdf_glyph_find(ame_font_glyphs[e->glyph].cp)];
@@ -560,15 +685,8 @@ void text_draw_world(const ame_text_layout *l, const float pose[16],
             v1 = (float)(d->ay + d->ah) / (float)AME_DSDF_ATLAS_H;
             x0 = e->x + (float)d->xoff;
             y0 = e->y + AME_DSDF_ASCENT + (float)d->yoff;
-            ame_v3 w0 = ame_m4_xform_point(m, ame_v3_(x0, y0, 0));
-            ame_v3 w1 = ame_m4_xform_point(m, ame_v3_(x0 + w, y0, 0));
-            ame_v3 w2 = ame_m4_xform_point(m, ame_v3_(x0 + w, y0 + h, 0));
-            ame_v3 w3 = ame_m4_xform_point(m, ame_v3_(x0, y0 + h, 0));
-            float t0[3] = { w0.x, w0.y, w0.z }, t1[3] = { w1.x, w1.y, w1.z },
-                  t2[3] = { w2.x, w2.y, w2.z }, t3[3] = { w3.x, w3.y, w3.z };
-            rp_push_text_quad(g_dsdf_tex, t0, t1, t2, t3,
-                              u0, v0, u1, v1, col, layer);
-            continue;
+            tex = g_dsdf_tex;
+            marked = true;
         } else {
             const ame_font_glyph *g = &ame_font_glyphs[e->glyph];
             w = (float)g->aw;
@@ -580,20 +698,24 @@ void text_draw_world(const ame_text_layout *l, const float pose[16],
             x0 = e->x + (float)g->xoff;
             y0 = e->y + cur_ascent() + (float)g->yoff;
         }
-        if (e->glyph < 0) {
-            x0 = e->x;
-            y0 = e->y + cur_ascent() - h;
-        }
         /* glyph quad corners in layout space -> world pose */
         ame_v3 c0 = ame_m4_xform_point(m, ame_v3_(x0, y0, 0));
         ame_v3 c1 = ame_m4_xform_point(m, ame_v3_(x0 + w, y0, 0));
         ame_v3 c2 = ame_m4_xform_point(m, ame_v3_(x0 + w, y0 + h, 0));
         ame_v3 c3 = ame_m4_xform_point(m, ame_v3_(x0, y0 + h, 0));
-        float q0[3] = { c0.x, c0.y, c0.z };
-        float q1[3] = { c1.x, c1.y, c1.z };
-        float q2[3] = { c2.x, c2.y, c2.z };
-        float q3[3] = { c3.x, c3.y, c3.z };
-        rp_push_quad(g_atlas_tex >= 0 ? g_atlas_tex : rp_white_texture(),
-                     q0, q1, q2, q3, u0, v0, u1, v1, col, layer);
+        ame_rp_quad q;
+        q.tex = tex;
+        q.p0[0] = c0.x; q.p0[1] = c0.y; q.p0[2] = c0.z;
+        q.p1[0] = c1.x; q.p1[1] = c1.y; q.p1[2] = c1.z;
+        q.p2[0] = c2.x; q.p2[1] = c2.y; q.p2[2] = c2.z;
+        q.p3[0] = c3.x; q.p3[1] = c3.y; q.p3[2] = c3.z;
+        q.u0 = u0; q.v0 = v0; q.u1 = u1; q.v1 = v1;
+        q.tint[0] = col[0]; q.tint[1] = col[1];
+        q.tint[2] = col[2]; q.tint[3] = col[3];
+        q.layer = layer;
+        if (marked)
+            rp_push_text_quad(&q);
+        else
+            rp_push_quad(&q);
     }
 }
