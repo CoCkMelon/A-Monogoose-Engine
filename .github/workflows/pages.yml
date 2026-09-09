@@ -37,7 +37,7 @@ jobs:
         with:
           node-version: 22
 
-      - uses: emscripten-core/emsdk-action@v4
+      - uses: emscripten-core/setup-emsdk@v16
 
       - name: build (emcc -> docs/games/*.js, single file each)
         run: sh web/build.sh
