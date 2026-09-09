@@ -562,9 +562,12 @@ int main(void) {
 
         /* 2D screen-space smooth text (the text_editor path), drawn
          * under the SMOOTH face (the pre-pass-suite version of this
-         * block accidentally drew pixel here) */
+         * block accidentally drew pixel here). c2 lives at case scope:
+         * the DSDF sub-case below borrows the camera (its world text
+         * needs cam3) and must restore c2 for the screen-space cases
+         * after it (caret oracle). */
+        ame_camera c2;
         {
-            ame_camera c2;
             text_set_font(AME_FONT_SMOOTH);
             camera_viewport(camera_ortho2d(camera_desc(&c2)), W, H);
             camera_pos(&c2, (float)W * 0.5f, (float)H * 0.5f, 0);
@@ -646,10 +649,12 @@ int main(void) {
             text_draw_world(&lg, pose2, white, 20);
             rp_end_frame();
             UT_ASSERT(hash_frame() == hd3);
-            /* back to the UI pass + pixel face for the cases below */
+            /* back to the UI pass + pixel face + 2D camera for the
+             * screen-space cases below (caret oracle) */
             text_set_font(AME_FONT_PIXEL);
             ame_rp_pass_frame ui = { 0 };
             rp_pass_begin(&ui);
+            rp_set_camera(&c2);
         }
 
         /* ---- audit P0-2: the pixel-level caret oracle, IN CI ----

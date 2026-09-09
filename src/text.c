@@ -327,6 +327,12 @@ static float glyph_advance(int glyph, float scale) {
         return w * scale + 2.0f * scale;
     }
     if (g_font_mode == AME_FONT_SMOOTH) {
+        /* hires advances are baked pre-divided to 32px layout units */
+        int d = hires_glyph_find(ame_font_glyphs[glyph].cp);
+        if (d >= 0)
+            return ame_hires_glyphs[d].advance * scale;
+    }
+    if (g_font_mode == AME_FONT_DSDF) {
         int d = dsdf_glyph_find(ame_font_glyphs[glyph].cp);
         if (d >= 0)
             return ame_dsdf_glyphs[d].advance * scale;
