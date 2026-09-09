@@ -1,24 +1,22 @@
-name: Rebuild web companion for GitHub Pages
+name: Rebuild WASM site for GitHub Pages
 
-# GitHub Pages serves /docs from this branch (legacy source). The site is a
-# Vite single-file build with the engine's wasm ports inlined, so this job
-# rebuilds dist/ and refreshes docs/index.html whenever the web sources
-# change. Path filters prevent loops: the bot commit only touches docs/**,
-# which is not a trigger path.
+# GitHub Pages serves /docs from this branch (legacy source). The site is
+# three single-file Emscripten bundles compiled from the SAME C sources as
+# desktop (web/build.sh) plus a ~70-line hand-written loader — no npm, no
+# bundler. This job rebuilds docs/ whenever the C/web sources change and
+# pushes the result back. Path filters prevent loops: the bot commit only
+# touches docs/**, which is not a trigger path.
 
 on:
   push:
     branches: [agent/ame-next-20260905-4ad0fd06]
     paths:
-      - "index.html"
-      - "package.json"
-      - "package-lock.json"
-      - "vite.config.ts"
-      - "tsconfig.json"
-      - "src/**/*.ts"
-      - "src/**/*.tsx"
-      - "src/**/*.css"
-      - "src/wasm/**"
+      - "src/**"
+      - "include/**"
+      - "generated/**"
+      - "examples/**"
+      - "external/**"
+      - "web/**"
       - ".github/workflows/pages.yml"
   workflow_dispatch:
 
@@ -38,17 +36,14 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: npm
 
-      - name: install
-        run: npm ci
+      - uses: emscripten-core/emsdk-action@v4
 
-      - name: build (vite -> dist/index.html, single file)
-        run: npm run build
+      - name: build (emcc -> docs/games/*.js, single file each)
+        run: sh web/build.sh
 
-      - name: refresh docs/index.html when the build changed
+      - name: refresh docs/ when the build changed
         run: |
-          cp dist/index.html docs/index.html
           touch docs/.nojekyll
           if git diff --quiet -- docs/; then
             echo "docs already up to date"
@@ -56,6 +51,6 @@ jobs:
           fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add docs/index.html docs/.nojekyll
-          git commit -m "chore(pages): rebuild web companion (docs/index.html)"
+          git add docs/
+          git commit -m "chore(pages): rebuild wasm bundles (web/build.sh)"
           git push

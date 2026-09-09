@@ -52,6 +52,14 @@ target_include_directories(test_mem_sim PRIVATE
     ${CMAKE_SOURCE_DIR}/examples/memory_game)
 add_test(NAME mem_sim COMMAND test_mem_sim)
 
+# memory game launch config (pure env parsing, no SDL/GL)
+add_executable(test_mem_config test_mem_config.c
+    ${CMAKE_SOURCE_DIR}/examples/memory_game/mem_config.c)
+target_include_directories(test_mem_config PRIVATE
+    ${CMAKE_SOURCE_DIR}/examples/memory_game)
+target_compile_options(test_mem_config PRIVATE -Wall -Wextra -Werror)
+add_test(NAME mem_config COMMAND test_mem_config)
+
 # Stage 1 exit: authoritative online Memory over loopback — two client
 # sessions play a REAL server process ($<TARGET_FILE:mem_server>) to a
 # verified winner, one client drops mid-game, a rejoining client gets a

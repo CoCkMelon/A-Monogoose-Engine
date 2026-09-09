@@ -7,6 +7,7 @@
 add_executable(memory_game
     mem_sim.c
     mem_net.c
+    mem_config.c
     mem_app.c
     ${AME_BOOTSTRAP_SRC})
 target_link_libraries(memory_game PRIVATE ame::3d ame_font)
@@ -36,6 +37,7 @@ if(AME_BUILD_ASYNCINPUT_GAME)
     add_executable(memory_game_asyncinput
         mem_sim.c
         mem_net.c
+        mem_config.c
         mem_app.c
         ${CMAKE_SOURCE_DIR}/src/input_asyncinput.c
         ${AME_BOOTSTRAP_SRC})

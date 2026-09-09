@@ -112,6 +112,20 @@ distro has it, otherwise a full `$ORIGIN/lib` bundle) and
 check, and same-seed ⇒ byte-identical screenshots. CI runs both
 (`package` + `clean-smoke` jobs).
 
+## Benchmarks
+
+Headless microbenchmarks live in `benches/` (no GL/window needed) and run under ctest
+(`ctest -R bench`); full numbers + the six optimizations they drove are in
+[`BENCH_REPORT.md`](BENCH_REPORT.md) (pool churn 36.8×, render sort 3–55×, input step 12.3×,
+capsule-vs-AABB 10.5×, text layout 2.1–2.6×, audio mixer 1.32× bit-identical — all
+pixel-/hash-identical to the pre-optimization output).
+
+```sh
+ninja -C build bench_core bench_render_sort
+./build/benches/bench_core
+./build/benches/bench_render_sort
+```
+
 ## The multipass decision (Stage 2, made)
 
 `docs/render.txt` deferred multipass until a real need; Stage 2 is it.
@@ -131,6 +145,7 @@ include/ame/  engine headers (math, pool, events, camera, render, text, …)
 src/          engine core (C23; per-dimension build via AME_2D/AME_3D)
 examples/memory_game/  the FIRST GAME (own CMakeLists) + mem_server
 tests/        ctest suites (logic, geometry, camera, text, render, net)
+benches/      headless microbenchmarks (bench_core, bench_render_sort)
 tools/        bake_font, bake_font_dsdf, pack.sh, smoke.sh
 lean/         Lean 4 model (pure core, no mathlib, zero sorry)
 docs/         THE SPEC (README.txt first)
