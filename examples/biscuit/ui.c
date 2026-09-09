@@ -20,25 +20,43 @@ void ui_render_hud(ame_pipeline *p, const ame_font *font, const ame_camera *cam,
     else
         snprintf(hud, sizeof(hud), "ON FOOT  HP %.0f/%.0f  FUEL %.0f/%.0f",
                  s->human_hp, s->human_max_hp, s->fuel, s->max_fuel);
-    ame_font_draw(p, font, cam->left + 0.35f, hy, z_hud, px, hud, white_c);
+    ame_font_draw(&(ame_font_draw_args){
+        .p = p, .font = font, .x = cam->left + 0.35f, .y = hy, .z = z_hud,
+        .pixel_size = px, .text = hud, .color = white_c
+    });
 
     if (s->won)
-        ame_font_draw(p, font, s->cam_x - 2.4f, s->cam_y + 2.2f, z_hud, 0.07f,
-                      "BISCUIT SECURED", gold);
+        ame_font_draw(&(ame_font_draw_args){
+            .p = p, .font = font, .x = s->cam_x - 2.4f, .y = s->cam_y + 2.2f,
+            .z = z_hud, .pixel_size = 0.07f, .text = "BISCUIT SECURED", .color = gold
+        });
 
     if (s->dialogue_on && s->dialogue[0]) {
-        ame_font_draw(p, font, cam->left + 0.4f, cam->bottom + 0.85f,
-                      z_hud, 0.042f, s->dialogue, gold);
-        ame_font_draw(p, font, cam->left + 0.4f, cam->bottom + 0.45f,
-                      z_hud, 0.036f, "ENTER / SPACE", dim);
+        ame_font_draw(&(ame_font_draw_args){
+            .p = p, .font = font, .x = cam->left + 0.4f, .y = cam->bottom + 0.85f,
+            .z = z_hud, .pixel_size = 0.042f, .text = s->dialogue, .color = gold
+        });
+        ame_font_draw(&(ame_font_draw_args){
+            .p = p, .font = font, .x = cam->left + 0.4f, .y = cam->bottom + 0.45f,
+            .z = z_hud, .pixel_size = 0.036f, .text = "ENTER / SPACE", .color = dim
+        });
     } else {
-        ame_font_draw(p, font, cam->left + 0.35f, cam->bottom + 0.35f,
-                      z_hud, 0.034f, "W/S GAS  A/D YAW  SHIFT BOOST  E SWITCH  R RESTART", dim);
+        ame_font_draw(&(ame_font_draw_args){
+            .p = p, .font = font, .x = cam->left + 0.35f, .y = cam->bottom + 0.35f,
+            .z = z_hud, .pixel_size = 0.034f,
+            .text = "W/S GAS  A/D YAW  SHIFT BOOST  E SWITCH  R RESTART",
+            .color = dim
+        });
     }
     if (s->car_jump && s->mode == BF_MODE_CAR && !s->dialogue_on)
-        ame_font_draw(p, font, cam->left + 0.35f, cam->bottom + 0.70f,
-                      z_hud, 0.034f, "SPACE HOP", gold);
+        ame_font_draw(&(ame_font_draw_args){
+            .p = p, .font = font, .x = cam->left + 0.35f, .y = cam->bottom + 0.70f,
+            .z = z_hud, .pixel_size = 0.034f, .text = "SPACE HOP", .color = gold
+        });
     if (!s->input_ok)
-        ame_font_draw(p, font, cam->left + 0.35f, cam->bottom + 1.3f,
-                      z_hud, 0.04f, "NO INPUT - ADD USER TO INPUT GROUP", red);
+        ame_font_draw(&(ame_font_draw_args){
+            .p = p, .font = font, .x = cam->left + 0.35f, .y = cam->bottom + 1.3f,
+            .z = z_hud, .pixel_size = 0.04f,
+            .text = "NO INPUT - ADD USER TO INPUT GROUP", .color = red
+        });
 }

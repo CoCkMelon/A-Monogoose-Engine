@@ -39,16 +39,17 @@ static const char *k_fs =
 const char *ame_shader_default_vertex(void) { return k_vs; }
 const char *ame_shader_default_fragment(void) { return k_fs; }
 
-ame_vertex ame_vertex_make(float x, float y, float z,
-                           float nx, float ny, float nz,
-                           float u, float v,
-                           ame_rgba color)
+ame_vertex ame_vertex_make(const ame_vertex_make_args *a)
 {
     ame_vertex vert;
-    vert.px = x; vert.py = y; vert.pz = z;
-    vert.nx = nx; vert.ny = ny; vert.nz = nz;
-    vert.u = u; vert.v = v;
-    vert.r = color.r; vert.g = color.g; vert.b = color.b; vert.a = color.a;
+    if (!a) {
+        memset(&vert, 0, sizeof(vert));
+        return vert;
+    }
+    vert.px = a->x; vert.py = a->y; vert.pz = a->z;
+    vert.nx = a->nx; vert.ny = a->ny; vert.nz = a->nz;
+    vert.u = a->u; vert.v = a->v;
+    vert.r = a->color.r; vert.g = a->color.g; vert.b = a->color.b; vert.a = a->color.a;
     return vert;
 }
 
@@ -234,18 +235,21 @@ static void range_open(ame_pipeline *p, unsigned tex)
     p->range_open = 1;
 }
 
-void ame_batch_begin(ame_pipeline *p)
+void ame_batch_begin(const ame_batch_begin_args *a)
 {
-    if (!p) return;
+    if (!a || !a->p) return;
+    ame_pipeline *p = a->p;
     p->vert_count = 0;
     p->range_count = 0;
     p->range_open = 0;
     p->batch_tex = p->texture;
 }
 
-void ame_batch_set_texture(ame_pipeline *p, unsigned tex)
+void ame_batch_set_texture(const ame_batch_set_texture_args *a)
 {
-    if (!p) return;
+    if (!a || !a->p) return;
+    ame_pipeline *p = a->p;
+    unsigned tex = a->tex;
     if (!p->range_open) {
         p->batch_tex = tex;
         return;
@@ -255,7 +259,8 @@ void ame_batch_set_texture(ame_pipeline *p, unsigned tex)
     range_open(p, tex);
 }
 
-void ame_batch_vertex(ame_pipeline *p, ame_vertex v)
+/* Internal: push one vertex without building a temporary args struct. */
+static void push_vert(ame_pipeline *p, ame_vertex v)
 {
     if (!p || p->vert_count >= AME_BATCH_MAX_VERTS) return;
     if (!p->range_open)
@@ -263,74 +268,103 @@ void ame_batch_vertex(ame_pipeline *p, ame_vertex v)
     p->verts[p->vert_count++] = v;
 }
 
-void ame_batch_triangle(ame_pipeline *p, ame_vertex a, ame_vertex b, ame_vertex c)
+void ame_batch_vertex(const ame_batch_vertex_args *a)
 {
-    ame_batch_vertex(p, a);
-    ame_batch_vertex(p, b);
-    ame_batch_vertex(p, c);
+    if (!a || !a->p) return;
+    push_vert(a->p, a->v);
 }
 
-void ame_batch_quad(ame_pipeline *p,
-                    vec3 p0, vec3 p1, vec3 p2, vec3 p3, vec3 normal,
-                    ame_uv uv, ame_rgba color)
+void ame_batch_triangle(const ame_batch_triangle_args *a)
 {
-    ame_vertex v0 = ame_vertex_make(p0.x, p0.y, p0.z, normal.x, normal.y, normal.z, uv.u0, uv.v0, color);
-    ame_vertex v1 = ame_vertex_make(p1.x, p1.y, p1.z, normal.x, normal.y, normal.z, uv.u1, uv.v0, color);
-    ame_vertex v2 = ame_vertex_make(p2.x, p2.y, p2.z, normal.x, normal.y, normal.z, uv.u1, uv.v1, color);
-    ame_vertex v3 = ame_vertex_make(p3.x, p3.y, p3.z, normal.x, normal.y, normal.z, uv.u0, uv.v1, color);
-    ame_batch_triangle(p, v0, v1, v2);
-    ame_batch_triangle(p, v0, v2, v3);
+    if (!a || !a->p) return;
+    push_vert(a->p, a->a);
+    push_vert(a->p, a->b);
+    push_vert(a->p, a->c);
 }
 
-void ame_batch_xy_rect(ame_pipeline *p,
-                       float x, float y, float z, float w, float h,
-                       ame_uv uv, ame_rgba color)
+static void push_quad(ame_pipeline *p,
+                      vec3 p0, vec3 p1, vec3 p2, vec3 p3, vec3 normal,
+                      ame_uv uv, ame_rgba color)
 {
-    float hx = w * 0.5f, hy = h * 0.5f;
-    ame_batch_quad(p,
-                   v3(x - hx, y - hy, z), v3(x + hx, y - hy, z),
-                   v3(x + hx, y + hy, z), v3(x - hx, y + hy, z),
-                   v3(0, 0, 1), uv, color);
+    /* Pack color once; write six verts without re-constructing via make(). */
+    float r = color.r, g = color.g, b = color.b, al = color.a;
+    float nx = normal.x, ny = normal.y, nz = normal.z;
+    ame_vertex v0 = {p0.x, p0.y, p0.z, nx, ny, nz, uv.u0, uv.v0, r, g, b, al};
+    ame_vertex v1 = {p1.x, p1.y, p1.z, nx, ny, nz, uv.u1, uv.v0, r, g, b, al};
+    ame_vertex v2 = {p2.x, p2.y, p2.z, nx, ny, nz, uv.u1, uv.v1, r, g, b, al};
+    ame_vertex v3 = {p3.x, p3.y, p3.z, nx, ny, nz, uv.u0, uv.v1, r, g, b, al};
+    push_vert(p, v0);
+    push_vert(p, v1);
+    push_vert(p, v2);
+    push_vert(p, v0);
+    push_vert(p, v2);
+    push_vert(p, v3);
 }
 
-void ame_batch_box(ame_pipeline *p, mat4 world, vec3 half_extents,
-                   ame_uv uv_pos_z, ame_uv uv_neg_z, ame_rgba color)
+void ame_batch_quad(const ame_batch_quad_args *a)
 {
-    float hx = half_extents.x, hy = half_extents.y, hz = half_extents.z;
+    if (!a || !a->p) return;
+    push_quad(a->p, a->p0, a->p1, a->p2, a->p3, a->normal, a->uv, a->color);
+}
+
+void ame_batch_xy_rect(const ame_batch_xy_rect_args *a)
+{
+    if (!a || !a->p) return;
+    float hx = a->w * 0.5f, hy = a->h * 0.5f;
+    float x = a->x, y = a->y, z = a->z;
+    push_quad(a->p,
+              v3(x - hx, y - hy, z), v3(x + hx, y - hy, z),
+              v3(x + hx, y + hy, z), v3(x - hx, y + hy, z),
+              v3(0, 0, 1), a->uv, a->color);
+}
+
+void ame_batch_box(const ame_batch_box_args *a)
+{
+    if (!a || !a->p) return;
+    mat4 world = a->world;
+    float hx = a->half_extents.x, hy = a->half_extents.y, hz = a->half_extents.z;
+    ame_rgba color = a->color;
     ame_rgba edge = ame_rgba_make(color.r * 0.45f, color.g * 0.45f, color.b * 0.45f, color.a);
-    ame_uv solid = uv_pos_z; /* sides reuse a texel from the +Z sheet */
+    ame_uv uv_pos = a->uv_pos_z;
+    ame_uv uv_neg = a->uv_neg_z;
+    ame_uv solid = uv_pos;
 
-    ame_batch_quad(p,
-        ame_transform_point(world, -hx, -hy,  hz), ame_transform_point(world,  hx, -hy,  hz),
-        ame_transform_point(world,  hx,  hy,  hz), ame_transform_point(world, -hx,  hy,  hz),
-        ame_transform_normal(world, 0, 0, 1), uv_pos_z, color);
-    ame_batch_quad(p,
-        ame_transform_point(world,  hx, -hy, -hz), ame_transform_point(world, -hx, -hy, -hz),
-        ame_transform_point(world, -hx,  hy, -hz), ame_transform_point(world,  hx,  hy, -hz),
-        ame_transform_normal(world, 0, 0, -1), uv_neg_z, color);
-    ame_batch_quad(p,
-        ame_transform_point(world,  hx, -hy,  hz), ame_transform_point(world,  hx, -hy, -hz),
-        ame_transform_point(world,  hx,  hy, -hz), ame_transform_point(world,  hx,  hy,  hz),
-        ame_transform_normal(world, 1, 0, 0), solid, edge);
-    ame_batch_quad(p,
-        ame_transform_point(world, -hx, -hy, -hz), ame_transform_point(world, -hx, -hy,  hz),
-        ame_transform_point(world, -hx,  hy,  hz), ame_transform_point(world, -hx,  hy, -hz),
-        ame_transform_normal(world, -1, 0, 0), solid, edge);
-    ame_batch_quad(p,
-        ame_transform_point(world, -hx,  hy,  hz), ame_transform_point(world,  hx,  hy,  hz),
-        ame_transform_point(world,  hx,  hy, -hz), ame_transform_point(world, -hx,  hy, -hz),
-        ame_transform_normal(world, 0, 1, 0), solid, color);
-    ame_batch_quad(p,
-        ame_transform_point(world, -hx, -hy, -hz), ame_transform_point(world,  hx, -hy, -hz),
-        ame_transform_point(world,  hx, -hy,  hz), ame_transform_point(world, -hx, -hy,  hz),
-        ame_transform_normal(world, 0, -1, 0), solid, edge);
+    /* Transform the 8 corners once (was 24 m4_mul_point calls). */
+    vec3 c000 = ame_transform_point(world, -hx, -hy, -hz);
+    vec3 c001 = ame_transform_point(world, -hx, -hy,  hz);
+    vec3 c010 = ame_transform_point(world, -hx,  hy, -hz);
+    vec3 c011 = ame_transform_point(world, -hx,  hy,  hz);
+    vec3 c100 = ame_transform_point(world,  hx, -hy, -hz);
+    vec3 c101 = ame_transform_point(world,  hx, -hy,  hz);
+    vec3 c110 = ame_transform_point(world,  hx,  hy, -hz);
+    vec3 c111 = ame_transform_point(world,  hx,  hy,  hz);
+
+    vec3 npz = ame_transform_normal(world, 0, 0, 1);
+    vec3 nnz = ame_transform_normal(world, 0, 0, -1);
+    vec3 npx = ame_transform_normal(world, 1, 0, 0);
+    vec3 nnx = ame_transform_normal(world, -1, 0, 0);
+    vec3 npy = ame_transform_normal(world, 0, 1, 0);
+    vec3 nny = ame_transform_normal(world, 0, -1, 0);
+
+    ame_pipeline *p = a->p;
+    /* +Z */ push_quad(p, c001, c101, c111, c011, npz, uv_pos, color);
+    /* -Z */ push_quad(p, c100, c000, c010, c110, nnz, uv_neg, color);
+    /* +X */ push_quad(p, c101, c100, c110, c111, npx, solid, edge);
+    /* -X */ push_quad(p, c000, c001, c011, c010, nnx, solid, edge);
+    /* +Y */ push_quad(p, c011, c111, c110, c010, npy, solid, color);
+    /* -Y */ push_quad(p, c000, c100, c101, c001, nny, solid, edge);
 }
 
-void ame_batch_cylinder_z(ame_pipeline *p, mat4 world,
-                          float radius, float half_z, int segments,
-                          ame_uv uv, ame_rgba color)
+void ame_batch_cylinder_z(const ame_batch_cylinder_z_args *a)
 {
-    if (!p || radius <= 0.0f) return;
+    if (!a || !a->p || a->radius <= 0.0f) return;
+    ame_pipeline *p = a->p;
+    mat4 world = a->world;
+    float radius = a->radius;
+    float half_z = a->half_z;
+    int segments = a->segments;
+    ame_uv uv = a->uv;
+    ame_rgba color = a->color;
     if (segments < 6) segments = 6;
     if (segments > 24) segments = 24;
     const float two_pi = 6.28318530718f;
@@ -341,6 +375,7 @@ void ame_batch_cylinder_z(ame_pipeline *p, mat4 world,
     vec3 c_neg = ame_transform_point(world, 0, 0, -half_z);
     float um = 0.5f * (uv.u0 + uv.u1);
     float vm = 0.5f * (uv.v0 + uv.v1);
+    float cr = color.r, cg = color.g, cb = color.b, ca = color.a;
     for (int i = 0; i < segments; i++) {
         float a0 = two_pi * (float)i / (float)segments;
         float a1 = two_pi * (float)(i + 1) / (float)segments;
@@ -350,47 +385,48 @@ void ame_batch_cylinder_z(ame_pipeline *p, mat4 world,
         vec3 p1 = ame_transform_point(world, x1, y1, half_z);
         vec3 q0 = ame_transform_point(world, x0, y0, -half_z);
         vec3 q1 = ame_transform_point(world, x1, y1, -half_z);
-        ame_vertex vp0 = ame_vertex_make(p0.x, p0.y, p0.z, n_pos.x, n_pos.y, n_pos.z, uv.u1, vm, color);
-        ame_vertex vp1 = ame_vertex_make(p1.x, p1.y, p1.z, n_pos.x, n_pos.y, n_pos.z, uv.u0, vm, color);
-        ame_vertex vpc = ame_vertex_make(c_pos.x, c_pos.y, c_pos.z, n_pos.x, n_pos.y, n_pos.z, um, vm, color);
-        ame_batch_triangle(p, vpc, vp0, vp1);
-        ame_vertex vq0 = ame_vertex_make(q0.x, q0.y, q0.z, n_neg.x, n_neg.y, n_neg.z, uv.u0, vm, color);
-        ame_vertex vq1 = ame_vertex_make(q1.x, q1.y, q1.z, n_neg.x, n_neg.y, n_neg.z, uv.u1, vm, color);
-        ame_vertex vqc = ame_vertex_make(c_neg.x, c_neg.y, c_neg.z, n_neg.x, n_neg.y, n_neg.z, um, vm, color);
-        ame_batch_triangle(p, vqc, vq1, vq0);
+        ame_vertex vp0 = {p0.x, p0.y, p0.z, n_pos.x, n_pos.y, n_pos.z, uv.u1, vm, cr, cg, cb, ca};
+        ame_vertex vp1 = {p1.x, p1.y, p1.z, n_pos.x, n_pos.y, n_pos.z, uv.u0, vm, cr, cg, cb, ca};
+        ame_vertex vpc = {c_pos.x, c_pos.y, c_pos.z, n_pos.x, n_pos.y, n_pos.z, um, vm, cr, cg, cb, ca};
+        push_vert(p, vpc); push_vert(p, vp0); push_vert(p, vp1);
+        ame_vertex vq0 = {q0.x, q0.y, q0.z, n_neg.x, n_neg.y, n_neg.z, uv.u0, vm, cr, cg, cb, ca};
+        ame_vertex vq1 = {q1.x, q1.y, q1.z, n_neg.x, n_neg.y, n_neg.z, uv.u1, vm, cr, cg, cb, ca};
+        ame_vertex vqc = {c_neg.x, c_neg.y, c_neg.z, n_neg.x, n_neg.y, n_neg.z, um, vm, cr, cg, cb, ca};
+        push_vert(p, vqc); push_vert(p, vq1); push_vert(p, vq0);
         vec3 ns = ame_transform_normal(world, cosf(0.5f * (a0 + a1)), sinf(0.5f * (a0 + a1)), 0);
-        ame_batch_quad(p, p0, q0, q1, p1, ns, uv, rim);
+        push_quad(p, p0, q0, q1, p1, ns, uv, rim);
     }
 }
 
-void ame_batch_line(ame_pipeline *p, vec3 a, vec3 b, float half_width,
-                    ame_uv uv, ame_rgba color)
+void ame_batch_line(const ame_batch_line_args *a)
 {
-    if (!p || half_width <= 0.0f) return;
-    float dx = b.x - a.x, dy = b.y - a.y;
+    if (!a || !a->p || a->half_width <= 0.0f) return;
+    float dx = a->b.x - a->a.x, dy = a->b.y - a->a.y;
     float plen = sqrtf(dx * dx + dy * dy);
     float px, py;
+    float hw = a->half_width;
     if (plen < 1e-8f) {
-        px = half_width;
+        px = hw;
         py = 0.0f;
     } else {
-        px = (-dy / plen) * half_width;
-        py = (dx / plen) * half_width;
+        px = (-dy / plen) * hw;
+        py = (dx / plen) * hw;
     }
-    ame_batch_quad(p,
-                   v3(a.x + px, a.y + py, a.z),
-                   v3(b.x + px, b.y + py, b.z),
-                   v3(b.x - px, b.y - py, b.z),
-                   v3(a.x - px, a.y - py, a.z),
-                   v3(0, 0, 1), uv, color);
+    push_quad(a->p,
+              v3(a->a.x + px, a->a.y + py, a->a.z),
+              v3(a->b.x + px, a->b.y + py, a->b.z),
+              v3(a->b.x - px, a->b.y - py, a->b.z),
+              v3(a->a.x - px, a->a.y - py, a->a.z),
+              v3(0, 0, 1), a->uv, a->color);
 }
 
-void ame_batch_flush(ame_pipeline *p, const float *view_projection_4x4)
+void ame_batch_flush(const ame_batch_flush_args *a)
 {
-    if (!p || !p->ready || p->vert_count <= 0) return;
+    if (!a || !a->p || !a->p->ready || a->p->vert_count <= 0) return;
+    ame_pipeline *p = a->p;
     range_close(p);
     glUseProgram(p->prog);
-    glUniformMatrix4fv(p->u_view_projection, 1, GL_FALSE, view_projection_4x4);
+    glUniformMatrix4fv(p->u_view_projection, 1, GL_FALSE, a->view_projection_4x4);
     glUniform1i(p->u_texture, 0);
     glActiveTexture(GL_TEXTURE0);
     glBindVertexArray(p->vao);

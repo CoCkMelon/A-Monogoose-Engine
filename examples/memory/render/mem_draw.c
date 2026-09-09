@@ -93,20 +93,42 @@ static void draw_pointer(ame_pipeline *p, const ame_font *font, float x, float y
     vec3 n = v3(0, 0, 1);
     ame_uv wuv = font->white;
 
-    /* Outline (slightly larger) */
-    ame_vertex o0 = ame_vertex_make(x,          y + 0.08f, z_back, n.x, n.y, n.z, wuv.u0, wuv.v0, black);
-    ame_vertex o1 = ame_vertex_make(x + 0.48f,  y - 1.15f, z_back, n.x, n.y, n.z, wuv.u0, wuv.v0, black);
-    ame_vertex o2 = ame_vertex_make(x - 0.42f,  y - 0.88f, z_back, n.x, n.y, n.z, wuv.u0, wuv.v0, black);
-    ame_batch_triangle(p, o0, o1, o2);
+    ame_vertex o0 = ame_vertex_make(&(ame_vertex_make_args){
+        .x = x, .y = y + 0.08f, .z = z_back,
+        .nx = n.x, .ny = n.y, .nz = n.z, .u = wuv.u0, .v = wuv.v0, .color = black
+    });
+    ame_vertex o1 = ame_vertex_make(&(ame_vertex_make_args){
+        .x = x + 0.48f, .y = y - 1.15f, .z = z_back,
+        .nx = n.x, .ny = n.y, .nz = n.z, .u = wuv.u0, .v = wuv.v0, .color = black
+    });
+    ame_vertex o2 = ame_vertex_make(&(ame_vertex_make_args){
+        .x = x - 0.42f, .y = y - 0.88f, .z = z_back,
+        .nx = n.x, .ny = n.y, .nz = n.z, .u = wuv.u0, .v = wuv.v0, .color = black
+    });
+    ame_batch_triangle(&(ame_batch_triangle_args){ .p = p, .a = o0, .b = o1, .c = o2 });
 
-    ame_vertex t0 = ame_vertex_make(x,          y,       z, n.x, n.y, n.z, wuv.u0, wuv.v0, yellow);
-    ame_vertex t1 = ame_vertex_make(x + 0.38f,  y - 1.00f, z, n.x, n.y, n.z, wuv.u0, wuv.v0, yellow);
-    ame_vertex t2 = ame_vertex_make(x - 0.32f,  y - 0.76f, z, n.x, n.y, n.z, wuv.u0, wuv.v0, yellow);
-    ame_batch_triangle(p, t0, t1, t2);
+    ame_vertex t0 = ame_vertex_make(&(ame_vertex_make_args){
+        .x = x, .y = y, .z = z,
+        .nx = n.x, .ny = n.y, .nz = n.z, .u = wuv.u0, .v = wuv.v0, .color = yellow
+    });
+    ame_vertex t1 = ame_vertex_make(&(ame_vertex_make_args){
+        .x = x + 0.38f, .y = y - 1.00f, .z = z,
+        .nx = n.x, .ny = n.y, .nz = n.z, .u = wuv.u0, .v = wuv.v0, .color = yellow
+    });
+    ame_vertex t2 = ame_vertex_make(&(ame_vertex_make_args){
+        .x = x - 0.32f, .y = y - 0.76f, .z = z,
+        .nx = n.x, .ny = n.y, .nz = n.z, .u = wuv.u0, .v = wuv.v0, .color = yellow
+    });
+    ame_batch_triangle(&(ame_batch_triangle_args){ .p = p, .a = t0, .b = t1, .c = t2 });
 
-    /* Stem */
-    ame_batch_xy_rect(p, x + 0.18f, y - 1.28f, z, 0.16f, 0.55f, wuv, black);
-    ame_batch_xy_rect(p, x + 0.18f, y - 1.22f, z + 0.02f, 0.10f, 0.42f, wuv, yellow);
+    ame_batch_xy_rect(&(ame_batch_xy_rect_args){
+        .p = p, .x = x + 0.18f, .y = y - 1.28f, .z = z, .w = 0.16f, .h = 0.55f,
+        .uv = wuv, .color = black
+    });
+    ame_batch_xy_rect(&(ame_batch_xy_rect_args){
+        .p = p, .x = x + 0.18f, .y = y - 1.22f, .z = z + 0.02f, .w = 0.10f, .h = 0.42f,
+        .uv = wuv, .color = yellow
+    });
 }
 
 mem_view *mem_view_init(mem_view *v, int pixel_width, int pixel_height)
@@ -172,13 +194,19 @@ void mem_view_draw(mem_view *v, const MemSnap *snap)
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
     ame_pipeline *p = &v->pipeline;
-    ame_batch_begin(p);
+    ame_batch_begin(&(ame_batch_begin_args){ .p = p });
 
     ame_uv white = v->font.white;
     ame_rgba table_a = ame_rgba_make(0.12f, 0.09f, 0.07f, 1.0f);
     ame_rgba table_b = ame_rgba_make(0.18f, 0.13f, 0.09f, 1.0f);
-    ame_batch_xy_rect(p, 0, -0.15f, -0.12f, 9.4f, 10.6f, white, table_a);
-    ame_batch_xy_rect(p, 0, -0.15f, -0.10f, 8.8f, 10.0f, white, table_b);
+    ame_batch_xy_rect(&(ame_batch_xy_rect_args){
+        .p = p, .x = 0, .y = -0.15f, .z = -0.12f, .w = 9.4f, .h = 10.6f,
+        .uv = white, .color = table_a
+    });
+    ame_batch_xy_rect(&(ame_batch_xy_rect_args){
+        .p = p, .x = 0, .y = -0.15f, .z = -0.10f, .w = 8.8f, .h = 10.0f,
+        .uv = white, .color = table_b
+    });
 
     for (int i = 0; i < MEM_COUNT; i++) {
         const MemCardVis *c = &snap->cards[i];
@@ -190,8 +218,11 @@ void mem_view_draw(mem_view *v, const MemSnap *snap)
         if (c->hover && c->face == MEM_DOWN) tint = 1.12f;
         if (c->face == MEM_MATCHED) tint = 0.82f;
         ame_rgba col = ame_rgba_make(tint, tint, tint, 1.0f);
-        ame_batch_box(p, world, v3(c->w * 0.5f, c->h * 0.5f, 0.045f),
-                      uv_back(), uv_pair(c->pair), col);
+        ame_batch_box(&(ame_batch_box_args){
+            .p = p, .world = world,
+            .half_extents = v3(c->w * 0.5f, c->h * 0.5f, 0.045f),
+            .uv_pos_z = uv_back(), .uv_neg_z = uv_pair(c->pair), .color = col
+        });
     }
 
     /* HUD in the same pass, closer to the camera so it is never occluded. */
@@ -205,34 +236,68 @@ void mem_view_draw(mem_view *v, const MemSnap *snap)
 
     char s1[4] = { (char)('0' + snap->score[0]), 0, 0, 0 };
     char s2[4] = { (char)('0' + snap->score[1]), 0, 0, 0 };
-    ame_font_draw(p, &v->font, v->camera.left + 0.35f, hy, z_hud, px, "P1", p1);
-    ame_font_draw(p, &v->font, v->camera.left + 1.15f, hy, z_hud, px * 1.2f, s1, white_c);
-    ame_font_draw(p, &v->font, v->camera.right - 2.35f, hy, z_hud, px, "P2", p2);
-    ame_font_draw(p, &v->font, v->camera.right - 1.55f, hy, z_hud, px * 1.2f, s2, white_c);
+    ame_font_draw(&(ame_font_draw_args){
+        .p = p, .font = &v->font, .x = v->camera.left + 0.35f, .y = hy, .z = z_hud,
+        .pixel_size = px, .text = "P1", .color = p1
+    });
+    ame_font_draw(&(ame_font_draw_args){
+        .p = p, .font = &v->font, .x = v->camera.left + 1.15f, .y = hy, .z = z_hud,
+        .pixel_size = px * 1.2f, .text = s1, .color = white_c
+    });
+    ame_font_draw(&(ame_font_draw_args){
+        .p = p, .font = &v->font, .x = v->camera.right - 2.35f, .y = hy, .z = z_hud,
+        .pixel_size = px, .text = "P2", .color = p2
+    });
+    ame_font_draw(&(ame_font_draw_args){
+        .p = p, .font = &v->font, .x = v->camera.right - 1.55f, .y = hy, .z = z_hud,
+        .pixel_size = px * 1.2f, .text = s2, .color = white_c
+    });
 
     if (snap->winner < 0) {
         if (snap->turn == 0)
-            ame_font_draw(p, &v->font, -1.7f, hy, z_hud, px, "P1 TURN", p1);
+            ame_font_draw(&(ame_font_draw_args){
+                .p = p, .font = &v->font, .x = -1.7f, .y = hy, .z = z_hud,
+                .pixel_size = px, .text = "P1 TURN", .color = p1
+            });
         else
-            ame_font_draw(p, &v->font, -1.7f, hy, z_hud, px, "P2 TURN", p2);
+            ame_font_draw(&(ame_font_draw_args){
+                .p = p, .font = &v->font, .x = -1.7f, .y = hy, .z = z_hud,
+                .pixel_size = px, .text = "P2 TURN", .color = p2
+            });
     } else if (snap->winner == 2) {
-        ame_font_draw(p, &v->font, -0.6f, hy, z_hud, px * 1.3f, "TIE",
-                      ame_rgba_make(1, 0.9f, 0.4f, 1));
+        ame_font_draw(&(ame_font_draw_args){
+            .p = p, .font = &v->font, .x = -0.6f, .y = hy, .z = z_hud,
+            .pixel_size = px * 1.3f, .text = "TIE",
+            .color = ame_rgba_make(1, 0.9f, 0.4f, 1)
+        });
     } else if (snap->winner == 0) {
-        ame_font_draw(p, &v->font, -1.5f, hy, z_hud, px * 1.15f, "P1 WINS", p1);
+        ame_font_draw(&(ame_font_draw_args){
+            .p = p, .font = &v->font, .x = -1.5f, .y = hy, .z = z_hud,
+            .pixel_size = px * 1.15f, .text = "P1 WINS", .color = p1
+        });
     } else {
-        ame_font_draw(p, &v->font, -1.5f, hy, z_hud, px * 1.15f, "P2 WINS", p2);
+        ame_font_draw(&(ame_font_draw_args){
+            .p = p, .font = &v->font, .x = -1.5f, .y = hy, .z = z_hud,
+            .pixel_size = px * 1.15f, .text = "P2 WINS", .color = p2
+        });
     }
 
     float by = v->camera.bottom + 0.35f;
     if (!snap->input_ok)
-        ame_font_draw(p, &v->font, v->camera.left + 0.4f, by, z_hud, 0.045f,
-                      "NO INPUT - ADD USER TO INPUT GROUP",
-                      ame_rgba_make(1.0f, 0.35f, 0.28f, 1));
+        ame_font_draw(&(ame_font_draw_args){
+            .p = p, .font = &v->font, .x = v->camera.left + 0.4f, .y = by, .z = z_hud,
+            .pixel_size = 0.045f, .text = "NO INPUT - ADD USER TO INPUT GROUP",
+            .color = ame_rgba_make(1.0f, 0.35f, 0.28f, 1)
+        });
     else
-        ame_font_draw(p, &v->font, -1.6f, by, z_hud, 0.042f, "R RESTART   ESC QUIT", dim);
+        ame_font_draw(&(ame_font_draw_args){
+            .p = p, .font = &v->font, .x = -1.6f, .y = by, .z = z_hud,
+            .pixel_size = 0.042f, .text = "R RESTART   ESC QUIT", .color = dim
+        });
 
     draw_pointer(p, &v->font, snap->cursor_x, snap->cursor_y);
 
-    ame_batch_flush(p, ame_camera_vp(&v->camera));
+    ame_batch_flush(&(ame_batch_flush_args){
+        .p = p, .view_projection_4x4 = ame_camera_vp(&v->camera)
+    });
 }

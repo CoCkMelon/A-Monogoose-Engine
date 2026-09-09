@@ -7,6 +7,8 @@
  *
  * ASCII 32..126. Unknown codes draw a box. Layout is left-to-right,
  * baseline at y; no wrapping here (callers wrap if they need it).
+ *
+ * HOT: ame_font_draw takes one struct pointer (pipeline + layout).
  */
 
 #include "ame/gfx.h"
@@ -35,9 +37,16 @@ ame_font *ame_font_bake(ame_font *font,
 ame_uv  ame_font_glyph_uv(const ame_font *font, int ch);
 float   ame_font_width(const ame_font *font, const char *text, float pixel_size);
 
-/* pixel_size is the world size of one atlas pixel. Glyph cell is 8 pixels. */
-void ame_font_draw(ame_pipeline *batch, const ame_font *font,
-                   float x, float y, float z,
-                   float pixel_size, const char *text, ame_rgba color);
+/* HOT: one struct pointer. pixel_size = world size of one atlas pixel. */
+typedef struct ame_font_draw_args {
+    ame_pipeline   *p;
+    const ame_font *font;
+    float           x, y, z;
+    float           pixel_size;
+    const char     *text;
+    ame_rgba        color;
+} ame_font_draw_args;
+
+void ame_font_draw(const ame_font_draw_args *a);
 
 #endif

@@ -29,6 +29,8 @@ typedef struct {
 static uint32_t card_gen[MEM_COUNT];
 static uint8_t  card_alive[MEM_COUNT];
 static uint32_t card_pend[MEM_COUNT];
+static uint32_t card_pend_gen[MEM_COUNT];
+static uint32_t card_free[MEM_COUNT];
 
 static struct {
     pthread_mutex_t mu;
@@ -100,6 +102,7 @@ static void layout_unlocked(uint32_t seed)
         ids[j] = t;
     }
     ame_pool_bind(&G.cards_pool, card_gen, card_alive, card_pend, MEM_COUNT);
+    ame_pool_bind_fast(&G.cards_pool, card_pend_gen, card_free);
     ame_pool_reset(&G.cards_pool);
     for (int i = 0; i < MEM_COUNT; i++) {
         G.card_h[i] = ame_pool_spawn(&G.cards_pool);

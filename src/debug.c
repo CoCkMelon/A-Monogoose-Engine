@@ -1,5 +1,7 @@
 #include "ame/debug.h"
 
+#include <math.h>
+
 typedef struct DebugLine {
     float x0, y0, z0, x1, y1, z1;
     ame_rgba color;
@@ -72,15 +74,22 @@ void ame_debug_draw_circle_xy(float cx, float cy, float cz, float radius,
     }
 }
 
-void ame_debug_submit(ame_pipeline *p, ame_uv uv, float half_width)
+void ame_debug_submit(const ame_debug_submit_args *a)
 {
-    if (!p) return;
+    if (!a || !a->p) return;
+    float half_width = a->half_width;
     if (half_width < 0.004f) half_width = 0.004f;
+    ame_uv uv = a->uv;
+    ame_pipeline *p = a->p;
     for (int i = 0; i < g_n; i++) {
         DebugLine *L = &g_lines[i];
-        ame_batch_line(p,
-                       v3(L->x0, L->y0, L->z0),
-                       v3(L->x1, L->y1, L->z1),
-                       half_width, uv, L->color);
+        ame_batch_line(&(ame_batch_line_args){
+            .p = p,
+            .a = v3(L->x0, L->y0, L->z0),
+            .b = v3(L->x1, L->y1, L->z1),
+            .half_width = half_width,
+            .uv = uv,
+            .color = L->color
+        });
     }
 }

@@ -159,6 +159,51 @@ int main(void)
     for (int i = 0; i < N; i++)
         if (alive[i]) return fail("slot stuck alive after drain");
 
+    /*
+     * Fast path: free_list + pend_gen. Same spawn order (lowest index first),
+     * O(1) duplicate despawn, O(1) spawn after apply.
+     */
+    {
+        enum { F = 8 };
+        uint32_t fgen[F], fpend[F], fpg[F], ffree[F];
+        uint8_t falive[F];
+        ame_pool fp;
+        ame_pool_bind(&fp, fgen, falive, fpend, F);
+        ame_pool_bind_fast(&fp, fpg, ffree);
+        ame_pool_reset(&fp);
+        ame_handle a = ame_pool_spawn(&fp);
+        ame_handle b = ame_pool_spawn(&fp);
+        if (ame_handle_index(a) != 0 || ame_handle_index(b) != 1)
+            return fail("fast spawn order");
+        ame_pool_despawn(&fp, a);
+        ame_pool_despawn(&fp, a); /* duplicate — O(1) via pend_gen */
+        if (fp.n_pending != 1) return fail("fast dedupe");
+        ame_pool_apply_despawns(&fp);
+        ame_handle a2 = ame_pool_spawn(&fp);
+        if (ame_handle_index(a2) != 0) return fail("fast reuse");
+        if (ame_handle_generation(a2) == ame_handle_generation(a))
+            return fail("fast gen bump");
+        /* Fill, drain, refill: free stack must hold every slot. */
+        ame_handle all[F];
+        int n = 0;
+        all[n++] = a2; all[n++] = b;
+        for (;;) {
+            ame_handle h = ame_pool_spawn(&fp);
+            if (h == AME_HANDLE_INVALID) break;
+            all[n++] = h;
+        }
+        if (n != F) return fail("fast fill");
+        for (int i = 0; i < F; i++) ame_pool_despawn(&fp, all[i]);
+        ame_pool_apply_despawns(&fp);
+        if (ame_pool_live(&fp) != 0) return fail("fast drain");
+        if (fp.free_top != F) return fail("fast free_top");
+        for (int i = 0; i < F; i++) {
+            ame_handle h = ame_pool_spawn(&fp);
+            if (h == AME_HANDLE_INVALID) return fail("fast refill");
+        }
+        if (ame_pool_spawn(&fp) != AME_HANDLE_INVALID) return fail("fast overfill");
+    }
+
     printf("test_pool ok\n");
     return 0;
 }

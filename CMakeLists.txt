@@ -190,3 +190,19 @@ add_executable(test_gen tests/test_gen.c generated/ame_gen.c)
 target_include_directories(test_gen PRIVATE ${CMAKE_SOURCE_DIR}/generated)
 target_compile_options(test_gen PRIVATE ${AME_WARN})
 add_test(NAME test_gen COMMAND test_gen)
+
+# ---- benches (optional, headless) ----
+option(AME_BUILD_BENCHES "Build headless micro-benches" ON)
+if(AME_BUILD_BENCHES)
+    add_executable(bench_core benches/bench_core.c
+        src/pool.c src/events.c src/geo.c src/gfx.c src/gl.c
+        src/memory.c src/text.c src/math.c src/camera.c
+    )
+    target_include_directories(bench_core PRIVATE
+        ${CMAKE_SOURCE_DIR}/include
+        ${CMAKE_SOURCE_DIR}/src
+        ${CMAKE_SOURCE_DIR}/external/cglm/include
+    )
+    target_compile_options(bench_core PRIVATE ${AME_WARN} -O3)
+    target_link_libraries(bench_core PRIVATE Threads::Threads m)
+endif()

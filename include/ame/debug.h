@@ -6,6 +6,8 @@
  * Duration 0 = this frame (dropped after ame_debug_tick).
  * Submit through the game pipeline as thin quads (mongoose batch is
  * triangles in one VBO; we do not add a second GL_LINES pass).
+ *
+ * HOT submit: one struct pointer.
  */
 
 #include "ame/gfx.h"
@@ -25,7 +27,13 @@ void ame_debug_draw_ray(float ox, float oy, float oz,
 void ame_debug_draw_circle_xy(float cx, float cy, float cz, float radius,
                               ame_rgba color, int segments, float duration_s);
 
-/* Emit pending lines into the current batch. `uv` is a solid texel. */
-void ame_debug_submit(ame_pipeline *p, ame_uv uv, float half_width);
+typedef struct ame_debug_submit_args {
+    ame_pipeline *p;
+    ame_uv        uv;         /* solid texel */
+    float         half_width; /* world units */
+} ame_debug_submit_args;
+
+/* Emit pending lines into the current batch. */
+void ame_debug_submit(const ame_debug_submit_args *a);
 
 #endif

@@ -13,7 +13,9 @@ void triggers_reset_items(void)
     G.n_spawn = 0;
     G.spawn_i = 0;
     ame_pool_bind(&G.fuel_pool, G.fuel_gen, G.fuel_al, G.fuel_pd, BF_MAX_FUEL);
+    ame_pool_bind_fast(&G.fuel_pool, G.fuel_pg, G.fuel_free);
     ame_pool_bind(&G.mine_pool, G.mine_gen, G.mine_al, G.mine_pd, BF_MAX_MINE);
+    ame_pool_bind_fast(&G.mine_pool, G.mine_pg, G.mine_free);
     ame_pool_reset(&G.fuel_pool);
     ame_pool_reset(&G.mine_pool);
 }

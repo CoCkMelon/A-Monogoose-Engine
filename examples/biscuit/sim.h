@@ -35,6 +35,8 @@ typedef struct BfSim {
     uint32_t fuel_gen[BF_MAX_FUEL], mine_gen[BF_MAX_MINE];
     uint8_t  fuel_al[BF_MAX_FUEL],  mine_al[BF_MAX_MINE];
     uint32_t fuel_pd[BF_MAX_FUEL],  mine_pd[BF_MAX_MINE];
+    uint32_t fuel_pg[BF_MAX_FUEL],  mine_pg[BF_MAX_MINE]; /* pend_gen O(1) dedupe */
+    uint32_t fuel_free[BF_MAX_FUEL], mine_free[BF_MAX_MINE];
     ame_handle fuel_h[BF_MAX_FUEL], mine_h[BF_MAX_MINE];
     float fuel_x[BF_MAX_FUEL], fuel_y[BF_MAX_FUEL], fuel_amt[BF_MAX_FUEL];
     uint8_t fuel_kind[BF_MAX_FUEL]; /* 0 biscuit, 1 jump cookie */

@@ -8,6 +8,7 @@
 #include "ame/debug.h"
 
 #include <stdio.h>
+#include <math.h>
 
 static ame_uv uv_tex(int x, int y, int w, int h)
 {
@@ -124,7 +125,10 @@ static void box_at(ame_pipeline *p, float x, float y, float z,
     tr.position = v3(x, y, z);
     tr.rotation = quat_from_euler_z(ang);
     mat4 world = ame_transform_matrix(&tr);
-    ame_batch_box(p, world, v3(hx, hy, hz), uv, uv, col);
+    ame_batch_box(&(ame_batch_box_args){
+        .p = p, .world = world, .half_extents = v3(hx, hy, hz),
+        .uv_pos_z = uv, .uv_neg_z = uv, .color = col
+    });
 }
 
 void bf_view_draw(bf_view *v, const BfSnap *s)
@@ -136,12 +140,18 @@ void bf_view_draw(bf_view *v, const BfSnap *s)
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
     ame_pipeline *p = &v->pipeline;
-    ame_batch_begin(p);
+    ame_batch_begin(&(ame_batch_begin_args){ .p = p });
     ame_uv white = v->font.white;
     ame_rgba sky1 = ame_rgba_make(0.45f, 0.70f, 0.95f, 1);
     ame_rgba sky0 = ame_rgba_make(0.18f, 0.28f, 0.42f, 1);
-    ame_batch_xy_rect(p, s->cam_x, s->cam_y + 3.2f, -1.4f, 28.0f, 8.0f, white, sky1);
-    ame_batch_xy_rect(p, s->cam_x, s->cam_y - 2.8f, -1.35f, 28.0f, 6.0f, white, sky0);
+    ame_batch_xy_rect(&(ame_batch_xy_rect_args){
+        .p = p, .x = s->cam_x, .y = s->cam_y + 3.2f, .z = -1.4f,
+        .w = 28.0f, .h = 8.0f, .uv = white, .color = sky1
+    });
+    ame_batch_xy_rect(&(ame_batch_xy_rect_args){
+        .p = p, .x = s->cam_x, .y = s->cam_y - 2.8f, .z = -1.35f,
+        .w = 28.0f, .h = 6.0f, .uv = white, .color = sky0
+    });
 
     ame_uv ubisc = uv_tex(128, 0, 64, 64);
     ame_uv umine = uv_tex(192, 0, 64, 64);
@@ -160,30 +170,50 @@ void bf_view_draw(bf_view *v, const BfSnap *s)
         const LevelVert *a = &level_verts[tr->i0];
         const LevelVert *b = &level_verts[tr->i1];
         const LevelVert *c = &level_verts[tr->i2];
-        ame_vertex va = ame_vertex_make(a->x, a->y, a->z, a->nx, a->ny, a->nz, a->u, a->v, one);
-        ame_vertex vb = ame_vertex_make(b->x, b->y, b->z, b->nx, b->ny, b->nz, b->u, b->v, one);
-        ame_vertex vc = ame_vertex_make(c->x, c->y, c->z, c->nx, c->ny, c->nz, c->u, c->v, one);
-        ame_batch_triangle(p, va, vb, vc);
+        ame_vertex va = ame_vertex_make(&(ame_vertex_make_args){
+            .x = a->x, .y = a->y, .z = a->z,
+            .nx = a->nx, .ny = a->ny, .nz = a->nz,
+            .u = a->u, .v = a->v, .color = one
+        });
+        ame_vertex vb = ame_vertex_make(&(ame_vertex_make_args){
+            .x = b->x, .y = b->y, .z = b->z,
+            .nx = b->nx, .ny = b->ny, .nz = b->nz,
+            .u = b->u, .v = b->v, .color = one
+        });
+        ame_vertex vc = ame_vertex_make(&(ame_vertex_make_args){
+            .x = c->x, .y = c->y, .z = c->z,
+            .nx = c->nx, .ny = c->ny, .nz = c->nz,
+            .u = c->u, .v = c->v, .color = one
+        });
+        ame_batch_triangle(&(ame_batch_triangle_args){ .p = p, .a = va, .b = vb, .c = vc });
     }
 
     for (int i = 0; i < s->n_fuel; i++) {
         const BfItemVis *it = &s->fuel_item[i];
         if (!it->alive) continue;
         mat4 w = m4_translate(it->x, it->y, 0.15f);
-        ame_batch_cylinder_z(p, w, it->r, 0.10f, 12, ubisc, one);
+        ame_batch_cylinder_z(&(ame_batch_cylinder_z_args){
+            .p = p, .world = w, .radius = it->r, .half_z = 0.10f,
+            .segments = 12, .uv = ubisc, .color = one
+        });
     }
     for (int i = 0; i < s->n_mine; i++) {
         const BfItemVis *it = &s->mine[i];
         if (!it->alive) continue;
         mat4 w = m4_translate(it->x, it->y, 0.12f);
-        ame_batch_cylinder_z(p, w, it->r, 0.08f, 10, umine, one);
+        ame_batch_cylinder_z(&(ame_batch_cylinder_z_args){
+            .p = p, .world = w, .radius = it->r, .half_z = 0.08f,
+            .segments = 10, .uv = umine, .color = one
+        });
     }
     for (int i = 0; i < s->n_saw; i++) {
         const BfSawVis *it = &s->saw[i];
         if (!it->alive) continue;
         mat4 w = m4_mul(m4_translate(it->x, it->y, 0.10f), m4_rotate_z(it->angle));
-        ame_batch_cylinder_z(p, w, it->r, 0.07f, 14, usaw,
-                             ame_rgba_make(1.0f, 0.95f, 0.9f, 1));
+        ame_batch_cylinder_z(&(ame_batch_cylinder_z_args){
+            .p = p, .world = w, .radius = it->r, .half_z = 0.07f,
+            .segments = 14, .uv = usaw, .color = ame_rgba_make(1.0f, 0.95f, 0.9f, 1)
+        });
     }
 
     box_at(p, s->goal_x, s->goal_y, 0.2f,
@@ -220,7 +250,10 @@ void bf_view_draw(bf_view *v, const BfSnap *s)
     for (int i = 0; i < BF_MAX_WHEEL; i++) {
         mat4 w = m4_mul(m4_translate(s->wheel_x[i], s->wheel_y[i], 0.42f),
                         m4_rotate_z(s->wheel_spin[i]));
-        ame_batch_cylinder_z(p, w, s->wheel_r, 0.14f, 14, uwheel, one);
+        ame_batch_cylinder_z(&(ame_batch_cylinder_z_args){
+            .p = p, .world = w, .radius = s->wheel_r, .half_z = 0.14f,
+            .segments = 14, .uv = uwheel, .color = one
+        });
     }
 
     if (!s->human_hidden) {
@@ -246,8 +279,12 @@ void bf_view_draw(bf_view *v, const BfSnap *s)
                                      s->wheel_r, wcol, 12, 0.0f);
     }
 #endif
-    ame_debug_submit(p, white, 0.028f);
+    ame_debug_submit(&(ame_debug_submit_args){
+        .p = p, .uv = white, .half_width = 0.028f
+    });
 
     ui_render_hud(p, &v->font, &v->camera, s);
-    ame_batch_flush(p, ame_camera_vp(&v->camera));
+    ame_batch_flush(&(ame_batch_flush_args){
+        .p = p, .view_projection_4x4 = ame_camera_vp(&v->camera)
+    });
 }

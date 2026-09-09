@@ -114,7 +114,7 @@ include/ame/          engine public API
   audio.h             synth mixer (callback only mixes)
   math.h              v2/v3/v4 / quat / m3/m4 / Transform (Unity names; cglm backend)
   camera.h            SETUP camera: ortho, perspective, look-at
-  gfx.h               SETUP pipeline + HOT triangle batch (ranges per texture)
+  gfx.h               SETUP pipeline + HOT batch (ONE struct pointer per call)
   mesh.h              CPU mesh + GPU upload/draw
   obj.h               Wavefront OBJ → ame_mesh (no Flecs)
   dialogue.h          mongoose dialogue runtime + YAML→C registry
@@ -169,9 +169,29 @@ external/cglm         recp/cglm v0.9.6 headers (wrapped by math.h)
 SETUP objects (`ame_camera`, `ame_pipeline`, `ame_font`) are mutated in
 place and the same pointer is returned, so initialisation can chain.
 
-Cards live in an `ame_pool` (handles with generations). Gameplay pushes
-`MEM_EV_OPEN` / `MATCH` / `MISMATCH` / `TURN` / `WIN`; the main thread
-drains those into synth cues (flip click, match dyad, miss, win).
+HOT renderer rule: every batch push / flush / font draw takes **one
+struct pointer** (the pipeline lives inside the args). No multi-arg
+HOT signatures — call sites use a compound literal:
+
+```c
+ame_batch_xy_rect(&(ame_batch_xy_rect_args){
+    .p = pipe, .x = 0, .y = 0, .z = 0, .w = 1, .h = 1,
+    .uv = white, .color = one
+});
+```
+
+Gameplay owns the snapshot (`BfSnap` / `MemSnap`); render only reads it.
+Sim modules never include GL headers. Cards live in an `ame_pool`
+(handles with generations; optional free-list via `ame_pool_bind_fast`).
+Gameplay pushes `MEM_EV_OPEN` / `MATCH` / `MISMATCH` / `TURN` / `WIN`;
+the main thread drains those into synth cues (flip click, match dyad,
+miss, win).
+
+Headless benches (optional, default ON):
+
+```
+./build/bench_core
+```
 
 ## Lean 4 model
 

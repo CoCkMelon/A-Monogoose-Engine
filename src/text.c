@@ -80,22 +80,29 @@ float ame_font_width(const ame_font *font, const char *text, float pixel_size)
     return (float)n * 6.0f * pixel_size;
 }
 
-void ame_font_draw(ame_pipeline *batch, const ame_font *font,
-                   float x, float y, float z,
-                   float pixel_size, const char *text, ame_rgba color)
+void ame_font_draw(const ame_font_draw_args *a)
 {
-    if (!batch || !font || !text) return;
+    if (!a || !a->p || !a->font || !a->text) return;
+    const ame_font *font = a->font;
+    float pixel_size = a->pixel_size;
     float advance = 6.0f * pixel_size;
     float qw = 6.0f * pixel_size;
     float qh = 8.0f * pixel_size;
-    float cx = x;
-    for (const char *p = text; *p; p++) {
-        int gi = glyph_index((unsigned char)*p);
+    float cx = a->x;
+    float y = a->y;
+    float z = a->z;
+    ame_rgba color = a->color;
+    ame_pipeline *p = a->p;
+    for (const char *t = a->text; *t; t++) {
+        int gi = glyph_index((unsigned char)*t);
         int gx = font->origin_x + (gi % AME_TEXT_COLS) * font->cell;
         int gy = font->origin_y + (gi / AME_TEXT_COLS) * font->cell;
         /* 6x8 UV matches 6px advance so neighbouring letters never overlap. */
         ame_uv uv = ame_uv_rect(gx, gy, 6, 8, font->atlas_size, 0.5f);
-        ame_batch_xy_rect(batch, cx + qw * 0.5f, y + qh * 0.5f, z, qw, qh, uv, color);
+        ame_batch_xy_rect(&(ame_batch_xy_rect_args){
+            .p = p, .x = cx + qw * 0.5f, .y = y + qh * 0.5f, .z = z,
+            .w = qw, .h = qh, .uv = uv, .color = color
+        });
         cx += advance;
     }
 }
