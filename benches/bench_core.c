@@ -247,6 +247,7 @@ AME_SNAP_DEFINE(bench_snap_payload)
 static void bench_snap(void) {
     printf("--- snapshot (1 KiB seqlock) ---\n");
     static bench_snap_payload_snap S;
+    bench_snap_payload_snap_init(&S);
     bench_snap_payload src, dst;
     for (int i = 0; i < 256; i++)
         src.v[i] = (float)i;
