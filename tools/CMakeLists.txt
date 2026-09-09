@@ -24,6 +24,23 @@ add_custom_command(
     VERBATIM)
 add_custom_target(generated_font DEPENDS ${CMAKE_SOURCE_DIR}/generated/font_atlas.c)
 
+# hires coverage atlas: the SMOOTH text face (text.txt). DejaVuSans at
+# 64px over a 2048 atlas, layout metrics divided back to 32px units so
+# text keeps its size while sampling 2x cells through the plain
+# textured pipeline (bilinear, no shader reconstruction).
+add_custom_command(
+    OUTPUT  ${CMAKE_SOURCE_DIR}/generated/font_atlas_hires.c
+            ${CMAKE_SOURCE_DIR}/generated/font_atlas_hires.h
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_SOURCE_DIR}/generated
+    COMMAND ${CMAKE_COMMAND} -E chdir ${CMAKE_SOURCE_DIR}/generated
+            $<TARGET_FILE:bake_font> ${CMAKE_SOURCE_DIR}/assets/fonts/DejaVuSans.ttf
+            64 font_atlas_hires ame_hires AME_HIRES 2 2048 2048
+    DEPENDS bake_font ${CMAKE_SOURCE_DIR}/assets/fonts/DejaVuSans.ttf
+    COMMENT "baking hires font atlas (DejaVuSans 64px)"
+    VERBATIM)
+add_custom_target(generated_font_hires
+    DEPENDS ${CMAKE_SOURCE_DIR}/generated/font_atlas_hires.c)
+
 # DSDF baker (dense first-order distance fields; Acta Cybernetica 25,
 # 2021). bakes DejaVuSans -> RGBA atlas (R=dist GB=gradient) + metrics.
 add_executable(bake_font_dsdf bake_font_dsdf.c)
@@ -46,12 +63,49 @@ add_custom_command(
 add_custom_target(generated_font_dsdf
     DEPENDS ${CMAKE_SOURCE_DIR}/generated/font_atlas_dsdf.c)
 
+# shader baker: shaders/*.glsl -> generated/shaders_gen.c/.h (the GLSL
+# lives in SEPARATE FILES; the baked C table is what ships). NOTE: the
+# file list is explicit - adding a NEW shader module needs a CMake
+# reconfigure (touch any CMakeLists), editing one just rebuilds.
+add_executable(bake_shaders bake_shaders.c)
+target_compile_options(bake_shaders PRIVATE -Wall -Wextra -ffp-contract=off)
+set_target_properties(bake_shaders PROPERTIES C_STANDARD 23)
+set(AME_SHADER_FILES
+    textured.vert textured.frag
+    lit.vert lit.frag
+    dsdf.vert dsdf.frag
+    shadow_depth.vert shadow_depth.frag
+    post.vert post.frag
+    common/lighting.glsl common/shadow_recv.glsl common/dsdf.glsl)
+set(AME_SHADER_ARGS "")
+set(AME_SHADER_PATHS "")
+foreach(sh ${AME_SHADER_FILES})
+    get_filename_component(sh_name "${sh}" NAME)
+    list(APPEND AME_SHADER_ARGS "${sh_name}=${CMAKE_SOURCE_DIR}/shaders/${sh}")
+    list(APPEND AME_SHADER_PATHS "${CMAKE_SOURCE_DIR}/shaders/${sh}")
+endforeach()
+add_custom_command(
+    OUTPUT  ${CMAKE_SOURCE_DIR}/generated/shaders_gen.c
+            ${CMAKE_SOURCE_DIR}/generated/shaders_gen.h
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_SOURCE_DIR}/generated
+    COMMAND $<TARGET_FILE:bake_shaders>
+            ${CMAKE_SOURCE_DIR}/generated/shaders_gen ${AME_SHADER_ARGS}
+    DEPENDS bake_shaders ${AME_SHADER_PATHS}
+    COMMENT "baking shader modules (shaders/*.glsl)"
+    VERBATIM)
+add_custom_target(generated_shaders
+    DEPENDS ${CMAKE_SOURCE_DIR}/generated/shaders_gen.c)
+
 # static lib the engine/game links to get the baked arrays
 add_library(ame_font STATIC ${CMAKE_SOURCE_DIR}/generated/font_atlas.c)
 target_include_directories(ame_font PUBLIC ${CMAKE_SOURCE_DIR}/generated)
 add_dependencies(ame_font generated_font)
 target_sources(ame_font PRIVATE ${CMAKE_SOURCE_DIR}/generated/font_atlas_dsdf.c)
 add_dependencies(ame_font generated_font_dsdf)
+target_sources(ame_font PRIVATE ${CMAKE_SOURCE_DIR}/generated/font_atlas_hires.c)
+add_dependencies(ame_font generated_font_hires)
+target_sources(ame_font PRIVATE ${CMAKE_SOURCE_DIR}/generated/shaders_gen.c)
+add_dependencies(ame_font generated_shaders)
 target_compile_options(ame_font PRIVATE -w) # generated data: silence
 
 # assimp2c: build-time model baker (levels.txt Assimp rule). Optional -

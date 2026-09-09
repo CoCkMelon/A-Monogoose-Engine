@@ -147,9 +147,11 @@ int main(void) {
         camera_build(&cam2);
         rp_set_gl_loader(egl_proc);
         ame_rp_desc d;
-        int rc = rp_init(
-            rp_desc_clear(rp_desc_begin(&d), 0.05f, 0.06f, 0.09f, 1.0f),
-            &cam2, W, H);
+        rp_desc_begin(&d);
+        rp_desc_clear(&d, 0.05f, 0.06f, 0.09f, 1.0f);
+        rp_desc_size(&d, W, H);
+        rp_desc_camera(&d, &cam2);
+        int rc = rp_init(&d);
         UT_ASSERTF(rc == 0, "rp_init rc=%d (%s)", rc, rp_gl_renderer());
 
         rp_begin_frame();
@@ -160,8 +162,9 @@ int main(void) {
         for (int i = 0; i < 1000; i++) {
             float x = (float)(i % 40) * 8.0f;
             float y = (float)(i / 40) * 9.0f;
-            float tint[4] = { 0.9f, 0.8f, 0.3f, 1.0f };
-            rp_push_sprite(0, x, y, 6, 6, 0, 0, 1, 1, tint, 10);
+            rp_push_sprite(&(ame_rp_sprite){ .tex = 0, .x = x, .y = y,
+                .w = 6, .h = 6, .u0 = 0, .v0 = 0, .u1 = 1, .v1 = 1,
+                .tint = { 0.9f, 0.8f, 0.3f, 1.0f }, .layer = 10 });
         }
         rp_end_frame();
         int nonzero = 0;
@@ -191,8 +194,9 @@ int main(void) {
             for (int i = 0; i < 1000; i++) {
                 float x = (float)(i % 40) * 8.0f;
                 float y = (float)(i / 40) * 9.0f;
-                float tint[4] = { 0.9f, 0.8f, 0.3f, 1.0f };
-                rp_push_sprite(0, x, y, 6, 6, 0, 0, 1, 1, tint, 10);
+                rp_push_sprite(&(ame_rp_sprite){ .tex = 0, .x = x, .y = y,
+                    .w = 6, .h = 6, .u0 = 0, .v0 = 0, .u1 = 1, .v1 = 1,
+                    .tint = { 0.9f, 0.8f, 0.3f, 1.0f }, .layer = 10 });
             }
             rp_end_frame();
             uint32_t h2 = hash_frame();
@@ -207,8 +211,9 @@ int main(void) {
             for (int i = 0; i < 1000; i++) {
                 float x = (float)(i % 40) * 8.0f;
                 float y = (float)(i / 40) * 9.0f;
-                float tint[4] = { 0.9f, 0.8f, 0.3f, 1.0f };
-                rp_push_sprite(0, x, y, 6, 6, 0, 0, 1, 1, tint, 10);
+                rp_push_sprite(&(ame_rp_sprite){ .tex = 0, .x = x, .y = y,
+                    .w = 6, .h = 6, .u0 = 0, .v0 = 0, .u1 = 1, .v1 = 1,
+                    .tint = { 0.9f, 0.8f, 0.3f, 1.0f }, .layer = 10 });
             }
             rp_end_frame();
             UT_ASSERTF(hash_frame() != h1,
@@ -227,8 +232,9 @@ int main(void) {
             for (int i = 0; i < 1000; i++) {
                 float x = (float)(i % 40) * 8.0f;
                 float y = (float)(i / 40) * 9.0f;
-                float tint[4] = { 0.9f, 0.8f, 0.3f, 1.0f };
-                rp_push_sprite(0, x, y, 6, 6, 0, 0, 1, 1, tint, 10);
+                rp_push_sprite(&(ame_rp_sprite){ .tex = 0, .x = x, .y = y,
+                    .w = 6, .h = 6, .u0 = 0, .v0 = 0, .u1 = 1, .v1 = 1,
+                    .tint = { 0.9f, 0.8f, 0.3f, 1.0f }, .layer = 10 });
             }
             rp_end_frame();
             UT_ASSERTF(hash_frame() == h1,

@@ -74,8 +74,11 @@ int app_init(void) {
     camera_pos(&CAM, (float)VIEW_W * 0.5f, (float)VIEW_H * 0.5f, 0);
     camera_build(&CAM);
     ame_rp_desc d;
-    if (rp_init(rp_desc_clear(rp_desc_begin(&d), 0.02f, 0.02f, 0.03f, 1.0f),
-                &CAM, VIEW_W, VIEW_H))
+    rp_desc_begin(&d);
+    rp_desc_clear(&d, 0.02f, 0.02f, 0.03f, 1.0f);
+    rp_desc_size(&d, VIEW_W, VIEW_H);
+    rp_desc_camera(&d, &CAM);
+    if (rp_init(&d))
         return 1;
     rm_snap_t_snap_init(&SNAP);
     return 0;
@@ -316,12 +319,13 @@ int app_render(void) {
     float ox, oy;
     rp_screen_origin(&ox, &oy);
     float white[4] = { 1, 1, 1, 1 };
-    rp_push_quad(rm_tex,
-                 (float[3]){ ox, oy, 0 },
-                 (float[3]){ ox + VIEW_W, oy, 0 },
-                 (float[3]){ ox + VIEW_W, oy + VIEW_H, 0 },
-                 (float[3]){ ox, oy + VIEW_H, 0 },
-                 0, 0, 1, 1, white, 0);
+    rp_push_quad(&(ame_rp_quad){ .tex = rm_tex,
+        .p0 = { ox, oy, 0 },
+        .p1 = { ox + VIEW_W, oy, 0 },
+        .p2 = { ox + VIEW_W, oy + VIEW_H, 0 },
+        .p3 = { ox, oy + VIEW_H, 0 },
+        .u0 = 0, .v0 = 0, .u1 = 1, .v1 = 1,
+        .tint = { white[0], white[1], white[2], white[3] }, .layer = 0 });
     rp_end_frame();
     return 0;
 }

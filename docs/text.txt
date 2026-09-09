@@ -21,12 +21,11 @@ WHY THIS IS HARD / WHAT BROKE BEFORE
     -Werror (build.txt rule 3).
 
 DECISIONS (from the requirements)
-  1. V0 RENDERS TEXT FROM A FONT-TO-TEXTURE GLYPH ATLAS (rasterized
-     glyphs baked into an atlas texture), drawn as textured quads.
-     This is the v0 baseline: simple, reliable, works in one pass.
-     Reason: signed-distance-field text (esp. DSDF, a separate pass
-     for multi-channel SDF edge) is more complex to implement. DSDF
-     may need its OWN pass, so it is NOT the v0 path.
+  1. TEXT RENDERS FROM BAKED GLYPH ATLASES (rasterized glyphs
+     baked into atlas textures), drawn as textured quads through the
+     shared batch (render.txt). This is the baseline: simple,
+     reliable, works in pass 0. Distance-field text (DSDF) got its
+     OWN pass later (faces, below); it never replaced the atlas.
   2. Text becomes MESH geometry. Each glyph quad (from the atlas
      texture) is tessellated using per-glyph metrics; glyph quads are
      packed into the shared sprite/mesh batch alongside everything
@@ -35,14 +34,11 @@ DECISIONS (from the requirements)
      work in 2D AND 3D from one code path: each glyph quad is placed
      by a pose (a 2D x/y or a 3D position + orientation), so the same
      layout feeds both.
-  3. DSDF IS OPTIONAL, decided LATER by implementation quality.
-     Do not commit DSDF to v0. Whether the engine ever uses DSDF
-     (instead of or to augment the atlas) depends on how well an LLM
-     agent implements its multi-channel pass. Rule: ship the atlas at
-     v0; only add DSDF if/when a clean implementation exists and is
-     tested. If a separate DSDF pass is needed, that is acceptable but
-     it is a LATER rendering decision (render.txt / ui.txt), not part
-     of the v0 single-pass baseline.
+  3. DSDF IS OPTIONAL, decided by implementation quality - and it
+     has been ADOPTED as an optional third face (faces, below), with
+     its own DSDF pass (render.txt). The atlas faces stay the
+     default and the baseline; DSDF is for callers that want
+     resolution-independent edges and accept the extra pass.
   4. The atlas + glyph data can be built EITHER at startup OR at
      build time. Prefer BUILD TIME: a host tool rasterizes the font
      once and emits plain C arrays (atlas pixels + glyph metric
@@ -58,13 +54,32 @@ DECISIONS (from the requirements)
      This host tool is BUILD-TIME ONLY - it is never linked into the
      engine.
 
+FACES (text_set_font; layout AND draw both run under the face)
+  - PIXEL (default): Pixelify, nearest sampling, integer glyph
+    sizes. The pixel-art face; also the FALLBACK: requesting a
+    face whose atlas was never uploaded (text_init_hires /
+    text_init_dsdf not called) is a no-op and the mode stays PIXEL,
+    so layout metrics and draw can never disagree.
+  - SMOOTH (default smooth face): DejaVu baked at 2x into a 2048
+    coverage atlas, layout metrics divided back to 1x units. Draws
+    as PLAIN quads through the default textured pass (bilinear, no
+    shader reconstruction) - anti-aliased at any scale with zero
+    extra passes. Init with text_init_hires().
+  - DSDF (optional): DejaVu DSDF (R=distance, GB=gradient),
+    decoded per pixel by the DSDF pass program. Crispest at extreme
+    scales/rotations; the caller creates the DSDF pass
+    (AME_RP_PASS_DSDF) and begins it around the text. Init with
+    text_init_dsdf().
+  GRID CONTRACT: glyph origins and the laid-out width snap to the
+  pixel grid (integer values) in EVERY face, so text never shimmers
+  between faces or frames. Tests assert this per face.
+
 FONT SOURCE
-  - Bundle the font bytes as data (the project already has a font,
-    e.g. Pixelify). For pixel-art 2D, enable nearest/point sampling
-    and integer glyph sizes. In 3D use a softer bilinear sampling;
-    this is a sampling/filter choice at draw, not a separate font.
-    (If DSDF is adopted later, its shader-based edge replaces the
-    texture-filter crispness - decision 3.)
+  - Bundle the font bytes as data (Pixelify for PIXEL, DejaVuSans
+    for SMOOTH/DSDF). For pixel-art 2D, nearest sampling and
+    integer glyph sizes. The SMOOTH face is the softer choice at
+    draw (bilinear over 2x cells); the DSDF face replaces
+    texture-filter crispness with a shader edge (decision 3).
   - Unicode: UTF-8 input. The atlas covers the needed codepoint
     ranges (latin, latin-ext, cyrillic, plus a fallback). A missing
     glyph renders as a visible fallback box, never a crash.
@@ -106,7 +121,10 @@ API SHAPE (text.h, extern "C")
   Layout and drawing are two steps so the UI can measure before it
   draws (needed for centering and dialogue boxes).
 
-    text_init()                 load baked atlas + metrics into GL
+    text_init()                 load baked PIXEL atlas + metrics
+    text_init_hires()           upload the SMOOTH (hires) atlas
+    text_init_dsdf()            upload the DSDF atlas
+    text_set_font(face)         PIXEL / SMOOTH / DSDF (no-op fallback)
     glyph info lookup per codepoint
 
     measure(text, box_w) -> width, height, glyph count   (no draw)

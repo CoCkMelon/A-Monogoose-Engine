@@ -66,20 +66,31 @@ int  text_init(bool nearest_sampling);
 /* --- font faces ----------------------------------------------------------- */
 /* PIXEL: the baked bitmap atlas (crisp: nearest sampling + snapped pens -
  * the default and the path the grid contract was proven on).
- * SMOOTH: the baked DSDF atlas (DejaVu) - first-order densely sampled
- * distance fields (Acta Cybernetica 25, 2021), anti-aliased at any scale
- * in 2D and 3D. Layout metrics switch with the face (advances/line_h
- * come from the ACTIVE table); the snapped-pen GRID CONTRACT itself is
- * face-independent and holds for both. */
-enum { AME_FONT_PIXEL = 0, AME_FONT_SMOOTH = 1 };
+ * SMOOTH: the baked HIRES coverage atlas (DejaVu at 2x over 32px layout
+ * metrics) - anti-aliased at any scale in 2D and 3D through the plain
+ * branchless textured pipeline (bilinear, no shader reconstruction).
+ * DSDF: the baked DSDF atlas (DejaVu) - first-order densely sampled
+ * distance fields (Acta Cybernetica 25, 2021). EXPERIMENTAL (known
+ * artifacts; improving it is another agent's task): needs an app-created
+ * DSDF render pass (pushes target the current pass).
+ * Layout metrics switch with the face (advances/line_h come from the
+ * ACTIVE table); the snapped-pen GRID CONTRACT itself is face-independent
+ * and holds for all faces. */
+enum { AME_FONT_PIXEL = 0, AME_FONT_SMOOTH = 1, AME_FONT_DSDF = 2 };
 
 /* upload the baked DSDF atlas (RGBA8, linear sampling) + bind its
  * parameters to the renderer. Call once at init; optional - without it
- * the text module simply stays on the pixel face. */
+ * the DSDF face request is a no-op. */
 int  text_init_dsdf(void);
 
-/* select the active face. Falls back to PIXEL if text_init_dsdf has
- * not run (or failed) - never a missing-glyph surprise. */
+/* upload the baked hires coverage atlas (A8 direct, linear sampling).
+ * Call once at init; optional - without it the smooth face request is
+ * a no-op and text stays on the pixel face. */
+int  text_init_hires(void);
+
+/* select the active face. A face whose atlas was not uploaded
+ * (text_init_hires / text_init_dsdf) is a no-op - never a
+ * missing-glyph surprise. */
 void text_set_font(int face);
 int  text_font_mode(void);
 

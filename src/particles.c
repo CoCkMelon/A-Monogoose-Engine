@@ -93,9 +93,17 @@ int pt_draw(const ame_particles *p, const ame_camera *cam,
         ame_v3 b = ame_v3_add(c, ame_v3_sub(ro, uo)); /* right-bottom */
         ame_v3 d = ame_v3_add(c, ame_v3_add(ro, uo)); /* right-top    */
         ame_v3 e = ame_v3_add(c, ame_v3_sub(uo, ro)); /* left-top     */
-        float q0[3] = { a.x, a.y, a.z }, q1[3] = { b.x, b.y, b.z };
-        float q2[3] = { d.x, d.y, d.z }, q3[3] = { e.x, e.y, e.z };
-        rp_push_quad(tex, q0, q1, q2, q3, 0, 0, 1, 1, tint, layer);
+        ame_rp_quad q;
+        q.tex = tex;
+        q.p0[0] = a.x; q.p0[1] = a.y; q.p0[2] = a.z;
+        q.p1[0] = b.x; q.p1[1] = b.y; q.p1[2] = b.z;
+        q.p2[0] = d.x; q.p2[1] = d.y; q.p2[2] = d.z;
+        q.p3[0] = e.x; q.p3[1] = e.y; q.p3[2] = e.z;
+        q.u0 = 0; q.v0 = 0; q.u1 = 1; q.v1 = 1;
+        q.tint[0] = tint[0]; q.tint[1] = tint[1];
+        q.tint[2] = tint[2]; q.tint[3] = tint[3];
+        q.layer = layer;
+        rp_push_quad(&q);
         drawn++;
     }
     return drawn;

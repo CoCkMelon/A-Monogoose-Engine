@@ -22,7 +22,11 @@ int app_init(void) {
     camera_pos(&CAM, (float)800 * 0.5f, (float)400 * 0.5f, 0);
     camera_build(&CAM);
     ame_rp_desc d;
-    if (rp_init(rp_desc_blend(rp_desc_begin(&d), true), &CAM, 800, 400))
+    rp_desc_begin(&d);
+    rp_desc_blend(&d, true);
+    rp_desc_size(&d, 800, 400);
+    rp_desc_camera(&d, &CAM);
+    if (rp_init(&d))
         return 1;
     audio_init(48000, 2);
     g_cfg = (ame_synth_cfg){ .wave = AME_WAVE_SINE, .freq = 440.0f,
@@ -60,14 +64,17 @@ int app_render(void) {
     in_mouse_pos(&mx, &my);
     /* pan track: center line + source puck + pan rails */
     float rails[4] = { 0, 190, 800, 190 };
-    rp_push_sprite(rp_white_texture(), rails[0], rails[1], rails[2], 10,
-                   0, 0, 1, 1, (float[4]){ 0.25f, 0.28f, 0.35f, 1 }, 0);
+    rp_push_sprite(&(ame_rp_sprite){ .tex = rp_white_texture(),
+        .x = rails[0], .y = rails[1], .w = rails[2], .h = 10,
+        .u0 = 0, .v0 = 0, .u1 = 1, .v1 = 1,
+        .tint = { 0.25f, 0.28f, 0.35f, 1 }, .layer = 0 });
     float lvl = g_voice >= 0 ? audio_beat_amplitude(g_voice) : 0;
-    rp_push_sprite(rp_white_texture(), mx - 14, my - 14, 28, 28,
-                   0, 0, 1, 1, (float[4]){ 0.3f + lvl * 0.7f, 0.5f, 0.9f, 1 },
-                   5);
-    rp_push_sprite(rp_white_texture(), mx - 2, 40, 4, 320,
-                   0, 0, 1, 1, (float[4]){ 0.9f, 0.7f, 0.2f, 0.6f }, 3);
+    rp_push_sprite(&(ame_rp_sprite){ .tex = rp_white_texture(), .x = mx - 14,
+        .y = my - 14, .w = 28, .h = 28, .u0 = 0, .v0 = 0, .u1 = 1, .v1 = 1,
+        .tint = { 0.3f + lvl * 0.7f, 0.5f, 0.9f, 1 }, .layer = 5 });
+    rp_push_sprite(&(ame_rp_sprite){ .tex = rp_white_texture(), .x = mx - 2,
+        .y = 40, .w = 4, .h = 320, .u0 = 0, .v0 = 0, .u1 = 1, .v1 = 1,
+        .tint = { 0.9f, 0.7f, 0.2f, 0.6f }, .layer = 3 });
     rp_end_frame();
     return 0;
 }

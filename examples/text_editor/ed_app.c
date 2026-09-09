@@ -248,8 +248,12 @@ int app_init(void) {
     camera_pos(&CAM, (float)VIEW_W * 0.5f, (float)VIEW_H * 0.5f, 0);
     camera_build(&CAM);
     ame_rp_desc d;
-    if (rp_init(rp_desc_blend(rp_desc_depth(rp_desc_begin(&d), false), true),
-                &CAM, VIEW_W, VIEW_H))
+    rp_desc_begin(&d);
+    rp_desc_depth(&d, false);
+    rp_desc_blend(&d, true);
+    rp_desc_size(&d, VIEW_W, VIEW_H);
+    rp_desc_camera(&d, &CAM);
+    if (rp_init(&d))
         return 1;
     if (text_init(true) < 0) {
         printf("text_editor: font atlas unavailable\n");
@@ -471,9 +475,13 @@ int app_render(void) {
             int i1 = cur.sel_end < le ? cur.sel_end : le;
             index_to_px(&draw_geom, i0, &x0, &y0);
             index_to_px(&draw_geom, i1, &x1, &y1);
-            rp_push_sprite(rp_white_texture(), ox + x0, oy + y0 + 3.0f,
-                           x1 - x0, draw_geom.line_h - 6.0f, 0, 0, 1, 1,
-                           sel_tint, 5);
+            rp_push_sprite(&(ame_rp_sprite){ .tex = rp_white_texture(),
+                .x = ox + x0, .y = oy + y0 + 3.0f, .w = x1 - x0,
+                .h = draw_geom.line_h - 6.0f, .u0 = 0, .v0 = 0, .u1 = 1,
+                .v1 = 1,
+                .tint = { sel_tint[0], sel_tint[1], sel_tint[2],
+                          sel_tint[3] },
+                .layer = 5 });
         }
     }
 
@@ -525,8 +533,11 @@ int app_render(void) {
     if (solid || (((SDL_GetTicks() - t0) / 500u) & 1u) == 0u) {
         float cx, cy;
         index_to_px(&draw_geom, cur.caret, &cx, &cy);
-        rp_push_sprite(rp_white_texture(), ox + cx, oy + cy + 3.0f, 2.0f,
-                       draw_geom.line_h - 6.0f, 0, 0, 1, 1, white, 6);
+        rp_push_sprite(&(ame_rp_sprite){ .tex = rp_white_texture(),
+            .x = ox + cx, .y = oy + cy + 3.0f, .w = 2.0f,
+            .h = draw_geom.line_h - 6.0f, .u0 = 0, .v0 = 0, .u1 = 1,
+            .v1 = 1, .tint = { white[0], white[1], white[2], white[3] },
+            .layer = 6 });
     }
 
     rp_end_frame();

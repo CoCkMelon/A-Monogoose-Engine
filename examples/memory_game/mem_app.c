@@ -29,6 +29,7 @@
 
 #include "mem_sim.h"
 #include "mem_net.h"
+#include "mem_config.h"
 
 #define GRID_COLS 4
 #define GRID_ROWS 4
@@ -75,6 +76,8 @@ static int CLI_FD = -1;
 static mem_net_rx CLI_RX;
 static int g_online;
 static int g_srv_gone;
+static mem_config CFG; /* launch config, read once at boot (no getenv later) */
+static int g_autoplay;
 
 /* pick intent: main thread publishes click px, logic consumes */
 static _Atomic uint32_t pick_flag;
@@ -95,6 +98,10 @@ static char g_shot_path[256];
 /* per-pair cached text layouts (face labels) */
 static ame_text_layout pair_layout[32];
 static int pair_layout_count;
+
+/* app-created render passes: the lit scene pass (shadow + post need no
+ * per-frame handle: the shadow is armed by rp_shadow, post is uniform) */
+static int g_lit_pass;
 
 static void board_pos(int i, float out[3]) {
     int cx = i % GRID_COLS, cy = i / GRID_COLS;
@@ -162,29 +169,44 @@ int app_init(void) {
     camera_build(&CAM);
 
     ame_rp_desc d;
-    rp_init(rp_desc_post(
-                rp_desc_clear(rp_desc_begin(&d), 0.07f, 0.08f, 0.12f, 1.0f),
-                true),
-            &CAM, 1280, 720);
-    rp_post_vignette(0.28f); /* subtle Stage 2 post: focus the table */
+    rp_desc_begin(&d);
+    rp_desc_clear(&d, 0.07f, 0.08f, 0.12f, 1.0f);
+    rp_desc_size(&d, 1280, 720);
+    rp_desc_camera(&d, &CAM);
+    rp_init(&d);
+
+    /* Passes the app needs: LIT for the table/cards, SHADOW for the key
+     * light's card shadows, POST for the subtle Stage 2 vignette. */
+    ame_rp_pass_desc litd = { .kind = AME_RP_PASS_LIT };
+    g_lit_pass = rp_pass_create(&litd);
+    ame_rp_pass_desc shd = { .kind = AME_RP_PASS_SHADOW };
+    rp_pass_create(&shd);
+    ame_rp_pass_desc postd = { .kind = AME_RP_PASS_POST };
+    rp_pass_create(&postd);
+    rp_post(&(ame_rp_post){ .tint = { 1, 1, 1 }, .vignette = 0.28f });
 
     /* Stage 2 forward lighting: warm key light from the player's upper
      * left, cool ambient fill, a soft point light over the table. The
-     * label text/billboards stay UNLIT (default stamp) for clarity. */
-    float ldir[3] = { -0.35f, -0.9f, -0.25f };
-    float lcol[3] = { 1.00f, 0.95f, 0.85f };
-    float lamb[3] = { 0.42f, 0.44f, 0.52f };
-    rp_lighting(ldir, lcol, lamb);
-    float ppos[3] = { 0.0f, 2.6f, 0.0f };
-    float pcol[3] = { 0.22f, 0.20f, 0.16f };
-    rp_point_light(ppos, pcol, 6.5f);
+     * label text/billboards stay UNLIT (pass 0) for clarity. */
+    rp_lighting(&(ame_rp_light){ .dir = { -0.35f, -0.9f, -0.25f },
+        .col = { 1.00f, 0.95f, 0.85f }, .amb = { 0.42f, 0.44f, 0.52f } });
+    rp_point_light(&(ame_rp_point_light){ .pos = { 0.0f, 2.6f, 0.0f },
+        .col = { 0.22f, 0.20f, 0.16f }, .range = 6.5f });
 
     /* Stage 2 shadows: the key light casts the cards onto the table.
-     * Same travel direction as ldir; ortho box centered on the table,
-     * generous enough that the whole board resolves in the 2048 map. */
-    rp_shadow(ldir, (float[3]){ 0.0f, 0.0f, 0.0f }, 5.0f);
+     * Same travel direction as the key light; ortho box centered on
+     * the table, generous enough that the whole board resolves in the
+     * 2048 map. */
+    rp_shadow(&(ame_rp_shadow){ .dir = { -0.35f, -0.9f, -0.25f },
+        .center = { 0, 0, 0 }, .extent = 5.0f });
 
     if (text_init(true) >= 0) {
+        /* face labels use the SMOOTH face (hires DejaVu, plain quads):
+         * laid out AND drawn under it. If the hires atlas is
+         * unavailable text_set_font falls back to PIXEL for both, so
+         * layout metrics and draw stay consistent either way. */
+        text_init_hires();
+        text_set_font(AME_FONT_SMOOTH);
         char buf[16];
         pair_layout_count = (GRID_COLS * GRID_ROWS) / 2;
         if (pair_layout_count > 32)
@@ -193,6 +215,7 @@ int app_init(void) {
             snprintf(buf, sizeof buf, "%d", p + 1);
             text_layout(buf, 0, AME_TEXT_ALIGN_C, 1.2f, &pair_layout[p]);
         }
+        text_set_font(AME_FONT_PIXEL);
     }
 
     ame_synth_cfg flip = { .wave = AME_WAVE_TRIANGLE, .freq = 660.0f,
@@ -212,26 +235,18 @@ int app_init(void) {
         .release = 0.3f, .loop = false };
     au_win = audio_new_synth(&win);
 
+    /* launch config: the whole AME_* env surface, parsed once (pure
+     * libc, no SDL) — app wiring never calls getenv after this. */
+    mem_config_from_env(&CFG);
+    g_autoplay = CFG.autoplay.enabled ? 1 : 0;
+
     ame_geo_reset();
     /* Stage 1: online mode. The server owns the game; the local sim
      * becomes a render-only mirror. Any failure falls back to local
      * hot-seat so the app never dead-ends. */
-    const char *srv = SDL_getenv("AME_SERVER");
-    if (srv && srv[0]) {
-        char host[64] = "127.0.0.1";
-        unsigned port = 7777;
-        char *colon = SDL_strchr(srv, ':');
-        if (colon) {
-            size_t hl = (size_t)(colon - srv);
-            if (hl >= sizeof host)
-                hl = sizeof host - 1;
-            memcpy(host, srv, hl);
-            host[hl] = 0;
-            port = (unsigned)SDL_strtoul(colon + 1, NULL, 0);
-        } else {
-            /* "port" only: loopback */
-            port = (unsigned)SDL_strtoul(srv, NULL, 0);
-        }
+    if (CFG.server.enabled) {
+        const char *host = CFG.server.host;
+        unsigned port = CFG.server.port;
         mem_client_init(&CLI);
         mem_net_rx_init(&CLI_RX);
         for (int try = 0; try < 3 && CLI_FD < 0; try++) {
@@ -269,10 +284,7 @@ int app_init(void) {
         /* Stage 0 exit: "replay with a fixed seed is deterministic".
          * Default keeps the classic board (golden tests); AME_SEED
          * replays any specific shuffle. */
-        uint32_t seed = 0xC0FFEE;
-        const char *sd = SDL_getenv("AME_SEED");
-        if (sd && sd[0])
-            seed = (uint32_t)SDL_strtoul(sd, NULL, 0);
+        uint32_t seed = CFG.seed.seed;
         printf("ame: memory board seed=0x%08" PRIx32 "\n", seed);
         mem_reset(&G, GRID_COLS, GRID_ROWS, seed);
     }
@@ -293,22 +305,13 @@ int app_init(void) {
     /* software cursor: the game draws its own; hide the system one */
     SDL_HideCursor();
 
-    const char *fm = SDL_getenv("AME_FAKE_MOUSE");
-    if (fm) {
-        float fx = 0, fy = 0;
-        if (sscanf(fm, "%f,%f", &fx, &fy) == 2)
-            in_on_mouse_move(fx, fy); /* logic thread picks it up next step */
-    }
+    if (CFG.fakemouse.present)
+        in_on_mouse_move(CFG.fakemouse.x,
+                         CFG.fakemouse.y); /* logic thread picks it up next step */
 
-    const char *shot = SDL_getenv("AME_SCREENSHOT");
-    if (shot && shot[0]) {
-        snprintf(g_shot_path, sizeof g_shot_path, "%s", shot);
-        g_shot_frames_left = 5;
-        const char *fr = SDL_getenv("AME_SCREENSHOT_FRAMES");
-        if (fr && fr[0])
-            g_shot_frames_left = (int)SDL_strtol(fr, NULL, 0);
-        if (g_shot_frames_left < 1)
-            g_shot_frames_left = 1;
+    if (CFG.shot.present) {
+        snprintf(g_shot_path, sizeof g_shot_path, "%s", CFG.shot.path);
+        g_shot_frames_left = CFG.shot.frames;
     }
     return 0;
 }
@@ -407,8 +410,9 @@ int app_fixed(float dt) {
 
     /* AME_AUTOPLAY=1 (local mode only): deterministic honest-memory
      * bot drives the game so headless captures (with
-     * AME_FIXED_FRAME_DT) can prove effects/animation byte-exactly. */
-    if (!g_online && SDL_getenv("AME_AUTOPLAY")) {
+     * AME_FIXED_FRAME_DT) can prove effects/animation byte-exactly.
+     * Read once at boot (g_autoplay): no getenv on the 1000 Hz path. */
+    if (!g_online && g_autoplay) {
         static double acc = 0;
         acc += dt;
         if (acc > 0.35) {
@@ -522,24 +526,41 @@ static void card_quad(const mem_snap *s, int i, float layer) {
      * key light as the card flips, so the face catches light naturally */
     float ny = ca >= 0 ? ca : -ca;
     float nz = ca >= 0 ? sa : -sa;
+    ame_rp_pass_frame lit = { g_lit_pass };
+    rp_pass_begin(&lit);
     rp_set_lit(1);
-    rp_set_normal(0.0f, ny, nz);
-    rp_push_quad(rp_white_texture(), q0, q1, q2, q3, 0, 0, 1, 1, tint, layer);
+    rp_set_normal((float[3]){ 0.0f, ny, nz });
+    ame_rp_quad q;
+    q.tex = rp_white_texture();
+    q.p0[0] = q0[0]; q.p0[1] = q0[1]; q.p0[2] = q0[2];
+    q.p1[0] = q1[0]; q.p1[1] = q1[1]; q.p1[2] = q1[2];
+    q.p2[0] = q2[0]; q.p2[1] = q2[1]; q.p2[2] = q2[2];
+    q.p3[0] = q3[0]; q.p3[1] = q3[1]; q.p3[2] = q3[2];
+    q.u0 = 0; q.v0 = 0; q.u1 = 1; q.v1 = 1;
+    q.tint[0] = tint[0]; q.tint[1] = tint[1];
+    q.tint[2] = tint[2]; q.tint[3] = tint[3];
+    q.layer = layer;
+    rp_push_quad(&q);
     rp_set_lit(0);
 }
 
 /* pose mapping text layout space onto the card's flipping face.
- * panel basis at angle a (R_x(-a) from flat): v=(0,sa,ca) is the panel's
- * "down" direction (toward the viewer at a=180), n=(0,-ca,sa) the FACE
- * normal (up when open). Layout +y is text-down -> +v; label sits on the
- * face: offset along +n. */
+ * The label rotates WITH the flip: recomputed from the live angle every
+ * frame. Basis: right=+x (screen-right from this camera), text-down =
+ * (0,-sa,-ca) so that at a=180 layout +y maps to +z, i.e. toward the
+ * viewer = screen-down, and the digit reads correctly (the panel's own
+ * "down" (0,sa,ca) points screen-up here and would flip the text). The
+ * basis is left-handed (a reflection, not a rotation): exactly what the
+ * face-up side needs, and the engine does no face culling. n=(0,-ca,sa)
+ * is the FACE normal (up when open); the label sits on the face: offset
+ * along +n. */
 static void card_label_pose(const mem_snap *s, int i,
                             const ame_text_layout *l, float pose[16]) {
     float a = s->angle[i] * (float)AME_PI / 180.0f;
     float sa = sinf(a), ca = cosf(a);
     float lift = s->lift[i];
     ame_v3 right = ame_v3_(1, 0, 0);
-    ame_v3 ydir  = ame_v3_(0, sa, ca);
+    ame_v3 ydir  = ame_v3_(0, -sa, -ca);
     ame_v3 nrm   = ame_v3_(0, -ca, sa);
     /* px metrics -> card units */
     const float gs = 1.15f / (float)text_font_px();
@@ -601,9 +622,15 @@ static void draw_cursor(const mem_snap *s) {
         float q0[3] = { apex.x, apex.y, apex.z };
         float q1[3] = { b0.x, b0.y, b0.z };
         float q2[3] = { b1.x, b1.y, b1.z };
+        ame_rp_pass_frame lit = { g_lit_pass };
+        rp_pass_begin(&lit);
         rp_set_lit(1);
-        rp_set_normal(n.x, n.y, n.z);
-        rp_push_tri(rp_white_texture(), q0, q1, q2, 0, 0, 1, 1, tint, 40);
+        rp_set_normal((float[3]){ n.x, n.y, n.z });
+        rp_push_tri(&(ame_rp_tri){ .tex = rp_white_texture(),
+            .p0 = { q0[0], q0[1], q0[2] }, .p1 = { q1[0], q1[1], q1[2] },
+            .p2 = { q2[0], q2[1], q2[2] }, .u0 = 0, .v0 = 0, .u1 = 1,
+            .v1 = 1, .tint = { tint[0], tint[1], tint[2], tint[3] },
+            .layer = 40 });
         rp_set_lit(0);
     }
 }
@@ -715,16 +742,30 @@ int app_render(void) {
     float t2[3] = { tw * 0.5f, 0, td * 0.5f };
     float t3[3] = { -tw * 0.5f, 0, td * 0.5f };
     float table_tint[4] = { 0.16f, 0.19f, 0.26f, 1.0f };
+    ame_rp_pass_frame lit = { g_lit_pass };
+    rp_pass_begin(&lit);
     rp_set_lit(1);
-    rp_set_normal(0.0f, 1.0f, 0.0f);
-    rp_push_quad(rp_white_texture(), t0, t1, t2, t3, 0, 0, 1, 1,
-                 table_tint, 0);
+    rp_set_normal((float[3]){ 0.0f, 1.0f, 0.0f });
+    rp_push_quad(&(ame_rp_quad){ .tex = rp_white_texture(),
+        .p0 = { t0[0], t0[1], t0[2] },
+        .p1 = { t1[0], t1[1], t1[2] },
+        .p2 = { t2[0], t2[1], t2[2] },
+        .p3 = { t3[0], t3[1], t3[2] },
+        .u0 = 0, .v0 = 0, .u1 = 1, .v1 = 1,
+        .tint = { table_tint[0], table_tint[1], table_tint[2],
+                  table_tint[3] },
+        .layer = 0 });
     rp_set_lit(0);
 
     for (int i = 0; i < s->count; i++)
         card_quad(s, i, 10);
 
-    /* card face labels: text ON the card plane (same flip transform) */
+    /* card face labels: SMOOTH-face text ON the card plane (same flip
+     * transform, recomputed from the live angle every frame, so the
+     * label rotates with the card through the flip). UI pass (0). */
+    ame_rp_pass_frame ui = { 0 };
+    rp_pass_begin(&ui);
+    text_set_font(AME_FONT_SMOOTH);
     for (int i = 0; i < s->count; i++) {
         if (s->angle[i] > 120.0f && s->pair[i] < (uint32_t)pair_layout_count) {
             const ame_text_layout *l = &pair_layout[s->pair[i]];
@@ -734,8 +775,11 @@ int app_render(void) {
             text_draw_world(l, pose, tint, 20);
         }
     }
+    text_set_font(AME_FONT_PIXEL);
 
-    /* scoreboard: in-scene billboard above the far table edge */
+    /* scoreboard: in-scene billboard above the far table edge.
+     * PIXEL face (explicit: the label block above runs SMOOTH). */
+    text_set_font(AME_FONT_PIXEL);
     char line[96];
     const char *left = "P1", *right = "P2";
     const char *phase_txt;
