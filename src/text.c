@@ -170,9 +170,9 @@ int text_init_dsdf(void) {
 int text_init_hires(void) {
     if (g_hires_tex >= 0)
         return g_hires_tex;
-    /* A8 coverage, uploaded DIRECTLY (comps=1: white ink, RED swizzled
-     * to alpha) with linear sampling: the smooth face renders through
-     * the plain branchless textured pipeline, no shader reconstruction */
+    /* A8 coverage (comps=1: CPU-expanded to white+alpha RGBA at load)
+     * with linear sampling: the smooth face renders through the plain
+     * branchless textured pipeline, no shader reconstruction */
     g_hires_tex = rp_load_texture(ame_hires_atlas_a8, AME_HIRES_ATLAS_WIDTH,
                                   AME_HIRES_ATLAS_HEIGHT, 1,
                                   false /*linear*/);

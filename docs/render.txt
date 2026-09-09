@@ -121,7 +121,7 @@ buffer, updated in place, not wrapped in per-draw objects.
 TEXTURES
 Small integer ids into a static texture registry loaded once.
 No creating textures per frame, no leaks. comps == 1 uploads as
-COVERAGE (white RGB, RED swizzled to alpha); comps 3/4 are plain
+COVERAGE (white RGB + coverage alpha, CPU-expanded); comps 3/4 are
 RGB/RGBA.
 
 EXAMPLE API (render.h, extern "C")

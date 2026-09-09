@@ -812,11 +812,37 @@ const char *rp_gl_renderer(void) {
 
 /* --- textures --------------------------------------------------------------- */
 
+/* coverage (A8) uploads expand to white+alpha RGBA on the CPU: WebGL2
+ * has no texture swizzle, so R8 + swizzle can't be the portable path.
+ * The expanded bytes sample exactly like (255,255,255,a) everywhere. */
+static uint8_t *expand_a8_to_rgba(const uint8_t *a8, int w, int h) {
+    size_t n = (size_t)w * (size_t)h;
+    uint8_t *out = malloc(n * 4);
+    if (!out)
+        return NULL;
+    for (size_t i = 0; i < n; i++) {
+        out[i * 4] = 255;
+        out[i * 4 + 1] = 255;
+        out[i * 4 + 2] = 255;
+        out[i * 4 + 3] = a8[i];
+    }
+    return out;
+}
+
 int rp_load_texture(const uint8_t *pixels, int w, int h, int comps,
                     bool nearest_sampling) {
     if (S.tex_count >= RP_TEX_MAX)
         return -1;
-    GLenum fmt = comps == 4 ? GL_RGBA : comps == 3 ? GL_RGB : GL_RED;
+    /* comps == 1 (coverage) expands to RGBA below; nothing passes 2 */
+    GLenum fmt = comps == 4 ? GL_RGBA : comps == 3 ? GL_RGB : GL_RGBA;
+    uint8_t *exp = NULL;
+    const uint8_t *up = pixels;
+    if (comps == 1) {
+        exp = expand_a8_to_rgba(pixels, w, h);
+        if (!exp)
+            return -1;
+        up = exp;
+    }
     int id = S.tex_count++;
     glGenTextures(1, &S.tex[id]);
     glActiveTexture(GL_TEXTURE0);
@@ -827,14 +853,9 @@ int rp_load_texture(const uint8_t *pixels, int w, int h, int comps,
                     nearest_sampling ? GL_NEAREST : GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    if (comps == 1) {
-        /* coverage upload (hires text): white ink, RED swizzled to
-         * alpha - samples exactly like an expanded (255,255,255,a) */
-        GLint sw[4] = { GL_ONE, GL_ONE, GL_ONE, GL_RED };
-        glTexParameteriv(GL_TEXTURE_2D, GL_TEXTURE_SWIZZLE_RGBA, sw);
-    }
     glTexImage2D(GL_TEXTURE_2D, 0, (GLint)fmt, w, h, 0, fmt, GL_UNSIGNED_BYTE,
-                 pixels);
+                 up);
+    free(exp);
     S.tex_w[id] = w;
     S.tex_h[id] = h;
     S.tex_comps[id] = comps;
@@ -859,10 +880,18 @@ bool rp_update_texture(int id, const uint8_t *pixels, int w, int h, int comps) {
     if (w != S.tex_w[id] || h != S.tex_h[id]
         || comps != S.tex_comps[id])
         return false; /* dims/format must match the created texture */
-    GLenum fmt = comps == 4 ? GL_RGBA : comps == 3 ? GL_RGB : GL_RED;
+    GLenum fmt = comps == 4 ? GL_RGBA : comps == 3 ? GL_RGB : GL_RGBA;
+    uint8_t *exp = NULL;
+    const uint8_t *up = pixels;
+    if (comps == 1) {
+        exp = expand_a8_to_rgba(pixels, w, h);
+        if (!exp)
+            return false;
+        up = exp;
+    }
     glBindTexture(GL_TEXTURE_2D, S.tex[id]);
-    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w, h, fmt, GL_UNSIGNED_BYTE,
-                    pixels);
+    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w, h, fmt, GL_UNSIGNED_BYTE, up);
+    free(exp);
     return true;
 }
 

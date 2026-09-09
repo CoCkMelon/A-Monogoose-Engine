@@ -151,8 +151,9 @@ void rp_push_quad(const ame_rp_quad *q);
 void rp_push_text_quad(const ame_rp_quad *q);
 
 /* textures: small integer ids into a static registry, loaded once.
- * comps == 1 uploads as COVERAGE (white RGB, RED swizzled to alpha) -
- * the hires text path; comps 3/4 are plain RGB/RGBA. */
+ * comps == 1 uploads as COVERAGE (white RGB + coverage alpha,
+ * CPU-expanded; WebGL2 has no swizzle) - the hires text path;
+ * comps 3/4 are plain RGB/RGBA. */
 int  rp_load_texture(const uint8_t *pixels, int w, int h, int comps,
                      bool nearest_sampling);
 void rp_free_texture(int id);
