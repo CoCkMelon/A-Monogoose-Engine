@@ -196,7 +196,7 @@ option(AME_BUILD_BENCHES "Build headless micro-benches" ON)
 if(AME_BUILD_BENCHES)
     add_executable(bench_core benches/bench_core.c
         src/pool.c src/events.c src/geo.c src/gfx.c src/gl.c
-        src/memory.c src/text.c src/math.c src/camera.c
+        src/memory.c src/text.c src/math.c src/camera.c src/audio.c
     )
     target_include_directories(bench_core PRIVATE
         ${CMAKE_SOURCE_DIR}/include

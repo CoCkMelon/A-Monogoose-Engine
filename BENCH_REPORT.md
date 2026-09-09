@@ -92,3 +92,31 @@ examples/biscuit gameplay/physics/entities + render/ only draws BfSnap
 benches/         headless micro-benches
 tests/           ctest suite
 ```
+
+---
+
+## Round 2 — static level mesh, audio unlock, phys broadphase, ame_app host
+
+Branch: `agent/ame-next-improve-2-20260909`
+
+### Changes
+1. **Static level mesh** — biscuit ribbon (2392 tris / 4784 verts) is converted
+   once at view init, uploaded as `ame_mesh`, drawn with
+   `ame_pipeline_draw_mesh` (one DrawElements). Dynamic batch no longer
+   re-pushes ~7k verts every frame for the track.
+2. **Audio mix** — snapshot voices under mutex, synthesise unlocked, write
+   back only slots whose generation is unchanged (play_tone bumps gen).
+   Pan gains hoisted per block. Mix lock no longer spans the whole block.
+3. **Physics segment broadphase** — segs sorted by min-x once via
+   `phys_world_prepare`; circle queries binary-search + walk the x-window.
+4. **Games use `ame_app`** — Memory and Biscuit boot/swap/close through the
+   shared host (window/GL/audio). Duplicated SDL open paths removed.
+
+### Correctness
+- 20/20 ctest
+- selftest BMP hashes unchanged vs round 1 (`c796eb…` / `0ac19b…`)
+
+### Bench add
+```
+audio_mix_block                   ~8.8 ns/op   stereo frames (unlocked synth)
+```

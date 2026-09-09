@@ -7,6 +7,7 @@ void phys_world_clear(PhysWorld *w)
     if (!w) return;
     w->n = 0;
     w->n_seg = 0;
+    w->segs_sorted = 0;
 }
 
 void phys_add_plat(PhysWorld *w, float cx, float cy, float width, float height)
@@ -27,6 +28,40 @@ void phys_add_seg(PhysWorld *w, float x0, float y0, float x1, float y1,
     PhysSeg *s = &w->seg[w->n_seg++];
     s->x0 = x0; s->y0 = y0; s->x1 = x1; s->y1 = y1;
     s->nx = nx / ln; s->ny = ny / ln;
+    s->minx = (x0 < x1) ? x0 : x1;
+    s->maxx = (x0 > x1) ? x0 : x1;
+    w->segs_sorted = 0;
+}
+
+/* Insertion sort is fine — N <= 512 and prepare runs once per reset. */
+void phys_world_prepare(PhysWorld *w)
+{
+    if (!w || w->n_seg < 2) {
+        if (w) w->segs_sorted = 1;
+        return;
+    }
+    for (int i = 1; i < w->n_seg; i++) {
+        PhysSeg key = w->seg[i];
+        int j = i - 1;
+        while (j >= 0 && w->seg[j].minx > key.minx) {
+            w->seg[j + 1] = w->seg[j];
+            j--;
+        }
+        w->seg[j + 1] = key;
+    }
+    w->segs_sorted = 1;
+}
+
+/* First index with minx >= lo  (lower_bound). */
+static int seg_lower_bound(const PhysWorld *w, float lo)
+{
+    int lo_i = 0, hi_i = w->n_seg;
+    while (lo_i < hi_i) {
+        int mid = lo_i + (hi_i - lo_i) / 2;
+        if (w->seg[mid].minx < lo) lo_i = mid + 1;
+        else hi_i = mid;
+    }
+    return lo_i;
 }
 
 void phys_body_axes(const Chassis *c, float *fx, float *fy, float *ux, float *uy)
@@ -69,10 +104,23 @@ int phys_circle_segs(PhysWorld *w, float *x, float *y, float *vx, float *vy, flo
     int gnd = grounded ? *grounded : 0;
     float bnx = nx ? *nx : 0.0f, bny = ny ? *ny : 1.0f;
     if (!w) return 0;
+
+    /* Ensure sorted (no-op if already prepared). */
+    if (!w->segs_sorted) phys_world_prepare(w);
+
     for (int pass = 0; pass < 3; pass++) {
         int any = 0;
-        for (int i = 0; i < w->n_seg; i++) {
+        float lo = *x - r - 0.05f;
+        float hi = *x + r + 0.05f;
+        /* Start a little before lower_bound so segs that begin left of `lo`
+         * but still overlap [lo,hi] are not missed: walk back while maxx>=lo. */
+        int start = seg_lower_bound(w, lo);
+        while (start > 0 && w->seg[start - 1].maxx >= lo) start--;
+
+        for (int i = start; i < w->n_seg; i++) {
             PhysSeg *s = &w->seg[i];
+            if (s->minx > hi) break;
+            if (s->maxx < lo) continue;
             if (!ame_geo_circle_seg_xy(*x, *y, r, s->x0, s->y0, s->x1, s->y1,
                                        NULL, NULL, NULL))
                 continue;

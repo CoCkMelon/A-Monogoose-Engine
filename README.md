@@ -169,6 +169,10 @@ external/cglm         recp/cglm v0.9.6 headers (wrapped by math.h)
 SETUP objects (`ame_camera`, `ame_pipeline`, `ame_font`) are mutated in
 place and the same pointer is returned, so initialisation can chain.
 
+Static world meshes (Biscuit level ribbon) upload once and draw with
+`ame_pipeline_draw_mesh` — same shader/program as the dynamic batch, not a
+second pass.
+
 HOT renderer rule: every batch push / flush / font draw takes **one
 struct pointer** (the pipeline lives inside the args). No multi-arg
 HOT signatures — call sites use a compound literal:

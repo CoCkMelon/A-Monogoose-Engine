@@ -7,6 +7,7 @@
  */
 #define _POSIX_C_SOURCE 200809L
 
+#include "ame/audio.h"
 #include "ame/events.h"
 #include "ame/geo.h"
 #include "ame/gfx.h"
@@ -269,6 +270,21 @@ static void bench_m4_mul(void)
     report("m4_mul", t1 - t0, (double)N * 2.0, "column-major 4x4 (chained)");
 }
 
+static void bench_audio_mix(void)
+{
+    enum { FRAMES = 512, LOOPS = 4000 };
+    float buf[FRAMES * 2];
+    ame_audio_reset(48000, 2);
+    ame_audio_cue_match();
+    ame_audio_cue_click();
+    double t0 = now_s();
+    for (int i = 0; i < LOOPS; i++)
+        ame_audio_mix(buf, FRAMES);
+    double t1 = now_s();
+    report("audio_mix_block", t1 - t0, (double)LOOPS * FRAMES,
+           "stereo frames (unlocked synth)");
+}
+
 static void bench_font_draw(void)
 {
     enum { FRAMES = 2000 };
@@ -311,6 +327,7 @@ int main(void)
     bench_memory_tick();
     bench_m4_mul();
     bench_font_draw();
+    bench_audio_mix();
     printf("done\n");
     return 0;
 }

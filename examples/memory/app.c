@@ -1,8 +1,6 @@
-#include <SDL3/SDL.h>
-
+#include "ame/app.h"
 #include "ame/audio.h"
 #include "ame/events.h"
-#include "ame/gl.h"
 #include "ame/input.h"
 #include "ame/math.h"
 #include "ame/memory.h"
@@ -22,14 +20,11 @@
 
 enum { MODE_LOCAL = 0, MODE_LISTEN = 1, MODE_CONNECT = 2 };
 
-static SDL_Window *g_win;
-static SDL_GLContext g_gl;
+static ame_app g_app;
 static mem_view g_view;
-static int g_ww = APP_DEFAULT_WIDTH, g_hh = APP_DEFAULT_HEIGHT;
 static _Atomic int g_quit = 0;
 static uint32_t g_seed = 1;
 static double g_t0;
-static SDL_AudioStream *g_audio;
 static int g_mode = MODE_LOCAL;
 static ame_mem_client g_cli;
 static float g_cx, g_cy;
@@ -94,11 +89,6 @@ static void on_game_input(const ame_raw_event *ev, void *user)
     }
 }
 
-static void *wrap_get(const char *name)
-{
-    return (void *)SDL_GL_GetProcAddress(name);
-}
-
 static void on_mem_sfx(const ame_event *e, void *user)
 {
     (void)user;
@@ -109,19 +99,6 @@ static void on_mem_sfx(const ame_event *e, void *user)
     case MEM_EV_WIN:      ame_audio_cue_win();   break;
     default: break;
     }
-}
-
-static void SDLCALL on_audio(void *userdata, SDL_AudioStream *stream,
-                             int additional, int total)
-{
-    (void)userdata;
-    (void)total;
-    int frames = additional / (int)(2 * sizeof(float));
-    if (frames < 1) return;
-    if (frames > 2048) frames = 2048;
-    float tmp[2048 * 2];
-    ame_audio_mix(tmp, frames);
-    SDL_PutAudioStreamData(stream, tmp, frames * 2 * (int)sizeof(float));
 }
 
 static int run_selftest(const char *bmp_path)
@@ -231,7 +208,7 @@ SDL_AppResult game_app_init(void **appstate, int argc, char **argv)
 
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--selftest")) {
-            const char *out = APP_SELFTEST_BMP;   /* cwd-relative default */
+            const char *out = APP_SELFTEST_BMP;
             if (i + 1 < argc && argv[i + 1][0] != '-') out = argv[++i];
             return run_selftest(out) ? SDL_APP_SUCCESS : SDL_APP_FAILURE;
         }
@@ -283,44 +260,22 @@ SDL_AppResult game_app_init(void **appstate, int argc, char **argv)
         }
     }
 
-    SDL_SetAppMetadata(APP_WINDOW_TITLE, "0.1", "ame.next.memory");
-    if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO)) {
-        SDL_Log("SDL_Init video+audio: %s — trying video only", SDL_GetError());
-        if (!SDL_Init(SDL_INIT_VIDEO)) {
-            SDL_Log("SDL_Init: %s", SDL_GetError());
-            return SDL_APP_FAILURE;
-        }
-    }
-    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
-    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 3);
-    SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
-    SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
-    SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE, 24);
-
     const char *title = (g_mode == MODE_CONNECT)
         ? APP_WINDOW_TITLE_NET
         : APP_WINDOW_TITLE;
-    g_win = SDL_CreateWindow(title, g_ww, g_hh,
-                             SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE);
-    if (!g_win) {
-        SDL_Log("window: %s", SDL_GetError());
+    ame_app_open(
+        ame_app_flags(
+            ame_app_size(
+                ame_app_title(ame_app_reset(&g_app), title),
+                APP_DEFAULT_WIDTH, APP_DEFAULT_HEIGHT),
+            1, 1));
+    if (!g_app.ready) {
+        fprintf(stderr, "ame_app_open failed\n");
         return SDL_APP_FAILURE;
     }
-    g_gl = SDL_GL_CreateContext(g_win);
-    if (!g_gl) {
-        SDL_Log("gl ctx: %s", SDL_GetError());
+    if (!mem_view_init(&g_view, g_app.width, g_app.height))
         return SDL_APP_FAILURE;
-    }
-    SDL_GL_SetSwapInterval(1);
-    if (!ame_gl_load(wrap_get)) {
-        SDL_Log("GL load failed");
-        return SDL_APP_FAILURE;
-    }
-    if (!mem_view_init(&g_view, g_ww, g_hh))
-        return SDL_APP_FAILURE;
-    SDL_HideCursor();
 
-    ame_audio_reset(48000, 2);
     ame_events_reset();
     if (g_mode == MODE_LOCAL) {
         ame_events_subscribe(MEM_EV_OPEN, on_mem_sfx, NULL);
@@ -328,26 +283,10 @@ SDL_AppResult game_app_init(void **appstate, int argc, char **argv)
         ame_events_subscribe(MEM_EV_MISMATCH, on_mem_sfx, NULL);
         ame_events_subscribe(MEM_EV_WIN, on_mem_sfx, NULL);
     }
-    {
-        SDL_AudioSpec spec;
-        spec.format = SDL_AUDIO_F32;
-        spec.channels = 2;
-        spec.freq = 48000;
-        g_audio = SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK,
-                                            &spec, on_audio, NULL);
-        if (g_audio) {
-            SDL_ResumeAudioDevice(SDL_GetAudioStreamDevice(g_audio));
-            SDL_Log("audio 48k stereo");
-        } else {
-            SDL_Log("audio open failed: %s", SDL_GetError());
-        }
-    }
 
     if (ame_input_open(on_game_input, NULL)) {
-        SDL_Log("asyncinput devices=%d", ame_input_device_count());
         mem_set_input_ok(1);
     } else {
-        SDL_Log("ame_input_open failed");
         mem_set_input_ok(0);
     }
 
@@ -362,9 +301,9 @@ SDL_AppResult game_app_event(void *appstate, SDL_Event *event)
     if (event->type == SDL_EVENT_QUIT)
         return SDL_APP_SUCCESS;
     if (event->type == SDL_EVENT_WINDOW_RESIZED) {
-        g_ww = event->window.data1;
-        g_hh = event->window.data2;
-        mem_view_resize(&g_view, g_ww, g_hh);
+        g_app.width = event->window.data1;
+        g_app.height = event->window.data2;
+        mem_view_resize(&g_view, g_app.width, g_app.height);
     }
     /* SDL keyboard/mouse are ignored — asyncinput owns game input. */
     return SDL_APP_CONTINUE;
@@ -388,10 +327,10 @@ SDL_AppResult game_app_iterate(void *appstate)
         client_sfx();
         snap = g_cli.snap;
         overlay_cursor(&snap);
-        if (g_cli.seat >= 0) {
+        if (g_cli.seat >= 0 && g_app.window) {
             char title[64];
             snprintf(title, sizeof(title), "ame-next  Memory  P%d", g_cli.seat);
-            SDL_SetWindowTitle(g_win, title);
+            SDL_SetWindowTitle((SDL_Window *)g_app.window, title);
         }
         if (!g_cli.conn.ok && g_cli.peer_drop && snap.winner < 0) {
             /* connection lost before a forfeit landed */
@@ -402,7 +341,7 @@ SDL_AppResult game_app_iterate(void *appstate)
         mem_snapshot(&snap);
     }
     mem_view_draw(&g_view, &snap);
-    SDL_GL_SwapWindow(g_win);
+    ame_app_swap(&g_app);
     return SDL_APP_CONTINUE;
 }
 
@@ -413,10 +352,6 @@ void game_app_quit(void *appstate, SDL_AppResult result)
     if (g_mode == MODE_CONNECT)
         ame_mem_client_close(&g_cli);
     ame_input_close();
-    if (g_audio) SDL_DestroyAudioStream(g_audio);
-    g_audio = NULL;
-    ame_audio_shutdown();
     mem_view_shutdown(&g_view);
-    if (g_gl) SDL_GL_DestroyContext(g_gl);
-    if (g_win) SDL_DestroyWindow(g_win);
+    ame_app_close(&g_app);
 }

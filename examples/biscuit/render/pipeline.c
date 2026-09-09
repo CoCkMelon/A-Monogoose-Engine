@@ -6,6 +6,8 @@
 #include "ame/gl.h"
 #include "ame/math.h"
 #include "ame/debug.h"
+#include "ame/mesh.h"
+#include <stdlib.h>
 
 #include <stdio.h>
 #include <math.h>
@@ -66,6 +68,53 @@ static void paint(unsigned char *a)
     ame_atlas_fill(a, BF_ATLAS, BF_ATLAS, 140, 140, 20, 40, 230, 230, 240);
 }
 
+
+static int upload_level_mesh(bf_view *v)
+{
+    if (!v || level_n_vert < 1 || level_n_tri < 1) return 0;
+    ame_mesh_release_gpu(&v->level_mesh);
+    ame_mesh_free(&v->level_mesh);
+    free(v->level_cpu);
+    free(v->level_idx);
+    v->level_cpu = NULL;
+    v->level_idx = NULL;
+
+    ame_vertex *verts = (ame_vertex *)malloc((size_t)level_n_vert * sizeof(ame_vertex));
+    unsigned *idx = (unsigned *)malloc((size_t)level_n_tri * 3u * sizeof(unsigned));
+    if (!verts || !idx) {
+        free(verts);
+        free(idx);
+        return 0;
+    }
+    ame_rgba one = ame_rgba_make(1, 1, 1, 1);
+    for (int i = 0; i < level_n_vert; i++) {
+        const LevelVert *a = &level_verts[i];
+        verts[i] = ame_vertex_make(&(ame_vertex_make_args){
+            .x = a->x, .y = a->y, .z = a->z,
+            .nx = a->nx, .ny = a->ny, .nz = a->nz,
+            .u = a->u, .v = a->v, .color = one
+        });
+    }
+    for (int i = 0; i < level_n_tri; i++) {
+        const LevelTri *tr = &level_tris[i];
+        idx[i * 3 + 0] = tr->i0;
+        idx[i * 3 + 1] = tr->i1;
+        idx[i * 3 + 2] = tr->i2;
+    }
+    v->level_cpu = verts;
+    v->level_idx = idx;
+    ame_mesh_set_external(&v->level_mesh, verts, level_n_vert, idx, level_n_tri * 3);
+    if (!ame_mesh_upload(&v->level_mesh)) {
+        ame_mesh_free(&v->level_mesh);
+        free(v->level_cpu);
+        free(v->level_idx);
+        v->level_cpu = NULL;
+        v->level_idx = NULL;
+        return 0;
+    }
+    return 1;
+}
+
 bf_view *bf_view_init(bf_view *v, int pixel_width, int pixel_height)
 {
     if (!v) return NULL;
@@ -84,6 +133,10 @@ bf_view *bf_view_init(bf_view *v, int pixel_width, int pixel_height)
             BF_ATLAS, BF_ATLAS, v->atlas));
     if (!v->pipeline.ready) {
         fprintf(stderr, "bf_view: pipeline failed\n");
+        return NULL;
+    }
+    if (!upload_level_mesh(v)) {
+        fprintf(stderr, "bf_view: level mesh upload failed\n");
         return NULL;
     }
     glEnable(GL_DEPTH_TEST);
@@ -113,6 +166,12 @@ bf_view *bf_view_resize(bf_view *v, int pixel_width, int pixel_height)
 void bf_view_shutdown(bf_view *v)
 {
     if (!v) return;
+    ame_mesh_release_gpu(&v->level_mesh);
+    ame_mesh_free(&v->level_mesh);
+    free(v->level_cpu);
+    free(v->level_idx);
+    v->level_cpu = NULL;
+    v->level_idx = NULL;
     ame_pipeline_shutdown(&v->pipeline);
 }
 
@@ -140,6 +199,11 @@ void bf_view_draw(bf_view *v, const BfSnap *s)
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
     ame_pipeline *p = &v->pipeline;
+    const float *vp = ame_camera_vp(&v->camera);
+    /* Static level ribbon — one DrawElements, not 2392 batch tris. */
+    ame_pipeline_draw_mesh(&(ame_pipeline_draw_mesh_args){
+        .p = p, .mesh = &v->level_mesh, .view_projection_4x4 = vp, .tex = p->texture
+    });
     ame_batch_begin(&(ame_batch_begin_args){ .p = p });
     ame_uv white = v->font.white;
     ame_rgba sky1 = ame_rgba_make(0.45f, 0.70f, 0.95f, 1);
@@ -164,29 +228,6 @@ void bf_view_draw(bf_view *v, const BfSnap *s)
     ame_uv uflag = uv_tex(128, 128, 64, 64);
 
     ame_rgba one = ame_rgba_make(1, 1, 1, 1);
-    /* 3D ribbon from the generated bezier mesh (build/gen/level_gen.c). */
-    for (int i = 0; i < level_n_tri; i++) {
-        const LevelTri *tr = &level_tris[i];
-        const LevelVert *a = &level_verts[tr->i0];
-        const LevelVert *b = &level_verts[tr->i1];
-        const LevelVert *c = &level_verts[tr->i2];
-        ame_vertex va = ame_vertex_make(&(ame_vertex_make_args){
-            .x = a->x, .y = a->y, .z = a->z,
-            .nx = a->nx, .ny = a->ny, .nz = a->nz,
-            .u = a->u, .v = a->v, .color = one
-        });
-        ame_vertex vb = ame_vertex_make(&(ame_vertex_make_args){
-            .x = b->x, .y = b->y, .z = b->z,
-            .nx = b->nx, .ny = b->ny, .nz = b->nz,
-            .u = b->u, .v = b->v, .color = one
-        });
-        ame_vertex vc = ame_vertex_make(&(ame_vertex_make_args){
-            .x = c->x, .y = c->y, .z = c->z,
-            .nx = c->nx, .ny = c->ny, .nz = c->nz,
-            .u = c->u, .v = c->v, .color = one
-        });
-        ame_batch_triangle(&(ame_batch_triangle_args){ .p = p, .a = va, .b = vb, .c = vc });
-    }
 
     for (int i = 0; i < s->n_fuel; i++) {
         const BfItemVis *it = &s->fuel_item[i];

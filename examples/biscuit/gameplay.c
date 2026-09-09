@@ -64,6 +64,7 @@ static void build_course(void)
         const LevelSeg *s = &level_segs[i];
         phys_add_seg(&G.world, s->x0, s->y0, s->x1, s->y1, s->nx, s->ny);
     }
+    phys_world_prepare(&G.world);
 
     G.goal_x = 44.0f;
     G.goal_y = 1.10f;

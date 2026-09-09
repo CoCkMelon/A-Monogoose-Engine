@@ -2,20 +2,30 @@
 
 #include <math.h>
 #include <pthread.h>
+#include <stdint.h>
 #include <string.h>
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
 #endif
 
+/*
+ * play_tone (main/sim) and mix (audio callback) share voice state.
+ * Mix snapshots under the mutex, synthesises unlocked (so the callback
+ * never holds the lock across a 2048-frame block), then write-backs only
+ * slots whose generation is unchanged — a concurrent play_tone bumps gen
+ * and wins. Pan gains are hoisted once per block (bit-identical samples).
+ */
+
 typedef struct {
-    int   on;
-    float freq;
-    float gain;
-    float pan;
-    float env;
-    float decay;
-    float phase;
+    int      on;
+    float    freq;
+    float    gain;
+    float    pan;
+    float    env;
+    float    decay;
+    float    phase;
+    uint32_t gen; /* bumped on every play_tone that claims this slot */
 } voice;
 
 static struct {
@@ -89,6 +99,7 @@ void ame_audio_play_tone(float freq_hz, float gain, float decay_s, float pan)
     A.v[slot].env = 1.0f;
     A.v[slot].decay = decay_s;
     A.v[slot].phase = 0.0f;
+    A.v[slot].gen += 1u;
     pthread_mutex_unlock(&A.mu);
 }
 
@@ -147,13 +158,28 @@ void ame_audio_mix(float *out, int frames)
 {
     if (!out || frames <= 0) return;
     ensure();
+
+    voice local[AME_AUDIO_VOICES];
+    int rate, ch;
     pthread_mutex_lock(&A.mu);
-    int ch = A.ch;
-    float dt = 1.0f / (float)A.rate;
+    rate = A.rate;
+    ch = A.ch;
+    memcpy(local, A.v, sizeof(local));
+    pthread_mutex_unlock(&A.mu);
+
+    float dt = 1.0f / (float)rate;
+    float gainL[AME_AUDIO_VOICES], gainR[AME_AUDIO_VOICES];
+    for (int i = 0; i < AME_AUDIO_VOICES; i++) {
+        if (!local[i].on) { gainL[i] = gainR[i] = 0.0f; continue; }
+        float ang = (local[i].pan + 1.0f) * (float)(M_PI * 0.25);
+        gainL[i] = cosf(ang);
+        gainR[i] = sinf(ang);
+    }
+
     for (int f = 0; f < frames; f++) {
         float L = 0.0f, R = 0.0f;
         for (int i = 0; i < AME_AUDIO_VOICES; i++) {
-            voice *v = &A.v[i];
+            voice *v = &local[i];
             if (!v->on) continue;
             float s = sinf(v->phase) * v->env * v->gain;
             v->phase += (float)(2.0 * M_PI) * v->freq * dt;
@@ -164,9 +190,8 @@ void ame_audio_mix(float *out, int frames)
                 v->on = 0;
                 v->env = 0.0f;
             }
-            float ang = (v->pan + 1.0f) * (float)(M_PI * 0.25);
-            L += s * cosf(ang);
-            R += s * sinf(ang);
+            L += s * gainL[i];
+            R += s * gainR[i];
         }
         L = tanhf(L);
         R = tanhf(R);
@@ -176,6 +201,12 @@ void ame_audio_mix(float *out, int frames)
             out[f * 2 + 0] = L;
             out[f * 2 + 1] = R;
         }
+    }
+
+    pthread_mutex_lock(&A.mu);
+    for (int i = 0; i < AME_AUDIO_VOICES; i++) {
+        if (A.v[i].gen != local[i].gen) continue; /* play_tone won this slot */
+        A.v[i] = local[i];
     }
     pthread_mutex_unlock(&A.mu);
 }

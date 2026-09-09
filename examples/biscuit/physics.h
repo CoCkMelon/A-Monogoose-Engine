@@ -5,6 +5,10 @@
  * World collision + strut constraints. No Box2D, no 1000 Hz thread.
  * Chassis AABB resolves walls/ceiling only (floors=0); wheels are circles
  * vs AABB boxes and vs one-sided track segments (bezier level).
+ *
+ * Segments are sorted by min-x once after the level loads. Circle queries
+ * binary-search the first candidate and walk while seg.minx <= cx+r
+ * (and skip when seg.maxx < cx-r). O(log N + K) instead of O(N) per wheel.
  */
 
 #include "entities/car.h"
@@ -18,6 +22,7 @@ typedef struct PhysPlat {
 typedef struct PhysSeg {
     float x0, y0, x1, y1;
     float nx, ny; /* driveable-side unit normal */
+    float minx, maxx; /* precomputed bounds for broadphase */
 } PhysSeg;
 
 typedef struct PhysWorld {
@@ -25,12 +30,15 @@ typedef struct PhysWorld {
     int n;
     PhysSeg seg[PHYS_MAX_SEG];
     int n_seg;
+    int segs_sorted;
 } PhysWorld;
 
 void phys_world_clear(PhysWorld *w);
 void phys_add_plat(PhysWorld *w, float cx, float cy, float width, float height);
 void phys_add_seg(PhysWorld *w, float x0, float y0, float x1, float y1,
                   float nx, float ny);
+/* Call once after the level's segments are loaded. */
+void phys_world_prepare(PhysWorld *w);
 
 void phys_body_axes(const Chassis *c, float *fx, float *fy, float *ux, float *uy);
 void phys_attach_of(const Chassis *c, const Wheel *w,

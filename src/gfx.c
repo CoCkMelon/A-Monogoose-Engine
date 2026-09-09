@@ -493,3 +493,23 @@ void ame_mesh_release_gpu(ame_mesh *m)
     m->vao = m->vbo = m->ebo = 0;
     m->uploaded = 0;
 }
+
+/*
+ * Draw a static uploaded mesh with the pipeline's program/texture/VP.
+ * Same single shader as the dynamic batch — not a second pass, just a
+ * second Draw* against geometry that does not change every frame.
+ */
+void ame_pipeline_draw_mesh(const ame_pipeline_draw_mesh_args *a)
+{
+    if (!a || !a->p || !a->mesh || !a->p->ready || !a->mesh->uploaded) return;
+    if (!a->view_projection_4x4) return;
+    ame_pipeline *p = a->p;
+    const ame_mesh *m = a->mesh;
+    unsigned tex = a->tex ? a->tex : p->texture;
+    glUseProgram(p->prog);
+    glUniformMatrix4fv(p->u_view_projection, 1, GL_FALSE, a->view_projection_4x4);
+    glUniform1i(p->u_texture, 0);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, tex);
+    ame_mesh_draw(m);
+}
