@@ -182,9 +182,9 @@ SDL_AppResult game_app_init(void **appstate, int argc, char **argv)
         fprintf(stderr, "settings: loaded %d keys from %s\n", nkeys, used);
     apply_settings();
 
-    /* 2. sim */
+    /* 2. sim + keybinds (ame_actions edge table from settings binds.*) */
     bf_reset(1);
-    game_input_reset();
+    game_input_load_binds(&g_settings);
 
     /* 3. optional host (library convenience — replace with your own window) */
     const char *title = ame_settings_get(&g_settings, "window.title", APP_WINDOW_TITLE);

@@ -6,6 +6,10 @@
  *
  * Callback thread: mem_on_cursor / mem_on_click / mem_restart.
  * Main thread:     mem_tick then mem_snapshot then draw.
+ *
+ * Integration options (A stay-as-is / B biscuit-parity logic+snap /
+ * C shared helpers only) are documented in docs/memory-options.txt.
+ * Default remains A — this header stays a lightweight rules module.
  */
 
 #include "ame/events.h"

@@ -1,0 +1,68 @@
+Memory example — integration options
+====================================
+
+`include/ame/memory.h` is the Memory card-game rules module (no GL/SDL).
+Biscuit went through settings + ame_logic + seqlock snap in R3/R4.
+Memory does not have to match that shape — pick deliberately.
+
+Do not hide case-specific init inside the library. Whatever option you
+choose, the *example* owns the wiring; ame only supplies primitives.
+
+
+Option A — stay lightweight (status quo)
+----------------------------------------
+  * Main thread: mem_tick(dt) → mem_snapshot → draw
+  * asyncinput callback: mem_on_cursor / mem_on_click
+  * No settings.yaml, no logic thread, no seqlock
+
+  Pros: smallest surface, easy to read, fine for a puzzle with no
+  continuous physics.
+  Cons: no runtime binds/hz; tick rate tied to display.
+
+  Choose A when Memory stays a minimal rules demo.
+
+
+Option B — biscuit parity (settings + optional logic + snap)
+------------------------------------------------------------
+  * ame_settings_load_file("examples/memory/settings.yaml")
+  * binds.* via ame_actions (flip / restart / quit)
+  * optional ame_logic thread calling mem_fixed_step at logic.hz
+  * AME_SNAP_DEFINE(MemSnap) published from the logic step;
+    render copies out with MemSnap_latest_copy
+
+  Pros: same loop discipline as biscuit; runtime-tunable; good stress
+  test of the library primitives on a second game.
+  Cons: more moving parts for a turn-based puzzle; fixed 1000 Hz is
+  overkill unless you also drive tweens from the logic thread.
+
+  Choose B when you want one canonical “game host” pattern across
+  examples, or when Memory gains continuous motion that needs a fixed step.
+
+
+Option C — shared helpers only
+------------------------------
+  * Keep mem_tick on the main thread (rules stay simple).
+  * Still use ame_settings + ame_actions for keybinds / window / audio.
+  * Optional: publish a MemSnap via seqlock even without a logic thread
+    (main thread is the sole writer — snap still documents the
+    render copy-out boundary).
+
+  Pros: runtime binds without a physics-style thread; clearer
+  sim/render boundary than raw mem_snapshot into a stack local that
+  might later be shared carelessly.
+  Cons: two examples still differ on threading.
+
+  Choose C as a middle path / incremental step toward B.
+
+
+Default for this tree
+---------------------
+  Memory remains **Option A** until someone needs binds or a fixed
+  step. Biscuit is the reference for B.
+
+  If you wire Memory later, prefer C first (settings + actions + snap
+  publish from main), then promote to B only if a logic thread earns
+  its keep.
+
+  Library primitives involved (already in ame):
+    ame_settings, ame_actions, ame_logic, ame_snap, ame_input, ame_app

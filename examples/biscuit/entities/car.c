@@ -88,7 +88,7 @@ static void motor_wheels(Chassis *car, Wheel *wheels, int driving,
     }
 }
 
-void car_step(Chassis *car, Wheel *wheels, struct PhysWorld *world,
+void car_step(Chassis *car, Wheel *wheels, PhysWorld *world,
               int driving, int accel, int yaw, int boost, float dt)
 {
     car->vy += GRAV * dt;

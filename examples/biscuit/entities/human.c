@@ -43,7 +43,7 @@ int human_try_jump(Person *h)
     return 0;
 }
 
-void human_step(Person *h, const struct Chassis *car, struct PhysWorld *world,
+void human_step(Person *h, const struct Chassis *car, PhysWorld *world,
                 int move, float dt)
 {
     if (h->hidden) {

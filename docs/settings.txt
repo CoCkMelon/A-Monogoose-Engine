@@ -1,0 +1,48 @@
+Runtime settings (ame_settings) + key bindings
+==============================================
+
+File format
+-----------
+  Tiny YAML subset (no libfyaml):
+    - full-line `#` comments
+    - `key: value` (string / int / float / bool)
+    - nested maps via 2-space indent → dotted paths
+      (logic: / hz: 1000  →  "logic.hz")
+    - binds.jump: space   →  action "jump"
+
+  Games own the path and when to load. The engine never hard-codes a
+  game-specific settings file.
+
+
+Biscuit catalog (examples/biscuit/settings.yaml)
+------------------------------------------------
+  window.title / width / height / hide_cursor / vsync
+  logic.enabled          bool   start ame_logic thread (else main-thread pump)
+  logic.hz               float  fixed step rate (default 1000)
+  logic.max_catchup_steps int   main-thread pump cap (default 64)
+  audio.enabled / sample_rate
+  debug.draw
+
+  binds.<action>: <key>[,<key>...]
+    accel_pos / accel_neg     held  (drive / walk)
+    yaw_pos   / yaw_neg       held
+    boost                     held
+    jump / switch / restart / advance / quit   rising edge
+
+
+Loading binds
+-------------
+  ame_actions A;
+  ame_actions_reset(&A);
+  /* optional code defaults first */
+  ame_actions_bind_keys(&A, "jump", "space");
+  ame_actions_load_binds(&A, &settings);   /* overrides matching names */
+
+  See docs/loop.txt for edge-table semantics.
+
+
+Adding a new setting
+--------------------
+  1. Put it in settings.yaml under a section.
+  2. Read with ame_settings_get_f/i/b/string in the example's apply_settings.
+  3. Keep a compile-time fallback macro in config.h for missing files.

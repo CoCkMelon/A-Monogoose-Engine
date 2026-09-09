@@ -12,11 +12,11 @@ typedef struct Person {
 } Person;
 
 
-struct PhysWorld;
+typedef struct ame_phys_world PhysWorld;
 struct Chassis;
 
 void human_init(Person *h);
-void human_step(Person *h, const struct Chassis *car, struct PhysWorld *world,
+void human_step(Person *h, const struct Chassis *car, PhysWorld *world,
                 int move, float dt);
 int  human_try_jump(Person *h); /* 1 if jumped */
 void human_apply_damage(Person *h, float dmg);

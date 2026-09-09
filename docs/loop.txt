@@ -1,0 +1,98 @@
+Snap publication (sim → render) and the input edge table
+========================================================
+
+These two patterns are how ame keeps a fixed-step logic thread and a
+variable-rate render thread honest without mutexes on the hot path.
+
+
+1. Snap publication (ame/snap.h)
+-------------------------------
+
+  Logic thread (ONE writer)                  Render / main thread (N readers)
+  -------------------------                  --------------------------------
+  step physics / rules                       (never mutates sim state)
+  build POD GameSnap out = {...}             GameSnap mine;
+  GameSnap_publish(&g_snap, &out);           if (GameSnap_latest_copy(&g_snap, &mine))
+                                               draw(&mine);
+                                             else
+                                               draw(previous_mine);   /* keep last good */
+
+Rules enforced by AME_SNAP_DEFINE:
+
+  * The writer is the sole publisher. After each fixed step it builds a
+    plain snapshot struct and calls *_publish (seqlock: ver odd while
+    copying into the shared buffer, even when stable).
+
+  * Readers NEVER hold a pointer into shared memory. *_latest_copy
+    retries on conflict and only then writes into the caller's private
+    `mine`. On failure `mine` is left unchanged → last good frame, no tear.
+
+  * Why not a mutex?
+      - Render path stays wait-free for the common case (one atomic load
+        + memcpy-sized relaxed copies).
+      - TSan-clean without suppressions: every shared byte is touched via
+        relaxed atomics; the version counter gives consistency.
+
+  * What goes in the snap?
+      Only POD / value data the renderer needs (poses, HUD numbers,
+      debug line endpoints). No pointers to sim-owned pools.
+
+Biscuit: bf_logic_step → publish_snap_unlocked → BfSnap_publish;
+         main loop → bf_snapshot_latest → bf_view_draw.
+
+
+2. Input edge table (ame/actions.h)
+----------------------------------
+
+Raw asyncinput events are a stream:
+
+  value 1  = key down
+  value 0  = key up
+  value 2  = key repeat (OS autorepeat while held)
+  pressed  = library rising-edge hint on the first down
+
+Games need two different signals per logical action:
+
+  held      LEVEL  true while any bound key is down     → axes, boost
+  pressed   EDGE   true once on the rising transition   → jump, switch, quit
+  released  EDGE   true once on the falling transition
+
+Without an edge table:
+
+  * Binding jump to Space fires again on every key-repeat (value==2).
+  * Binding accel to W only pulses on the down event unless you latch it.
+
+ame_actions keeps:
+
+  * per-NI-key down latch (key_down[code])
+  * per-action key list (from settings binds.* or code)
+  * held / pressed / released flags
+
+Feed path (asyncinput callback thread — same as today):
+
+  ame_actions_feed_raw(&A, ev);     /* updates latches + edges */
+  if (ame_actions_held(&A, "boost")) ...
+  if (ame_actions_pressed(&A, "jump", /*consume=*/1)) request_jump();
+
+YAML (settings.yaml):
+
+  binds:
+    jump: space
+    accel_pos: w,up
+    quit: escape,q
+
+Comma = alternate keys. Reload via ame_actions_load_binds(&A, &settings).
+
+
+3. How they meet
+----------------
+
+  asyncinput thread          logic thread              render thread
+  -----------------          ------------              -------------
+  feed_raw / holds  ----atomics/requests---->  fixed step
+                                               publish snap  ----copy-out---->  draw
+
+Holds are written by the input callback (biscuit: bf_hold_*), consumed
+by the logic step. Discrete requests (jump) are edge-latched requests
+the logic thread clears when applied. The snap is the only sim→render
+bulk path.

@@ -1,6 +1,6 @@
 # Biscuit Fuel — runtime settings (edit without rebuild).
 # Loaded by examples/biscuit/app.c via ame_settings_load_file.
-# Missing file → compile-time defaults from config.h.
+# Missing file → compile-time defaults from config.h + input defaults.
 
 window:
   title: Biscuit Fuel
@@ -22,3 +22,19 @@ audio:
 
 debug:
   draw: true
+
+# Key bindings → ame_actions (edge table). Comma = alternate keys.
+# Names are case-insensitive tokens: w, space, leftshift, up, escape, ...
+# Jump/switch/quit use rising edges (no key-repeat retrigger).
+# Accel/yaw/boost use held level.
+binds:
+  accel_pos: w,up
+  accel_neg: s,down
+  yaw_pos: d,right
+  yaw_neg: a,left
+  boost: leftshift,rightshift
+  jump: space
+  switch: e
+  restart: r
+  advance: enter,space
+  quit: escape,q

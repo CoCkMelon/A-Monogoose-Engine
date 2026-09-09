@@ -300,8 +300,8 @@ static void publish_snap_unlocked(void)
     out.dialogue_on = dialogue_is_active();
     if (out.dialogue_on)
         dialogue_current(out.dialogue, sizeof(out.dialogue));
-    out.n_plat = G.world.n;
-    for (int i = 0; i < G.world.n && i < BF_MAX_PLAT; i++) {
+    out.n_plat = G.world.n_plat;
+    for (int i = 0; i < G.world.n_plat && i < BF_MAX_PLAT; i++) {
         out.plat[i].x = G.world.plat[i].cx;
         out.plat[i].y = G.world.plat[i].cy;
         out.plat[i].w = G.world.plat[i].hw * 2.0f;

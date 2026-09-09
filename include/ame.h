@@ -18,9 +18,13 @@
  *   6. main loop: poll → copy snap → draw → swap
  *   7. ame_logic_stop / ame_app_close / ame_input_close
  *
- * Physics is NOT in the library — examples/biscuit owns its solver.
+ * Physics helpers (world / circle / AABB / struts) live in ame/phys.h —
+ * games own vehicle motors, HP, and character controllers on top.
+ * Key bindings + edge table: ame/actions.h (YAML binds.* via settings).
+ *
  * The library gives: pools, events, geo queries, batch renderer, audio
- * synth, settings YAML, logic-thread helper, snap seqlock, net framing.
+ * synth, settings YAML, logic-thread helper, snap seqlock, phys helpers,
+ * action binds, net framing. You still own init order and game rules.
  */
 
 #include "ame/handle.h"
@@ -32,6 +36,8 @@
 #include "ame/snap.h"
 #include "ame/settings.h"
 #include "ame/logic.h"
+#include "ame/phys.h"
+#include "ame/actions.h"
 #include "ame/camera.h"
 #include "ame/gfx.h"
 #include "ame/mesh.h"

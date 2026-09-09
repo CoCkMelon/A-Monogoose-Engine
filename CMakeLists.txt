@@ -45,6 +45,8 @@ add_library(ame STATIC
     src/audio_ray.c
     src/settings.c
     src/logic.c
+    src/phys.c
+    src/actions.c
 )
 target_include_directories(ame PUBLIC
     ${CMAKE_SOURCE_DIR}/include
@@ -150,6 +152,10 @@ target_link_libraries(test_app PRIVATE SDL3::SDL3 OpenGL::GL)
 ame_test(test_time      tests/test_time.c src/time.c)
 ame_test(test_settings tests/test_settings.c src/settings.c)
 ame_test(test_logic    tests/test_logic.c src/logic.c)
+ame_test(test_phys     tests/test_phys.c src/phys.c src/geo.c src/math.c)
+target_include_directories(test_phys PRIVATE ${CMAKE_SOURCE_DIR}/external/cglm/include)
+ame_test(test_actions  tests/test_actions.c src/actions.c src/settings.c)
+target_include_directories(test_actions PRIVATE ${CMAKE_SOURCE_DIR}/external/asyncinput/include)
 ame_test(test_prefab    tests/test_prefab.c src/prefab.c)
 ame_test(test_tilemap   tests/test_tilemap.c src/tilemap.c src/geo.c)
 ame_test(test_audio_ray tests/test_audio_ray.c src/audio_ray.c src/geo.c)
@@ -170,6 +176,7 @@ add_executable(test_biscuit
     src/pool.c
     src/events.c
     src/geo.c
+    src/phys.c
 )
 target_include_directories(test_biscuit PRIVATE
     ${CMAKE_SOURCE_DIR}/include
@@ -201,11 +208,13 @@ if(AME_BUILD_BENCHES)
     add_executable(bench_core benches/bench_core.c
         src/pool.c src/events.c src/geo.c src/gfx.c src/gl.c
         src/memory.c src/text.c src/math.c src/camera.c src/audio.c src/settings.c src/logic.c
+        src/phys.c src/actions.c
     )
     target_include_directories(bench_core PRIVATE
         ${CMAKE_SOURCE_DIR}/include
         ${CMAKE_SOURCE_DIR}/src
         ${CMAKE_SOURCE_DIR}/external/cglm/include
+        ${CMAKE_SOURCE_DIR}/external/asyncinput/include
     )
     target_compile_options(bench_core PRIVATE ${AME_WARN} -O3)
     target_link_libraries(bench_core PRIVATE Threads::Threads m)

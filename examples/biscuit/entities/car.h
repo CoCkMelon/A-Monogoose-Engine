@@ -4,6 +4,10 @@
 /*
  * Car body + round wheels. Chassis is an AABB (walls/ceiling only).
  * Wheels are circles on spring-damper struts. No Box2D.
+ *
+ * Layout: Chassis / Wheel leading fields match ame_phys_body / ame_phys_wheel
+ * so library strut/collision helpers can cast the prefix safely. Game-only
+ * fields (hp, fuel, spin) stay after that prefix.
  */
 
 #define BODY_W      1.70f
@@ -36,20 +40,22 @@ typedef struct Chassis {
 } Chassis;
 
 typedef struct Wheel {
+    /* ame_phys_wheel prefix — keep order/size in sync with include/ame/phys.h */
     float lx;           /* body-space axle x */
     float x, y, vx, vy;
     float r, mass;
-    float spin, spin_vel;
     int   grounded;
     float nx, ny;
+    /* biscuit-only */
+    float spin, spin_vel;
 } Wheel;
 
 
-struct PhysWorld;
+typedef struct ame_phys_world PhysWorld; /* full type in physics.h / ame/phys.h */
 
 void car_init(Chassis *c, Wheel *wheels);
 void car_seat_wheels(Chassis *c, Wheel *wheels);
-void car_step(Chassis *c, Wheel *wheels, struct PhysWorld *world,
+void car_step(Chassis *c, Wheel *wheels, PhysWorld *world,
               int driving, int accel, int yaw, int boost, float dt);
 void car_apply_damage(Chassis *c, float dmg);
 void car_refuel(Chassis *c, float amount);
