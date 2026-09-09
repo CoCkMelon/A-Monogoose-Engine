@@ -43,6 +43,8 @@ add_library(ame STATIC
     src/prefab.c
     src/tilemap.c
     src/audio_ray.c
+    src/settings.c
+    src/logic.c
 )
 target_include_directories(ame PUBLIC
     ${CMAKE_SOURCE_DIR}/include
@@ -146,6 +148,8 @@ ame_test(test_batch     tests/test_batch.c src/gfx.c src/gl.c)
 ame_test(test_app       tests/test_app.c src/app.c src/audio.c src/gl.c)
 target_link_libraries(test_app PRIVATE SDL3::SDL3 OpenGL::GL)
 ame_test(test_time      tests/test_time.c src/time.c)
+ame_test(test_settings tests/test_settings.c src/settings.c)
+ame_test(test_logic    tests/test_logic.c src/logic.c)
 ame_test(test_prefab    tests/test_prefab.c src/prefab.c)
 ame_test(test_tilemap   tests/test_tilemap.c src/tilemap.c src/geo.c)
 ame_test(test_audio_ray tests/test_audio_ray.c src/audio_ray.c src/geo.c)
@@ -196,7 +200,7 @@ option(AME_BUILD_BENCHES "Build headless micro-benches" ON)
 if(AME_BUILD_BENCHES)
     add_executable(bench_core benches/bench_core.c
         src/pool.c src/events.c src/geo.c src/gfx.c src/gl.c
-        src/memory.c src/text.c src/math.c src/camera.c src/audio.c
+        src/memory.c src/text.c src/math.c src/camera.c src/audio.c src/settings.c src/logic.c
     )
     target_include_directories(bench_core PRIVATE
         ${CMAKE_SOURCE_DIR}/include

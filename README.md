@@ -42,6 +42,51 @@ Headless checks (no window):
 in any checkout. `ctest` runs both self-tests in a scratch directory as
 `test_selftest_paths` to keep it that way.
 
+
+## Library, not a framework
+
+`ame` is a **static library**. You own init. Nothing opens a window, starts
+audio, or spawns a logic thread until your code says so.
+
+```c
+#include <ame.h>
+
+ame_settings S;
+ame_settings_load_file(&S, "settings.yaml");   /* runtime YAML subset */
+
+ame_app app;
+ame_app_open(ame_app_size(ame_app_title(ame_app_reset(&app), "Game"),
+                          ame_settings_get_i(&S, "window.width", 1280),
+                          ame_settings_get_i(&S, "window.height", 720)));
+/* Or skip ame_app and call ame_gl_load(your_get_proc) after your own window. */
+
+ame_logic L;
+ame_logic_reset(&L);
+ame_logic_rate(&L, ame_settings_get_f(&S, "logic.hz", 1000.f));
+L.step = my_fixed_step;   /* YOU implement physics — not in the library */
+ame_logic_start(&L);      /* optional; or pump on the main thread */
+
+/* main: copy snap → draw → ame_app_swap */
+ame_logic_stop(&L);
+ame_app_close(&app);
+```
+
+Physics is **not** an engine module. Biscuit’s solver lives under
+`examples/biscuit/physics.*`. The library gives geo queries, pools, batch
+renderer, audio synth, settings, and the logic-thread helper.
+
+### Biscuit loop (after this branch)
+
+| Mode | Who steps physics | How rate is chosen |
+|------|-------------------|--------------------|
+| `logic.enabled: true` (default) | `ame_logic` thread calls `bf_logic_step` | `logic.hz` in `settings.yaml` (default 1000) |
+| `logic.enabled: false` | main thread `bf_tick` accumulator | same `logic.hz` / `bf_set_fixed_dt` |
+| `--selftest` | main thread only | compile-time default |
+
+Render always: `bf_snapshot_latest` (seqlock copy-out) → `bf_view_draw`.
+
+Edit `examples/biscuit/settings.yaml` without rebuilding.
+
 ## Biscuit Fuel
 
 Side-view 2.5D remake of the Brackeys 2025.2 jam game. Same camera as

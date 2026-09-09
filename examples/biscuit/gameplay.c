@@ -9,7 +9,13 @@
 #include "triggers.h"
 #include "level_gen.h"
 
+/* Published render snapshot (logic thread = writer). */
+static BfSnap_snap g_snap;
+static float g_fixed_dt = APP_FIXED_DT_DEFAULT;
+
+
 #include "ame/events.h"
+#include "ame/snap.h"
 #include "ame/math.h"
 #include "ame/pool.h"
 
@@ -24,6 +30,7 @@ void sim_ensure(void)
 {
     if (G.inited) return;
     pthread_mutex_init(&G.mu, NULL);
+    BfSnap_snap_init(&g_snap);
     G.inited = 1;
     G.input_ok = 1;
 }
@@ -125,6 +132,18 @@ void bf_reset(uint32_t seed)
     G.cam_y = G.car.y + 0.6f;
     ame_events_clear();
     pthread_mutex_unlock(&G.mu);
+}
+
+void bf_set_fixed_dt(float dt_seconds)
+{
+    if (dt_seconds < 1e-5f) dt_seconds = 1e-5f;
+    if (dt_seconds > 0.05f) dt_seconds = 0.05f;
+    g_fixed_dt = dt_seconds;
+}
+
+float bf_fixed_dt(void)
+{
+    return g_fixed_dt;
 }
 
 void bf_set_input_ok(int ok)
@@ -238,106 +257,144 @@ void bf_teleport(float x, float y)
     pthread_mutex_unlock(&G.mu);
 }
 
+/* One fixed physics step. Called from ame_logic thread OR bf_tick pump. */
+static void logic_step_unlocked(float dt)
+{
+    int driving = (G.mode == BF_MODE_CAR);
+    car_step(&G.car, G.wheel, &G.world, driving, G.accel, G.yaw, G.boost, dt);
+    human_step(&G.human, &G.car, &G.world, G.move, dt);
+    triggers_tick(dt);
+    float tx = driving ? G.car.x : G.human.x;
+    float ty = driving ? G.car.y : G.human.y;
+    /* cam ease uses fixed dt so thread rate does not change feel */
+    float k = clampf(1.0f - expf(-dt * 6.0f), 0.0f, 1.0f);
+    G.cam_x += (tx - G.cam_x) * k;
+    G.cam_y += ((ty + 0.7f) - G.cam_y) * k;
+}
+
+static void publish_snap_unlocked(void)
+{
+    BfSnap out;
+    memset(&out, 0, sizeof(out));
+    out.mode = G.mode;
+    out.car_x = G.car.x; out.car_y = G.car.y; out.car_a = G.car.a;
+    out.car_w = G.car.w; out.car_h = G.car.h;
+    out.car_vx = G.car.vx; out.car_vy = G.car.vy;
+    out.wheel_r = WHEEL_R;
+    for (int i = 0; i < N_W; i++) {
+        out.wheel_x[i] = G.wheel[i].x;
+        out.wheel_y[i] = G.wheel[i].y;
+        out.wheel_spin[i] = G.wheel[i].spin;
+        out.wheel_ground[i] = G.wheel[i].grounded;
+    }
+    out.human_x = G.human.x; out.human_y = G.human.y;
+    out.human_w = G.human.w; out.human_h = G.human.h;
+    out.human_hidden = G.human.hidden;
+    out.human_facing = G.human.facing;
+    out.fuel = G.car.fuel; out.max_fuel = G.car.max_fuel;
+    out.hp = G.car.hp; out.max_hp = G.car.max_hp;
+    out.human_hp = G.human.hp; out.human_max_hp = G.human.max_hp;
+    out.cam_x = G.cam_x; out.cam_y = G.cam_y;
+    out.won = G.won;
+    out.input_ok = G.input_ok;
+    out.dialogue_on = dialogue_is_active();
+    if (out.dialogue_on)
+        dialogue_current(out.dialogue, sizeof(out.dialogue));
+    out.n_plat = G.world.n;
+    for (int i = 0; i < G.world.n && i < BF_MAX_PLAT; i++) {
+        out.plat[i].x = G.world.plat[i].cx;
+        out.plat[i].y = G.world.plat[i].cy;
+        out.plat[i].w = G.world.plat[i].hw * 2.0f;
+        out.plat[i].h = G.world.plat[i].hh * 2.0f;
+    }
+    for (int i = 0; i < BF_MAX_FUEL; i++) {
+        if (!G.fuel_al[i]) continue;
+        int k = out.n_fuel;
+        if (k >= BF_MAX_FUEL) break;
+        out.fuel_item[k].x = G.fuel_x[i];
+        out.fuel_item[k].y = G.fuel_y[i];
+        out.fuel_item[k].r = 0.28f;
+        out.fuel_item[k].alive = 1;
+        out.n_fuel++;
+    }
+    for (int i = 0; i < BF_MAX_MINE; i++) {
+        if (!G.mine_al[i]) continue;
+        int k = out.n_mine;
+        if (k >= BF_MAX_MINE) break;
+        out.mine[k].x = G.mine_x[i];
+        out.mine[k].y = G.mine_y[i];
+        out.mine[k].r = 0.30f;
+        out.mine[k].alive = 1;
+        out.n_mine++;
+    }
+    out.n_saw = G.n_saw;
+    for (int i = 0; i < G.n_saw && i < BF_MAX_SAW; i++) {
+        out.saw[i].x = G.saw_x[i];
+        out.saw[i].y = G.saw_y[i];
+        out.saw[i].r = G.saw_r[i];
+        out.saw[i].angle = G.saw_a[i];
+        out.saw[i].alive = 1;
+    }
+    out.goal_x = G.goal_x; out.goal_y = G.goal_y;
+    out.goal_w = G.goal_w; out.goal_h = G.goal_h;
+    out.n_spawn = G.n_spawn;
+    out.spawn_i = G.spawn_i;
+    for (int i = 0; i < G.n_spawn && i < BF_MAX_SPAWN; i++) {
+        out.spawn[i].x = G.spawn_pt_x[i];
+        out.spawn[i].y = G.spawn_pt_y[i];
+        out.spawn[i].active = (i == G.spawn_i);
+    }
+    out.car_jump = ability_get_car_jump();
+    BfSnap_publish(&g_snap, &out);
+}
+
+void bf_logic_step(float fixed_dt, void *user)
+{
+    (void)user;
+    sim_ensure();
+    if (fixed_dt < 1e-5f) fixed_dt = g_fixed_dt;
+    pthread_mutex_lock(&G.mu);
+    logic_step_unlocked(fixed_dt);
+    publish_snap_unlocked();
+    pthread_mutex_unlock(&G.mu);
+}
+
 void bf_tick(float dt, double now_s)
 {
     (void)now_s;
     sim_ensure();
     if (dt < 0.0f) dt = 0.0f;
     if (dt > 0.05f) dt = 0.05f;
-    pthread_mutex_lock(&G.mu);
-    int n = (int)(dt / APP_FIXED_DT) + 1;
-    if (n < 1) n = 1;
+    float sdt = g_fixed_dt > 1e-5f ? g_fixed_dt : APP_FIXED_DT_DEFAULT;
+    int n = (int)(dt / sdt + 0.5f);
+    if (n < 1 && dt > 0.0f) n = 1;
     if (n > APP_MAX_SUBSTEPS) n = APP_MAX_SUBSTEPS;
-    float sdt = dt / (float)n;
-    int driving = (G.mode == BF_MODE_CAR);
-    for (int i = 0; i < n; i++) {
-        car_step(&G.car, G.wheel, &G.world, driving, G.accel, G.yaw, G.boost, sdt);
-        human_step(&G.human, &G.car, &G.world, G.move, sdt);
-    }
-    triggers_tick(dt);
-    float tx = driving ? G.car.x : G.human.x;
-    float ty = driving ? G.car.y : G.human.y;
-    G.cam_x += (tx - G.cam_x) * clampf(1.0f - expf(-dt * 6.0f), 0.0f, 1.0f);
-    G.cam_y += ((ty + 0.7f) - G.cam_y) * clampf(1.0f - expf(-dt * 6.0f), 0.0f, 1.0f);
+    pthread_mutex_lock(&G.mu);
+    for (int i = 0; i < n; i++)
+        logic_step_unlocked(sdt);
+    publish_snap_unlocked();
     pthread_mutex_unlock(&G.mu);
+}
+
+int bf_snapshot_latest(BfSnap *out)
+{
+    if (!out) return 0;
+    sim_ensure();
+    return BfSnap_latest_copy(&g_snap, out) ? 1 : 0;
 }
 
 void bf_snapshot(BfSnap *out)
 {
     if (!out) return;
     sim_ensure();
+    /* Tests/selftest: force a publish under the mutex then copy. */
     pthread_mutex_lock(&G.mu);
-    memset(out, 0, sizeof(*out));
-    out->mode = G.mode;
-    out->car_x = G.car.x; out->car_y = G.car.y; out->car_a = G.car.a;
-    out->car_w = G.car.w; out->car_h = G.car.h;
-    out->car_vx = G.car.vx; out->car_vy = G.car.vy;
-    out->wheel_r = WHEEL_R;
-    for (int i = 0; i < N_W; i++) {
-        out->wheel_x[i] = G.wheel[i].x;
-        out->wheel_y[i] = G.wheel[i].y;
-        out->wheel_spin[i] = G.wheel[i].spin;
-        out->wheel_ground[i] = G.wheel[i].grounded;
-    }
-    out->human_x = G.human.x; out->human_y = G.human.y;
-    out->human_w = G.human.w; out->human_h = G.human.h;
-    out->human_hidden = G.human.hidden;
-    out->human_facing = G.human.facing;
-    out->fuel = G.car.fuel; out->max_fuel = G.car.max_fuel;
-    out->hp = G.car.hp; out->max_hp = G.car.max_hp;
-    out->human_hp = G.human.hp; out->human_max_hp = G.human.max_hp;
-    out->cam_x = G.cam_x; out->cam_y = G.cam_y;
-    out->won = G.won;
-    out->input_ok = G.input_ok;
-    out->dialogue_on = dialogue_is_active();
-    if (out->dialogue_on)
-        dialogue_current(out->dialogue, sizeof(out->dialogue));
-    out->n_plat = G.world.n;
-    for (int i = 0; i < G.world.n; i++) {
-        out->plat[i].x = G.world.plat[i].cx;
-        out->plat[i].y = G.world.plat[i].cy;
-        out->plat[i].w = G.world.plat[i].hw * 2.0f;
-        out->plat[i].h = G.world.plat[i].hh * 2.0f;
-    }
-    for (int i = 0; i < BF_MAX_FUEL; i++) {
-        if (!G.fuel_al[i]) continue;
-        int k = out->n_fuel;
-        if (k >= BF_MAX_FUEL) break;
-        out->fuel_item[k].x = G.fuel_x[i];
-        out->fuel_item[k].y = G.fuel_y[i];
-        out->fuel_item[k].r = 0.28f;
-        out->fuel_item[k].alive = 1;
-        out->n_fuel++;
-    }
-    for (int i = 0; i < BF_MAX_MINE; i++) {
-        if (!G.mine_al[i]) continue;
-        int k = out->n_mine;
-        if (k >= BF_MAX_MINE) break;
-        out->mine[k].x = G.mine_x[i];
-        out->mine[k].y = G.mine_y[i];
-        out->mine[k].r = 0.30f;
-        out->mine[k].alive = 1;
-        out->n_mine++;
-    }
-    out->n_saw = G.n_saw;
-    for (int i = 0; i < G.n_saw; i++) {
-        out->saw[i].x = G.saw_x[i];
-        out->saw[i].y = G.saw_y[i];
-        out->saw[i].r = G.saw_r[i];
-        out->saw[i].angle = G.saw_a[i];
-        out->saw[i].alive = 1;
-    }
-    out->goal_x = G.goal_x; out->goal_y = G.goal_y;
-    out->goal_w = G.goal_w; out->goal_h = G.goal_h;
-    out->n_spawn = G.n_spawn;
-    out->spawn_i = G.spawn_i;
-    out->car_jump = ability_get_car_jump();
-    for (int i = 0; i < G.n_spawn; i++) {
-        out->spawn[i].x = G.spawn_pt_x[i];
-        out->spawn[i].y = G.spawn_pt_y[i];
-        out->spawn[i].active = (i == G.spawn_i);
-    }
+    publish_snap_unlocked();
     pthread_mutex_unlock(&G.mu);
+    if (!BfSnap_latest_copy(&g_snap, out)) {
+        /* extremely unlikely with no concurrent writer contention in tests */
+        memset(out, 0, sizeof(*out));
+    }
 }
 
 static void bmp16(FILE *f, unsigned v)

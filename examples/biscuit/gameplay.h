@@ -3,15 +3,22 @@
 
 /*
  * Biscuit Fuel simulation (gameplay). No GL, no SDL.
- * Game lives here; the engine is include/ame + src.
+ * Game lives here; the engine is include/ame + src (a library).
  *
  * Side view in XY (Y up, gravity −Y). Camera looks down −Z.
  * Car: AABB chassis + two circle wheels on spring-damper struts.
- * Callback thread: bf_hold_* / bf_request_* (switch, jump, restart, line).
- * Main thread:     bf_tick then bf_snapshot then draw.
+ *
+ * Threading (optional, selected at runtime via settings.yaml):
+ *   logic thread ON  — ame_logic calls bf_logic_step at logic.hz;
+ *                      main thread only bf_snapshot_latest + draw.
+ *   logic thread OFF — main calls bf_tick (accumulator / catch-up).
+ * Input callback thread: bf_hold_* / bf_request_* only (atomics/mutex).
  */
 
 #include "ame/events.h"
+#include "ame/snap.h"
+
+#include <stdint.h>
 
 enum {
     BF_MODE_CAR = 0,
@@ -100,9 +107,16 @@ typedef struct {
     int   car_jump;
 } BfSnap;
 
+/* Seqlock snapshot: logic thread publishes, render copies out. */
+AME_SNAP_DEFINE(BfSnap)
+
 void bf_reset(uint32_t seed);
 void bf_set_input_ok(int ok);
 void bf_skip_dialogue(void);
+
+/* Runtime knobs (from settings.yaml). Call after load, before start. */
+void bf_set_fixed_dt(float dt_seconds);
+float bf_fixed_dt(void);
 
 /* Held controls (updated from the asyncinput callback). */
 void bf_hold_accel(int dir); /* W/S  +1 / -1 */
@@ -116,7 +130,15 @@ void bf_request_switch(void);
 void bf_request_restart(void);
 void bf_request_advance(void);
 
+/* Fixed-step body. ame_logic calls this (or bf_tick pumps it). */
+void bf_logic_step(float fixed_dt, void *user /* unused */);
+
+/* Main-thread fallback: catch-up N fixed steps for wall-clock dt. */
 void bf_tick(float dt, double now_s);
+
+/* Always copy-out (seqlock). false → *out unchanged (keep last frame). */
+int  bf_snapshot_latest(BfSnap *out);
+/* Blocking fill under mutex (tests / selftest). */
 void bf_snapshot(BfSnap *out);
 
 /* Teleport (respawn / tests). Wheels re-seat on the struts. */

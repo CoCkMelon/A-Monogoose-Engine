@@ -2,7 +2,7 @@
 #define BF_PHYSICS_H
 
 /*
- * World collision + strut constraints. No Box2D, no 1000 Hz thread.
+ * World collision + strut constraints. No Box2D. Fixed-step rate comes from the game (ame_logic / settings.yaml).
  * Chassis AABB resolves walls/ceiling only (floors=0); wheels are circles
  * vs AABB boxes and vs one-sided track segments (bezier level).
  *

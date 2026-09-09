@@ -1,0 +1,24 @@
+# Biscuit Fuel — runtime settings (edit without rebuild).
+# Loaded by examples/biscuit/app.c via ame_settings_load_file.
+# Missing file → compile-time defaults from config.h.
+
+window:
+  title: Biscuit Fuel
+  width: 1280
+  height: 720
+  hide_cursor: true
+  vsync: true
+
+# Fixed-step logic thread (physics). Spec floor is 1000 Hz.
+# Set enabled: false to step on the main thread instead (debug / single-thread).
+logic:
+  enabled: true
+  hz: 1000
+  max_catchup_steps: 64
+
+audio:
+  enabled: true
+  sample_rate: 48000
+
+debug:
+  draw: true

@@ -2,16 +2,21 @@
 #define AME_APP_H
 
 /*
- * Shared host (mongoose SDL_AppInit style). SETUP chain:
+ * OPTIONAL SDL3 window + GL + audio host. Not required to use the engine.
+ *
+ * The library does not hide game-specific init. This is a convenience for
+ * examples and tools that want a window without re-typing SDL boilerplate.
+ * Custom engines may open their own window and only call ame_gl_load().
+ *
+ * SETUP chain (mutates in place, returns same pointer):
  *
  *   ame_app_open(
  *       ame_app_size(
- *           ame_app_title(ame_app_reset(&app), "Biscuit Fuel"),
+ *           ame_app_title(ame_app_reset(&app), "My Game"),
  *           1280, 720));
  *
- * SDL lives in the .c. Games still own iterate (update then render) and
- * asyncinput callbacks. Tests only use reset/title/size — they do not open
- * a window.
+ * Games still own: iterate order, asyncinput, logic thread, settings load,
+ * snapshot publish. Tests only use reset/title/size — they do not open.
  */
 
 typedef struct ame_app {
