@@ -3,8 +3,8 @@
  * plus app-created lit/shadow/DSDF/post/custom passes over ONE shared
  * batch (sort key = pass, texture, layer). GL entry points load through
  * an injected proc getter (SDL_GL_GetProcAddress / eglGetProcAddress /
- * emscripten). GLSL lives in shaders/*.glsl (baked to
- * generated/shaders_gen), composed with #include at init. */
+ * emscripten). GLSL lives in shaders/ (baked to generated/shaders_gen),
+ * composed with #include at init. */
 #include <ame/render.h>
 
 #if defined(__EMSCRIPTEN__)
@@ -95,7 +95,7 @@ static bool load_gl(void) {
 }
 
 /* ------------------------------------------------------------------ */
-/* shader modules (shaders/*.glsl, baked into shaders_gen)             */
+/* shader modules (baked into shaders_gen from shaders/)               */
 /* ------------------------------------------------------------------ */
 static const char *shader_find(const char *name) {
     for (int i = 0; i < ame_shader_count; i++)

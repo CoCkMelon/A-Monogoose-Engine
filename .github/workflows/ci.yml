@@ -25,8 +25,18 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            clang-19 lld-19 cmake ninja-build libsdl3-dev libegl1 \
+            clang-19 lld-19 cmake ninja-build libegl1 \
             libgl1-mesa-dri libgles-dev
+
+      - name: SDL3 from source (pinned release; noble has no libsdl3-dev)
+        run: |
+          git clone --depth 1 --branch release-3.4.16 \
+            https://github.com/libsdl-org/SDL.git /tmp/sdl3
+          cmake -S /tmp/sdl3 -B /tmp/sdl3/build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release -DSDL_TESTS=OFF
+          cmake --build /tmp/sdl3/build
+          sudo cmake --install /tmp/sdl3/build
+          rm -rf /tmp/sdl3
 
       - name: configure + build (Debug, tests + examples + game)
         run: |
@@ -72,8 +82,18 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            clang-19 lld-19 cmake ninja-build libsdl3-dev libegl1 \
+            clang-19 lld-19 cmake ninja-build libegl1 \
             libgl1-mesa-dri libgles-dev libclang-rt-19-dev
+      - name: SDL3 from source (pinned release; noble has no libsdl3-dev)
+        run: |
+          git clone --depth 1 --branch release-3.4.16 \
+            https://github.com/libsdl-org/SDL.git /tmp/sdl3
+          cmake -S /tmp/sdl3 -B /tmp/sdl3/build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release -DSDL_TESTS=OFF
+          cmake --build /tmp/sdl3/build
+          sudo cmake --install /tmp/sdl3/build
+          rm -rf /tmp/sdl3
+
       - name: build + run tests under sanitizers
         run: |
           cmake -S . -B build -G Ninja -DCMAKE_C_COMPILER=clang-19 \
@@ -92,7 +112,17 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            cmake ninja-build libsdl3-dev libegl1 libgl1-mesa-dri libgles-dev libfyaml-dev libassimp-dev
+            cmake ninja-build libegl1 libgl1-mesa-dri libgles-dev libfyaml-dev libassimp-dev
+      - name: SDL3 from source (pinned release; noble has no libsdl3-dev)
+        run: |
+          git clone --depth 1 --branch release-3.4.16 \
+            https://github.com/libsdl-org/SDL.git /tmp/sdl3
+          cmake -S /tmp/sdl3 -B /tmp/sdl3/build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release -DSDL_TESTS=OFF
+          cmake --build /tmp/sdl3/build
+          sudo cmake --install /tmp/sdl3/build
+          rm -rf /tmp/sdl3
+
       - name: pack (release; static SDL3 where available, else $ORIGIN bundle)
         run: tools/pack.sh
       - uses: actions/upload-artifact@v4
@@ -111,8 +141,18 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            clang-19 lld-19 cmake ninja-build libsdl3-dev libegl1 \
+            clang-19 lld-19 cmake ninja-build libegl1 \
             libgl1-mesa-dri libgles-dev libclang-rt-19-dev
+      - name: SDL3 from source (pinned release; noble has no libsdl3-dev)
+        run: |
+          git clone --depth 1 --branch release-3.4.16 \
+            https://github.com/libsdl-org/SDL.git /tmp/sdl3
+          cmake -S /tmp/sdl3 -B /tmp/sdl3/build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release -DSDL_TESTS=OFF
+          cmake --build /tmp/sdl3/build
+          sudo cmake --install /tmp/sdl3/build
+          rm -rf /tmp/sdl3
+
       - name: test_snap + test_pool under TSan
         run: |
           cmake -S . -B build -G Ninja -DCMAKE_C_COMPILER=clang-19 \

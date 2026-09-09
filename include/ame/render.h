@@ -19,7 +19,7 @@
  * GL function pointers are loaded through an injected proc-address getter:
  * SDL_GL_GetProcAddress on desktop/Android, eglGetProcAddress in headless
  * tests, resolved by Emscripten on web. The GLSL lives in SEPARATE FILES
- * (shaders/*.vert/*.frag + shaders/common/*.glsl modules, composed with
+ * (shader vert/frag files + common include modules, composed with
  * #include) baked at build time - one source compiled per context flavor
  * (desktop GL vs GLES) — no second renderer.
  */
