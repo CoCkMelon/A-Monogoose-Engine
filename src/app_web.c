@@ -41,8 +41,35 @@ static SDL_Window *g_window;
 static SDL_GLContext g_gl;
 static float g_mouse_scale = 1.0f;
 static int g_running = 1;
+static int g_quit_called;
 static double g_acc;
-static Uint64 g_last_ns;
+static double g_last_time;
+
+void ame_request_quit(void) {
+    g_running = 0;
+    emscripten_cancel_main_loop();
+    if (!g_quit_called) {
+        g_quit_called = 1;
+        app_quit();
+    }
+}
+
+void ame_cursor_visible(bool on) {
+    if (on)
+        SDL_ShowCursor();
+    else
+        SDL_HideCursor();
+}
+
+double ame_time_seconds(void) {
+    return (double)SDL_GetPerformanceCounter()
+         / (double)SDL_GetPerformanceFrequency();
+}
+
+void ame_sleep_seconds(double seconds) {
+    if (seconds > 0.0)
+        SDL_Delay((Uint32)(seconds * 1000.0));
+}
 
 static void sync_mouse_scale(void) {
     int iw = 0, ih = 0, pw = 0, ph = 0;
@@ -61,11 +88,19 @@ EMSCRIPTEN_KEEPALIVE void ame_audio_resume(void) {
 
 static void on_event(SDL_Event *e) {
     switch (e->type) {
-    case SDL_EVENT_QUIT:
-        g_running = 0;
-        emscripten_cancel_main_loop();
-        app_quit();
+    case SDL_EVENT_QUIT: {
+        const ame_ev ev = { .kind = AME_EV_QUIT };
+        (void)app_event(&ev);
+        ame_request_quit();
         return;
+    }
+    case SDL_EVENT_DROP_FILE: {
+        const ame_ev ev = { .kind = AME_EV_DROP_FILE,
+                            .x = e->drop.x, .y = e->drop.y,
+                            .path = e->drop.data };
+        (void)app_event(&ev);
+        return;
+    }
     case SDL_EVENT_WINDOW_RESIZED:
     case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED: {
         /* event data can be POINTS; the drawable is PIXELS: re-query */
@@ -92,17 +127,25 @@ static void on_event(SDL_Event *e) {
                          e->motion.y * g_mouse_scale);
         break;
     case SDL_EVENT_MOUSE_BUTTON_DOWN:
-    case SDL_EVENT_MOUSE_BUTTON_UP:
-        in_on_mouse_button(e->button.button - 1,
-                           e->type == SDL_EVENT_MOUSE_BUTTON_DOWN);
+    case SDL_EVENT_MOUSE_BUTTON_UP: {
+        float x = e->button.x * g_mouse_scale;
+        float y = e->button.y * g_mouse_scale;
+        in_on_mouse_button_at(e->button.button - 1,
+                              e->type == SDL_EVENT_MOUSE_BUTTON_DOWN,
+                              x, y);
+        if (e->type == SDL_EVENT_MOUSE_BUTTON_DOWN) {
+            const ame_ev ev = { .kind = AME_EV_CLICK, .x = x, .y = y,
+                                .button = e->button.button - 1 };
+            (void)app_event(&ev);
+        }
         break;
+    }
     case SDL_EVENT_MOUSE_WHEEL:
         in_on_wheel(e->wheel.y);
         break;
     default:
         break;
     }
-    app_event(e);
 }
 
 static void frame(void) {
@@ -114,9 +157,9 @@ static void frame(void) {
     if (!g_running)
         return;
 
-    Uint64 now = SDL_GetTicksNS();
-    double dt = g_last_ns ? (double)(now - g_last_ns) / 1e9 : 0.0;
-    g_last_ns = now;
+    double now = ame_time_seconds();
+    double dt = g_last_time > 0.0 ? now - g_last_time : 0.0;
+    g_last_time = now;
     if (dt < 0.0)
         dt = 0.0;
     if (dt > 0.25)
@@ -126,9 +169,7 @@ static void frame(void) {
     while (g_acc >= AME_WEB_STEP && steps < AME_WEB_MAX_STEPS) {
         in_begin_step();
         if (app_fixed((float)AME_WEB_STEP) != 0) {
-            g_running = 0;
-            emscripten_cancel_main_loop();
-            app_quit();
+            ame_request_quit();
             return;
         }
         g_acc -= AME_WEB_STEP;
@@ -138,9 +179,7 @@ static void frame(void) {
         g_acc = 0.0; /* shed overload: slow-motion, never spiral */
 
     if (app_render() != 0) {
-        g_running = 0;
-        emscripten_cancel_main_loop();
-        app_quit();
+        ame_request_quit();
         return;
     }
     SDL_GL_SwapWindow(g_window);
@@ -148,7 +187,8 @@ static void frame(void) {
 
 int main(void) {
     if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO)) {
-        SDL_Log("ame/web: SDL_Init failed: %s", SDL_GetError());
+        ame_set_errorf(AME_ERR_PLATFORM, "SDL_Init failed: %s", SDL_GetError());
+        ame_log_last_error();
         return 1;
     }
     /* WebGL2 context = GLES3 */
@@ -178,12 +218,14 @@ int main(void) {
     g_window = SDL_CreateWindow(AME_WEB_TITLE, AME_WEB_W, AME_WEB_H,
                                 SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE);
     if (!g_window) {
-        SDL_Log("ame/web: window failed: %s", SDL_GetError());
+        ame_set_errorf(AME_ERR_PLATFORM, "window creation failed: %s", SDL_GetError());
+        ame_log_last_error();
         return 1;
     }
     g_gl = SDL_GL_CreateContext(g_window);
     if (!g_gl) {
-        SDL_Log("ame/web: GL context failed: %s", SDL_GetError());
+        ame_set_errorf(AME_ERR_PLATFORM, "GL context creation failed: %s", SDL_GetError());
+        ame_log_last_error();
         return 1;
     }
     SDL_GL_SetSwapInterval(1);
@@ -195,7 +237,9 @@ int main(void) {
     audio_attach_sdl();
 
     if (app_init() != 0) {
-        SDL_Log("ame/web: app_init failed");
+        if (ame_last_error_code() == AME_ERR_OK)
+            ame_set_error(AME_ERR_PLATFORM, "app_init returned failure");
+        ame_log_last_error();
         return 1;
     }
     /* sync the game to the canvas REAL pixel size from frame one */
@@ -208,7 +252,8 @@ int main(void) {
         }
     }
     sync_mouse_scale();
-    g_last_ns = 0;
+    g_quit_called = 0;
+    g_last_time = 0.0;
     g_acc = 0;
 
     /* rAF-driven loop; the page pauses us via ame_set_running(0) when the

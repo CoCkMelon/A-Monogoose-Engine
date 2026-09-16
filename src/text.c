@@ -159,8 +159,11 @@ int text_init_dsdf(void) {
     /* atlas bytes are already RGBA-encoded DSDF samples */
     g_dsdf_tex = rp_load_texture(ame_dsdf_atlas, AME_DSDF_ATLAS_W,
                                  AME_DSDF_ATLAS_H, 4, false /*linear*/);
-    if (g_dsdf_tex < 0)
+    if (g_dsdf_tex < 0) {
+        if (ame_last_error_code() == AME_ERR_OK)
+            ame_set_error(AME_ERR_TEXT_ATLAS, "DSDF atlas upload failed");
         return -1;
+    }
     ame_rp_dsdf_atlas a = { AME_DSDF_RANGE, AME_DSDF_ATLAS_W,
                             AME_DSDF_ATLAS_H };
     rp_set_dsdf_atlas(&a);
@@ -176,6 +179,8 @@ int text_init_hires(void) {
     g_hires_tex = rp_load_texture(ame_hires_atlas_a8, AME_HIRES_ATLAS_WIDTH,
                                   AME_HIRES_ATLAS_HEIGHT, 1,
                                   false /*linear*/);
+    if (g_hires_tex < 0 && ame_last_error_code() == AME_ERR_OK)
+        ame_set_error(AME_ERR_TEXT_ATLAS, "smooth atlas upload failed");
     return g_hires_tex;
 }
 
@@ -220,8 +225,10 @@ int text_init(bool nearest_sampling) {
     /* expand A8 to RGBA (white, alpha = coverage) once, upload, free */
     size_t n = (size_t)AME_FONT_ATLAS_WIDTH * (size_t)AME_FONT_ATLAS_HEIGHT;
     uint8_t *rgba = malloc(n * 4);
-    if (!rgba)
+    if (!rgba) {
+        ame_set_error(AME_ERR_OUT_OF_MEMORY, "text atlas expansion failed");
         return -1;
+    }
     for (size_t i = 0; i < n; i++) {
         rgba[i * 4] = 255;
         rgba[i * 4 + 1] = 255;
@@ -231,6 +238,8 @@ int text_init(bool nearest_sampling) {
     g_atlas_tex = rp_load_texture(rgba, AME_FONT_ATLAS_WIDTH, AME_FONT_ATLAS_HEIGHT,
                                   4, nearest_sampling);
     free(rgba);
+    if (g_atlas_tex < 0 && ame_last_error_code() == AME_ERR_OK)
+        ame_set_error(AME_ERR_TEXT_ATLAS, "pixel atlas upload failed");
     return g_atlas_tex;
 }
 

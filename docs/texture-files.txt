@@ -1,0 +1,22 @@
+ame-next ENGINE SPEC
+File: texture-files.txt
+
+Textures have two supported paths:
+
+  rp_load_texture(pixels, w, h, comps, nearest)
+      Shipping/baked path. The caller owns the source pixels and the engine
+      copies them to the GPU.
+
+  rp_load_texture_file(path, nearest)
+      Iteration path. The engine decodes PNG, JPEG, TGA, BMP, and the other
+      formats supported by the vendored stb_image decoder, forces RGBA8,
+      uploads the texture, and frees the decoder buffer.
+
+The file helper returns a normal texture id or -1. On failure inspect
+`ame_last_error_code()` and `ame_last_error()`; the decoder's reason is kept
+as the detail. `rp_texture_size(id, &w, &h)` reads the registry dimensions.
+
+File loading is intentionally not a hot-loop API. Load during setup, retain
+the id, and use rp_update_texture for a same-size dynamic texture. A shipping
+build may replace file loads with generated C pixel arrays without changing
+the draw code.

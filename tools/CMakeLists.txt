@@ -98,7 +98,10 @@ add_custom_target(generated_shaders
 
 # static lib the engine/game links to get the baked arrays
 add_library(ame_font STATIC ${CMAKE_SOURCE_DIR}/generated/font_atlas.c)
-target_include_directories(ame_font PUBLIC ${CMAKE_SOURCE_DIR}/generated)
+set_target_properties(ame_font PROPERTIES EXPORT_NAME font)
+target_include_directories(ame_font PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/generated>
+    $<INSTALL_INTERFACE:include/ame/generated>)
 add_dependencies(ame_font generated_font)
 target_sources(ame_font PRIVATE ${CMAKE_SOURCE_DIR}/generated/font_atlas_dsdf.c)
 add_dependencies(ame_font generated_font_dsdf)

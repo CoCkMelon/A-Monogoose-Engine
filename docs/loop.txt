@@ -85,11 +85,16 @@ NAMING: CAMERA (across 2D and 3D)
 PUBLIC API SHAPE
   app.h (extern "C")
     int  app_init(void)
-    int  app_event(const void* sdl_event)
-    int  app_fixed(float dt)     (logic thread) run all *_update at
-                                 fixed dt = 0.001 s
-    int  app_render(void)        (main thread) build + submit one frame
+    int  app_event(const ame_ev *event) (platform-neutral kind + payload)
+    int  app_fixed(float dt)            (logic thread) run all *_update at
+                                        fixed dt = 0.001 s
+    int  app_render(void)               (main thread) build + submit one frame
     void app_quit(void)
+    ame_request_quit(), ame_cursor_visible(), ame_time_seconds()
+  Input clicks are also queued in the engine and arrive through
+  in_click_consumed(), so gameplay does not need an event callback. The
+  neutral AME_EV_CLICK notification is available to apps that want it; the
+  SDL and browser bootstraps translate native events before app_event.
   main.c (desktop): thin, only lifecycle glue; starts the logic thread.
   web bootstrap: thin shim calling the SAME app_* functions.
 

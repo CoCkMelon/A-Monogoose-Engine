@@ -39,6 +39,30 @@ static SDL_GLContext g_gl = NULL;
 static SDL_Thread *g_logic = NULL;
 static _Atomic int g_run;       /* 1 = running, 0 = stop requested */
 static _Atomic int g_exit_code;
+
+void ame_request_quit(void) {
+    atomic_store_explicit(&g_run, 0, memory_order_release);
+}
+
+void ame_cursor_visible(bool on) {
+    if (on)
+        SDL_ShowCursor();
+    else
+        SDL_HideCursor();
+}
+
+double ame_time_seconds(void) {
+    return (double)SDL_GetPerformanceCounter()
+         / (double)SDL_GetPerformanceFrequency();
+}
+
+void ame_sleep_seconds(double seconds) {
+    if (seconds <= 0.0)
+        return;
+    if (seconds > 10.0)
+        seconds = 10.0;
+    SDL_DelayPrecise((Uint64)(seconds * 1000000000.0));
+}
 /* QA/headless: AME_FIXED_FRAME_DT=seconds runs the logic INLINE in the
  * render iterate (exactly dt per rendered frame, no logic thread), so
  * frame N always sees sim time N*dt - byte-deterministic captures of
@@ -58,10 +82,7 @@ static int logic_thread(void *ud) {
         if (rc != 0) {
             atomic_store(&g_exit_code, rc);
             atomic_store(&g_run, 0);
-            SDL_Event e;
-            SDL_zero(e);
-            e.type = SDL_EVENT_QUIT;
-            SDL_PushEvent(&e);
+            ame_request_quit();
             break;
         }
         next += one;
@@ -79,8 +100,12 @@ static int logic_thread(void *ud) {
 SDL_AppResult SDL_AppInit(void **appstate, int argc, char **argv) {
     (void)argc; (void)argv;
     *appstate = NULL;
+    const char *log_path = SDL_getenv("AME_LOG_FILE");
+    if (log_path && log_path[0] && !ame_log_open(log_path))
+        ame_log(AME_LOG_WARN, "could not open AME_LOG_FILE '%s'", log_path);
     if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO)) {
-        SDL_Log("ame: SDL_Init failed: %s", SDL_GetError());
+        ame_set_errorf(AME_ERR_PLATFORM, "SDL_Init failed: %s", SDL_GetError());
+        ame_log_last_error();
         return SDL_APP_FAILURE;
     }
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
@@ -95,15 +120,20 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char **argv) {
         int w = atoi(ew), h = atoi(eh);
         if (w > 0 && h > 0) { win_w = w; win_h = h; }
     }
-    g_window = SDL_CreateWindow("ame-next", win_w, win_h,
+    const char *title = SDL_getenv("AME_WINDOW_TITLE");
+    if (!title || !title[0])
+        title = "ame app";
+    g_window = SDL_CreateWindow(title, win_w, win_h,
                                 SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE);
     if (!g_window) {
-        SDL_Log("ame: window failed: %s", SDL_GetError());
+        ame_set_errorf(AME_ERR_PLATFORM, "window creation failed: %s", SDL_GetError());
+        ame_log_last_error();
         return SDL_APP_FAILURE;
     }
     g_gl = SDL_GL_CreateContext(g_window);
     if (!g_gl) {
-        SDL_Log("ame: GL context failed: %s", SDL_GetError());
+        ame_set_errorf(AME_ERR_PLATFORM, "GL context creation failed: %s", SDL_GetError());
+        ame_log_last_error();
         return SDL_APP_FAILURE;
     }
     SDL_GL_SetSwapInterval(1);
@@ -113,14 +143,16 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char **argv) {
     in_reset();
 #if defined(AME_INPUT_ASYNCINPUT)
     if (!in_asyncinput_init())
-        SDL_Log("ame: asyncinput unavailable (device permissions?) - "
+        ame_log(AME_LOG_WARN, "asyncinput unavailable (device permissions?) - "
                 "no raw keyboard/mouse; SDL does windowing only");
 #endif
     audio_init(48000, 2);
     audio_attach_sdl();
 
     if (app_init() != 0) {
-        SDL_Log("ame: app_init failed");
+        if (ame_last_error_code() == AME_ERR_OK)
+            ame_set_error(AME_ERR_PLATFORM, "app_init returned failure");
+        ame_log_last_error();
         return SDL_APP_FAILURE;
     }
 
@@ -156,8 +188,12 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char **argv) {
     }
     if (g_fixed_dt <= 0.0)
         g_logic = SDL_CreateThread(logic_thread, "ame-logic", NULL);
-    if (g_fixed_dt <= 0.0 && !g_logic)
+    if (g_fixed_dt <= 0.0 && !g_logic) {
+        ame_set_error(AME_ERR_PLATFORM,
+                      "could not create the fixed-step logic thread");
+        ame_log_last_error();
         return SDL_APP_FAILURE;
+    }
     return SDL_APP_CONTINUE;
 }
 
@@ -167,9 +203,19 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
     (void)appstate;
     /* window layer first */
     switch (event->type) {
-    case SDL_EVENT_QUIT:
-        atomic_store_explicit(&g_run, 0, memory_order_relaxed);
+    case SDL_EVENT_QUIT: {
+        const ame_ev ev = { .kind = AME_EV_QUIT };
+        (void)app_event(&ev);
+        ame_request_quit();
         return SDL_APP_SUCCESS;
+    }
+    case SDL_EVENT_DROP_FILE: {
+        const ame_ev ev = { .kind = AME_EV_DROP_FILE,
+                            .x = event->drop.x, .y = event->drop.y,
+                            .path = event->drop.data };
+        (void)app_event(&ev);
+        return SDL_APP_CONTINUE;
+    }
     case SDL_EVENT_WINDOW_RESIZED:
     case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED:
     case SDL_EVENT_WINDOW_EXPOSED:
@@ -226,10 +272,14 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
                          event->motion.y * g_mouse_scale);
         break;
     case SDL_EVENT_MOUSE_BUTTON_DOWN:
-    case SDL_EVENT_MOUSE_BUTTON_UP:
-        in_on_mouse_button(event->button.button - 1,
-                           event->type == SDL_EVENT_MOUSE_BUTTON_DOWN);
+    case SDL_EVENT_MOUSE_BUTTON_UP: {
+        float x = event->button.x * g_mouse_scale;
+        float y = event->button.y * g_mouse_scale;
+        in_on_mouse_button_at(event->button.button - 1,
+                              event->type == SDL_EVENT_MOUSE_BUTTON_DOWN,
+                              x, y);
         break;
+    }
     case SDL_EVENT_MOUSE_WHEEL:
         in_on_wheel(event->wheel.y);
         break;
@@ -237,7 +287,18 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
         break;
     }
 #endif
-    app_event(event);
+    /* The notification is independent of the selected low-level input
+     * backend; asyncinput may own the button state, but apps still receive
+     * the same platform-neutral click contract. */
+    if (event->type == SDL_EVENT_MOUSE_BUTTON_DOWN) {
+        const ame_ev ev = {
+            .kind = AME_EV_CLICK,
+            .x = event->button.x * g_mouse_scale,
+            .y = event->button.y * g_mouse_scale,
+            .button = event->button.button - 1
+        };
+        (void)app_event(&ev);
+    }
     return SDL_APP_CONTINUE;
 }
 
@@ -310,7 +371,7 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
                         fwrite(row, 3, (size_t)w, f);
                     }
                     fclose(f);
-                    SDL_Log("ame: engine shot -> %s", g_shot_path);
+                    ame_log(AME_LOG_INFO, "engine shot -> %s", g_shot_path);
                 }
             }
             free(rgba);
@@ -339,6 +400,7 @@ void SDL_AppQuit(void *appstate, SDL_AppResult result) {
     if (g_window)
         SDL_DestroyWindow(g_window);
     SDL_Quit();
+    ame_log_close();
 }
 
 #endif /* !AME_HEADLESS */

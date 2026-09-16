@@ -50,7 +50,28 @@ int main(void) {
     UT_ASSERT_NEAR(in_axis(AME_AXIS_MOUSE_X), 320.5f, 1e-3);
     UT_ASSERT_NEAR(in_axis(AME_AXIS_MOUSE_Y), 240.0f, 1e-3);
     UT_ASSERT(in_mouse_button_raw(AME_BTN_LEFT));
+    UT_ASSERT(in_btn_held(AME_BTN_LEFT));
     UT_ASSERT_NEAR(in_axis(AME_AXIS_WHEEL), 1.0f, 1e-3);
+
+    UT_CASE("mouse buttons bind as actions and clicks keep coordinates");
+    UT_ASSERT(in_bind_button(AME_ACT_FIRE, AME_BTN_LEFT));
+    in_begin_step();
+    UT_ASSERT(in_held(AME_ACT_FIRE));
+    UT_ASSERT(!in_pressed(AME_ACT_FIRE)); /* rebind does not invent an edge */
+    in_on_mouse_button(AME_BTN_LEFT, false);
+    in_begin_step();
+    UT_ASSERT(!in_btn_held(AME_BTN_LEFT));
+    in_on_mouse_button_at(AME_BTN_LEFT, true, 320.5f, 240.0f);
+    in_begin_step();
+    UT_ASSERT(in_pressed(AME_ACT_FIRE));
+    float cx = 0, cy = 0;
+    UT_ASSERT(in_click_consumed(&cx, &cy));
+    UT_ASSERT_NEAR(cx, 320.5f, 1e-3);
+    UT_ASSERT_NEAR(cy, 240.0f, 1e-3);
+    UT_ASSERT(in_click_consumed(&cx, &cy));
+    UT_ASSERT_NEAR(cx, 320.5f, 1e-3);
+    UT_ASSERT_NEAR(cy, 240.0f, 1e-3);
+    UT_ASSERT(!in_click_consumed(NULL, NULL));
     in_begin_step();
     UT_ASSERT_NEAR(in_axis(AME_AXIS_WHEEL), 0.0f, 1e-3); /* consumed (delta) */
 

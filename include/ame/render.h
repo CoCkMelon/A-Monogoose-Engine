@@ -156,7 +156,12 @@ void rp_push_text_quad(const ame_rp_quad *q);
  * comps 3/4 are plain RGB/RGBA. */
 int  rp_load_texture(const uint8_t *pixels, int w, int h, int comps,
                      bool nearest_sampling);
+/* Iteration path: decode an image file with the vendored stb_image decoder,
+ * force RGBA8, upload, and free the CPU pixels. Returns a texture id or -1;
+ * the shipping bake-to-C path still uses rp_load_texture directly. */
+int  rp_load_texture_file(const char *path, bool nearest_sampling);
 void rp_free_texture(int id);
+bool rp_texture_size(int id, int *w, int *h);
 /* DSDF (densely sampled distance field) text atlas parameters - call
  * once after loading the DSDF font texture (see text_init_dsdf). */
 typedef struct {

@@ -7,6 +7,9 @@ project(ame_next
     DESCRIPTION "ame-next game engine (C23 core, 2D+3D, SDL3+GL)"
     LANGUAGES C)
 
+include(GNUInstallDirs)
+include(CMakePackageConfigHelpers)
+
 set(CMAKE_C_STANDARD 23)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_C_EXTENSIONS OFF)
@@ -95,6 +98,7 @@ function(ame_dim_lib dim)
         target_link_options(ame_${dim}d PUBLIC -fsanitize=address,undefined)
     endif()
     add_library(ame::${dim}d ALIAS ame_${dim}d)
+    set_target_properties(ame_${dim}d PROPERTIES EXPORT_NAME ${dim}d)
 endfunction()
 
 find_package(SDL3 REQUIRED)
@@ -143,6 +147,24 @@ endif()
 ame_dim_lib(2)
 ame_dim_lib(3)
 add_library(ame ALIAS ame_${AME_DIM}d)
+
+# Optional compiled desktop bootstrap for installed/out-of-tree games.  The
+# in-tree examples still compile the thin source directly so their existing
+# build shape remains unchanged.
+function(ame_bootstrap_lib dim)
+    add_library(ame_bootstrap_sdl_${dim}d STATIC src/app_sdl.c)
+    target_include_directories(ame_bootstrap_sdl_${dim}d PUBLIC
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+        $<INSTALL_INTERFACE:include>)
+    target_compile_definitions(ame_bootstrap_sdl_${dim}d PUBLIC AME_${dim}D=1)
+    target_compile_options(ame_bootstrap_sdl_${dim}d PRIVATE ${AME_WARN_FLAGS} ${AME_FP_FLAGS})
+    target_link_libraries(ame_bootstrap_sdl_${dim}d PUBLIC
+        ame_${dim}d ${AME_SDL3_LINK})
+    set_target_properties(ame_bootstrap_sdl_${dim}d PROPERTIES EXPORT_NAME bootstrap${dim}d)
+endfunction()
+
+ame_bootstrap_lib(2)
+ame_bootstrap_lib(3)
 
 # Ogg Opus decode (audio.txt "decoded samples (opus/wav), one C API"):
 # optional system dep, exactly like cglm in tests - the engine never
@@ -224,3 +246,45 @@ if(AME_BUILD_BENCHES)
     add_subdirectory(benches)
 endif()
 
+
+# ---------------------------------------------------------------------------
+# Out-of-tree consumption.  The low-level bootstrap source remains public
+# for now; the engine libraries, generated shader/font data, headers, and
+# CMake targets are installable as one package.  Export names intentionally
+# match the public spelling ame::2d / ame::3d.
+# ---------------------------------------------------------------------------
+set(AME_CMAKE_INSTALL_DIR "${CMAKE_INSTALL_LIBDIR}/cmake/ame")
+
+install(TARGETS ame_2d ame_3d ame_font
+        ame_bootstrap_sdl_2d ame_bootstrap_sdl_3d
+    EXPORT ameTargets
+    ARCHIVE DESTINATION "${CMAKE_INSTALL_LIBDIR}"
+    LIBRARY DESTINATION "${CMAKE_INSTALL_LIBDIR}"
+    RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}"
+    INCLUDES DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}")
+install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/include/ame"
+        DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}")
+install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/generated/"
+        DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/ame/generated"
+        FILES_MATCHING PATTERN "*.h")
+install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/templates/game"
+        DESTINATION "${CMAKE_INSTALL_DATADIR}/ame/templates")
+install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/LICENSE"
+        DESTINATION "${CMAKE_INSTALL_DATADIR}/ame")
+install(EXPORT ameTargets
+    FILE ameTargets.cmake
+    NAMESPACE ame::
+    DESTINATION "${AME_CMAKE_INSTALL_DIR}")
+
+configure_package_config_file(
+    "${CMAKE_CURRENT_SOURCE_DIR}/cmake/ameConfig.cmake.in"
+    "${CMAKE_CURRENT_BINARY_DIR}/ameConfig.cmake"
+    INSTALL_DESTINATION "${AME_CMAKE_INSTALL_DIR}")
+write_basic_package_version_file(
+    "${CMAKE_CURRENT_BINARY_DIR}/ameConfigVersion.cmake"
+    VERSION "${PROJECT_VERSION}"
+    COMPATIBILITY SameMajorVersion)
+install(FILES
+    "${CMAKE_CURRENT_BINARY_DIR}/ameConfig.cmake"
+    "${CMAKE_CURRENT_BINARY_DIR}/ameConfigVersion.cmake"
+    DESTINATION "${AME_CMAKE_INSTALL_DIR}")

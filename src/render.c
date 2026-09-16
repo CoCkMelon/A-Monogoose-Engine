@@ -16,6 +16,19 @@
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
+/* stb_image is vendored code; its optional static entry points are not all
+ * used by the engine. Keep the engine's -Werror contract without making the
+ * decoder copy noisy. */
+#if defined(__GNUC__) || defined(__clang__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wunused-function"
+#endif
+#define STB_IMAGE_STATIC
+#define STB_IMAGE_IMPLEMENTATION
+#include "../external/stb/stb_image.h"
+#if defined(__GNUC__) || defined(__clang__)
+#pragma GCC diagnostic pop
+#endif
 #include "shaders_gen.h" /* baked GLSL modules (generated/, committed) */
 
 /* ------------------------------------------------------------------ */
@@ -83,11 +96,17 @@ static bool load_gl(void) {
     (void)g_getproc; /* entry points are linked; nothing to resolve */
     return true;
 #else
-    if (!g_getproc)
+    if (!g_getproc) {
+        ame_set_error(AME_ERR_GL_LOADER, "no OpenGL procedure loader was installed");
         return false;
+    }
 #define AME_GL_LOAD(NAME, fn)                                                 \
     gl##fn = (PFNGL##NAME##PROC)g_getproc("gl" #fn);                          \
-    if (!gl##fn) { LOGD("ame rp: missing gl" #fn); return false; }
+    if (!gl##fn) {                                                             \
+        ame_set_errorf(AME_ERR_GL_LOADER, "missing gl" #fn);                  \
+        LOGD("ame rp: missing gl" #fn);                                       \
+        return false;                                                          \
+    }
     AME_GL_FUNCS(AME_GL_LOAD)
 #undef AME_GL_LOAD
     return true;
@@ -144,6 +163,8 @@ static bool compose_into(const char *src, char **buf, size_t *len,
             name[nlen] = 0;
             const char *inc = shader_find(name);
             if (!inc) {
+                ame_set_errorf(AME_ERR_SHADER_SOURCE,
+                               "shader module '%s' is missing", name);
                 LOGD("ame rp: shader module '%s' missing", name);
                 return false;
             }
@@ -321,6 +342,7 @@ static GLuint compile(GLenum type, const char *head, const char *src) {
     if (!ok) {
         char log[512];
         glGetShaderInfoLog(sh, sizeof log, NULL, log);
+        ame_set_errorf(AME_ERR_SHADER_COMPILE, "%s", log);
         LOGD("ame rp: shader compile error: %s", log);
         glDeleteShader(sh);
         return 0;
@@ -335,6 +357,7 @@ static GLuint make_program(const char *vs, const char *fs, bool custom,
     const char *vs_raw = custom ? vs : shader_find(vs);
     const char *fs_raw = custom ? fs : shader_find(fs);
     if (!vs_raw || !fs_raw) {
+        ame_set_errorf(AME_ERR_SHADER_SOURCE, "%s / %s", vs, fs);
         LOGD("ame rp: shader source missing (%s / %s)", vs, fs);
         return 0;
     }
@@ -363,6 +386,7 @@ static GLuint make_program(const char *vs, const char *fs, bool custom,
         if (!ok) {
             char log[512];
             glGetProgramInfoLog(prog, sizeof log, NULL, log);
+            ame_set_errorf(AME_ERR_SHADER_LINK, "%s", log);
             LOGD("ame rp: link error: %s", log);
             glDeleteProgram(prog);
             prog = 0;
@@ -459,7 +483,11 @@ static bool scene_target_ensure(int w, int h) {
     if (S.desc.depth_test)
         glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
                                   GL_RENDERBUFFER, S.scene_depth_rb);
-    if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+    GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+    if (status != GL_FRAMEBUFFER_COMPLETE) {
+        ame_set_errorf(AME_ERR_GL_FRAMEBUFFER,
+                       "scene framebuffer is incomplete (0x%x)",
+                       (unsigned)status);
         glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)prev_fb);
         scene_target_free();
         return false;
@@ -504,19 +532,32 @@ static void pass_teardown(int h) {
 
 static int pass_create_inner(int kind, int order, int src, const char *vs,
                              const char *fs) {
-    if (S.pass_count >= AME_RP_PASS_MAX)
+    if (S.pass_count >= AME_RP_PASS_MAX) {
+        ame_set_error(AME_ERR_PASS_LIMIT, "maximum render passes reached");
         return -1;
+    }
     if ((kind == AME_RP_PASS_SHADOW && S.shadow_pass >= 0)
-        || (kind == AME_RP_PASS_POST && S.post_pass >= 0))
+        || (kind == AME_RP_PASS_POST && S.post_pass >= 0)) {
+        ame_set_error(AME_ERR_PASS_LIMIT,
+                      "only one shadow pass and one post pass are supported");
         return -1; /* at most one shadow pass, at most one post pass */
-    if (kind == AME_RP_PASS_CUSTOM && (!vs || !fs))
+    }
+    if (kind == AME_RP_PASS_CUSTOM && (!vs || !fs)) {
+        ame_set_error(AME_ERR_SHADER_SOURCE,
+                      "custom passes require vertex and fragment sources");
         return -1;
+    }
     if (kind == AME_RP_PASS_SHADOW
         && (src < 0 || src >= S.pass_count || !S.passes[src].used
-            || !pass_has_batch(S.passes[src].kind)))
+            || !pass_has_batch(S.passes[src].kind))) {
+        ame_set_error(AME_ERR_PASS_KIND,
+                      "shadow pass source must be an existing batch pass");
         return -1;
-    if (kind < AME_RP_PASS_TEXTURED || kind > AME_RP_PASS_CUSTOM)
+    }
+    if (kind < AME_RP_PASS_TEXTURED || kind > AME_RP_PASS_CUSTOM) {
+        ame_set_error(AME_ERR_PASS_KIND, "unknown render pass kind");
         return -1;
+    }
 
     const char *vs_name = NULL, *fs_name = NULL;
     bool custom = false, fs_mediump = false;
@@ -616,28 +657,44 @@ static int pass_create_inner(int kind, int order, int src, const char *vs,
 }
 
 int rp_pass_create(const ame_rp_pass_desc *desc) {
-    if (!desc || !S.inited)
+    if (!desc) {
+        ame_set_error(AME_ERR_INVALID_ARGUMENT, "pass descriptor is NULL");
         return -1;
+    }
+    if (!S.inited) {
+        ame_set_error(AME_ERR_NOT_INITIALIZED, "call rp_init before creating passes");
+        return -1;
+    }
     return pass_create_inner(desc->kind, desc->order, desc->src,
                              desc->vs_src, desc->fs_src);
 }
 
 void rp_pass_begin(const ame_rp_pass_frame *sel) {
-    if (!sel || sel->pass < 0 || sel->pass >= S.pass_count)
+    if (!sel || sel->pass < 0 || sel->pass >= S.pass_count) {
+        ame_set_error(AME_ERR_PASS_KIND, "invalid render pass selection");
         return;
+    }
     if (!S.passes[sel->pass].used
-        || !pass_has_batch(S.passes[sel->pass].kind))
+        || !pass_has_batch(S.passes[sel->pass].kind)) {
+        ame_set_error(AME_ERR_PASS_KIND, "selected pass cannot receive geometry");
         return;
+    }
     S.cur_pass = sel->pass;
 }
 
 int rp_init(const ame_rp_desc *desc) {
+    ame_clear_error();
     if (S.inited)
         rp_shutdown();
-    if (!desc)
+    if (!desc) {
+        ame_set_error(AME_ERR_INVALID_ARGUMENT, "render descriptor is NULL");
         return -1;
-    if (desc->width <= 0 || desc->height <= 0)
+    }
+    if (desc->width <= 0 || desc->height <= 0) {
+        ame_set_error(AME_ERR_INVALID_ARGUMENT,
+                      "render viewport must have positive dimensions");
         return -1;
+    }
     if (!load_gl())
         return -2;
 
@@ -664,8 +721,11 @@ int rp_init(const ame_rp_desc *desc) {
 
     /* pass 0: the default branchless textured pass (the UI pass) */
     if (pass_create_inner(AME_RP_PASS_TEXTURED, AME_RP_ORDER_DEFAULT, 0,
-                          NULL, NULL) != 0)
+                          NULL, NULL) != 0) {
+        if (ame_last_error_code() == AME_ERR_OK)
+            ame_set_error(AME_ERR_SHADER_COMPILE, "default textured pass failed");
         return -3;
+    }
 
     /* batch buffers: allocated ONCE (setup), rewritten in place (hot) */
     S.batch.quad_cap = desc->max_quads;
@@ -684,6 +744,7 @@ int rp_init(const ame_rp_desc *desc) {
         || !S.batch.q_layer || !S.batch.q_key || !S.batch.q_order
         || !S.batch.counts || !S.batch.starts || !S.batch.touched) {
         rp_free_batch();
+        ame_set_error(AME_ERR_OUT_OF_MEMORY, "render batch allocation failed");
         return -5;
     }
     memset(S.batch.counts, 0, sizeof(uint32_t) * (size_t)S.batch.bucket_count);
@@ -831,16 +892,30 @@ static uint8_t *expand_a8_to_rgba(const uint8_t *a8, int w, int h) {
 
 int rp_load_texture(const uint8_t *pixels, int w, int h, int comps,
                     bool nearest_sampling) {
-    if (S.tex_count >= RP_TEX_MAX)
+    if (!pixels || w <= 0 || h <= 0) {
+        ame_set_error(AME_ERR_INVALID_ARGUMENT,
+                      "texture pixels and dimensions are required");
         return -1;
+    }
+    if (comps != 1 && comps != 3 && comps != 4) {
+        ame_set_errorf(AME_ERR_TEXTURE_FORMAT,
+                       "texture has unsupported component count %d", comps);
+        return -1;
+    }
+    if (S.tex_count >= RP_TEX_MAX) {
+        ame_set_error(AME_ERR_TEXTURE_LIMIT, "maximum texture registry size reached");
+        return -1;
+    }
     /* comps == 1 (coverage) expands to RGBA below; nothing passes 2 */
     GLenum fmt = comps == 4 ? GL_RGBA : comps == 3 ? GL_RGB : GL_RGBA;
     uint8_t *exp = NULL;
     const uint8_t *up = pixels;
     if (comps == 1) {
         exp = expand_a8_to_rgba(pixels, w, h);
-        if (!exp)
+        if (!exp) {
+            ame_set_error(AME_ERR_OUT_OF_MEMORY, "coverage texture expansion failed");
             return -1;
+        }
         up = exp;
     }
     int id = S.tex_count++;
@@ -862,6 +937,36 @@ int rp_load_texture(const uint8_t *pixels, int w, int h, int comps,
     return id;
 }
 
+int rp_load_texture_file(const char *path, bool nearest_sampling) {
+    if (!path || !path[0]) {
+        ame_set_error(AME_ERR_INVALID_ARGUMENT, "texture path is empty");
+        return -1;
+    }
+    int w = 0, h = 0;
+    stbi_uc *pixels = stbi_load(path, &w, &h, NULL, 4);
+    if (!pixels) {
+        const char *why = stbi_failure_reason();
+        ame_set_errorf(AME_ERR_TEXTURE_DECODE, "%s: %s", path,
+                       why ? why : "unknown decoder error");
+        return -1;
+    }
+    int id = rp_load_texture(pixels, w, h, 4, nearest_sampling);
+    stbi_image_free(pixels);
+    return id;
+}
+
+bool rp_texture_size(int id, int *w, int *h) {
+    if (id < 0 || id >= S.tex_count || !S.tex[id]) {
+        ame_set_error(AME_ERR_INVALID_ARGUMENT, "invalid texture id");
+        return false;
+    }
+    if (w)
+        *w = S.tex_w[id];
+    if (h)
+        *h = S.tex_h[id];
+    return true;
+}
+
 void rp_free_texture(int id) {
     if (id < 0 || id >= S.tex_count || !S.tex[id])
         return;
@@ -875,18 +980,25 @@ void rp_free_texture(int id) {
  * draws one quad through the normal batch). Returns false on id/dim
  * mismatch (never reallocates behind the caller's back). */
 bool rp_update_texture(int id, const uint8_t *pixels, int w, int h, int comps) {
-    if (id < 0 || id >= S.tex_count || !S.tex[id] || !pixels)
+    if (id < 0 || id >= S.tex_count || !S.tex[id] || !pixels) {
+        ame_set_error(AME_ERR_INVALID_ARGUMENT, "invalid texture update");
         return false;
+    }
     if (w != S.tex_w[id] || h != S.tex_h[id]
-        || comps != S.tex_comps[id])
+        || comps != S.tex_comps[id]) {
+        ame_set_error(AME_ERR_TEXTURE_FORMAT,
+                      "texture update dimensions or format do not match");
         return false; /* dims/format must match the created texture */
+    }
     GLenum fmt = comps == 4 ? GL_RGBA : comps == 3 ? GL_RGB : GL_RGBA;
     uint8_t *exp = NULL;
     const uint8_t *up = pixels;
     if (comps == 1) {
         exp = expand_a8_to_rgba(pixels, w, h);
-        if (!exp)
+        if (!exp) {
+            ame_set_error(AME_ERR_OUT_OF_MEMORY, "coverage texture update expansion failed");
             return false;
+        }
         up = exp;
     }
     glBindTexture(GL_TEXTURE_2D, S.tex[id]);
@@ -913,8 +1025,10 @@ static bool push_quad_common(int tex,
                              float u0, float v0, float u1, float v1,
                              const float tint[4], float layer,
                              bool dsdf_text) {
-    if (S.batch.quad_count >= S.batch.quad_cap)
-        return false; /* assert/drop: never silent overflow */
+    if (S.batch.quad_count >= S.batch.quad_cap) {
+        ame_set_error(AME_ERR_BATCH_FULL, "render quad capacity was exceeded");
+        return false;
+    }
     if (tex < 0 || tex >= S.tex_count)
         tex = 0;
     int q = S.batch.quad_count++;
@@ -1036,6 +1150,9 @@ static bool shadow_target_ensure(void) {
     }
     GLenum st = glCheckFramebufferStatus(GL_FRAMEBUFFER);
     if (st != GL_FRAMEBUFFER_COMPLETE) {
+        ame_set_errorf(AME_ERR_GL_FRAMEBUFFER,
+                       "shadow framebuffer is incomplete (0x%x)",
+                       (unsigned)st);
         LOGD("ame rp: shadow fbo incomplete 0x%x", (unsigned)st);
         glDeleteFramebuffers(1, &S.shadow_fbo);
         glDeleteTextures(1, &S.shadow_tex);
@@ -1322,8 +1439,11 @@ void rp_end_frame(void) {
 }
 
 int rp_push_mesh(const ame_rp_mesh *m) {
-    if (!m || !m->verts || !m->idx || m->idx_count < 3 || m->vert_count <= 0)
+    if (!m || !m->verts || !m->idx || m->idx_count < 3 || m->vert_count <= 0) {
+        ame_set_error(AME_ERR_INVALID_ARGUMENT,
+                      "mesh requires vertices, indices, and at least one triangle");
         return 0;
+    }
     int tex = m->tex;
     if (tex < 0 || tex >= S.tex_count)
         tex = 0;
@@ -1337,15 +1457,20 @@ int rp_push_mesh(const ame_rp_mesh *m) {
                   + (uint32_t)tex * RP_LAYERS + mlayer;
     int tris = 0;
     for (int i = 0; i + 2 < m->idx_count; i += 3) {
-        if (S.batch.quad_count >= S.batch.quad_cap)
-            break; /* assert/drop: never silent overflow */
+        if (S.batch.quad_count >= S.batch.quad_cap) {
+            ame_set_error(AME_ERR_BATCH_FULL, "render batch filled while pushing a mesh");
+            break;
+        }
         unsigned int ix[3] = { m->idx[i], m->idx[i + 1], m->idx[i + 2] };
         /* audit fix: a malformed baked asset (out-of-range index) must
          * not read past the vertex array - skip the bad triangle */
         if (ix[0] >= (unsigned)m->vert_count
             || ix[1] >= (unsigned)m->vert_count
-            || ix[2] >= (unsigned)m->vert_count)
+            || ix[2] >= (unsigned)m->vert_count) {
+            ame_set_error(AME_ERR_INVALID_ARGUMENT,
+                          "mesh index is outside the vertex array");
             continue;
+        }
         int q = S.batch.quad_count++;
         rp_vertex *v = &S.batch.verts[q * 4];
         for (int k = 0; k < 4; k++) {
@@ -1416,8 +1541,11 @@ void rp_screen_origin(float *ox, float *oy) {
 }
 
 bool rp_read_pixels(uint8_t *rgba_out, int w, int h) {
-    if (!rgba_out)
+    if (!rgba_out || w <= 0 || h <= 0) {
+        ame_set_error(AME_ERR_INVALID_ARGUMENT,
+                      "readback requires an output buffer and positive dimensions");
         return false;
+    }
     glReadPixels(0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, rgba_out);
     /* flip rows to top-down */
     for (int y = 0; y < h / 2; y++) {

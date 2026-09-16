@@ -20,8 +20,6 @@
 #include <stdio.h>
 #include <string.h>
 
-#include <SDL3/SDL_scancode.h>
-
 #define VIEW_W 1280
 #define VIEW_H 720
 #define RM_W 480
@@ -67,6 +65,13 @@ static void spawn_row(rm_snap_t *s) {
 }
 
 int app_init(void) {
+    if (!in_bind_key(AME_ACT_CANCEL, AME_KEY_ESCAPE)
+        || !in_bind_key(AME_ACT_CANCEL, AME_KEY_Q)
+        || !in_bind_key(AME_ACT_LEFT, AME_KEY_LEFT)
+        || !in_bind_key(AME_ACT_LEFT, AME_KEY_A)
+        || !in_bind_key(AME_ACT_RIGHT, AME_KEY_RIGHT)
+        || !in_bind_key(AME_ACT_RIGHT, AME_KEY_D))
+        return 1;
     camera_viewport(camera_ortho2d(camera_desc(&CAM)), VIEW_W, VIEW_H);
     /* world (0,0) = window TOP-LEFT: pos = view center. Without
      * this the view centers on world origin and every sprite
@@ -84,7 +89,7 @@ int app_init(void) {
     return 0;
 }
 
-int app_event(const void *ev) { (void)ev; return 0; }
+int app_event(const ame_ev *ev) { (void)ev; return 0; }
 
 int app_fixed(float dt) {
     static rm_snap_t s;
@@ -101,7 +106,7 @@ int app_fixed(float dt) {
     s.time += dt;
 
     /* quit keys (master: ESC/Q) */
-    if (in_key_down_raw(SDL_SCANCODE_ESCAPE) || in_key_down_raw(SDL_SCANCODE_Q))
+    if (in_held(AME_ACT_CANCEL))
         return 1;
 
     if (s.state == 0) {
@@ -119,9 +124,9 @@ int app_fixed(float dt) {
 
     /* move (master speed 400 px/s at 1280 wide -> 150 at ours) */
     int dir = 0;
-    if (in_key_down_raw(SDL_SCANCODE_LEFT) || in_key_down_raw(SDL_SCANCODE_A))
+    if (in_held(AME_ACT_LEFT))
         dir -= 1;
-    if (in_key_down_raw(SDL_SCANCODE_RIGHT) || in_key_down_raw(SDL_SCANCODE_D))
+    if (in_held(AME_ACT_RIGHT))
         dir += 1;
     s.player_x += 150.0f * dt * (float)dir;
     if (s.player_x < 15.0f)

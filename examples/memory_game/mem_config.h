@@ -1,7 +1,7 @@
 /* memory_game — launch configuration (env parsing, no SDL/GL/engine).
  *
  * WHY THIS FILE EXISTS (separation of gameplay from tech details): app
- * wiring used to parse five AME_* env vars inline (SDL_getenv +
+ * wiring used to parse five AME_* env vars inline (platform getenv +
  * strtoul/sscanf branches scattered through app_init, plus one getenv
  * on EVERY 1000 Hz logic step for AME_AUTOPLAY). That mixed three
  * concerns — process environment, game setup, per-step logic — in one

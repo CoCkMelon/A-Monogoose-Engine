@@ -9,13 +9,16 @@
 #include <ame/tilemap.h>
 #include <stdio.h>
 
-#include <SDL3/SDL_scancode.h>
-
 static ame_camera CAM;
 static ame_tilemap TM;
 static float g_ox, g_oy;
 
 int app_init(void) {
+    if (!in_bind_key(AME_ACT_LEFT, AME_KEY_LEFT)
+        || !in_bind_key(AME_ACT_RIGHT, AME_KEY_RIGHT)
+        || !in_bind_key(AME_ACT_UP, AME_KEY_UP)
+        || !in_bind_key(AME_ACT_DOWN, AME_KEY_DOWN))
+        return 1;
     camera_viewport(camera_ortho2d(camera_desc(&CAM)), 800, 600);
     /* world (0,0) = window TOP-LEFT: pos = view center. Without
      * this the view centers on world origin and every sprite
@@ -41,16 +44,16 @@ int app_init(void) {
     return 0;
 }
 
-int app_event(const void *ev) { (void)ev; return 0; }
+int app_event(const ame_ev *ev) { (void)ev; return 0; }
 int app_fixed(float dt) {
     const float spd = 300.0f * dt;
-    if (in_key_down_raw(SDL_SCANCODE_LEFT))
+    if (in_held(AME_ACT_LEFT))
         g_ox += spd;
-    if (in_key_down_raw(SDL_SCANCODE_RIGHT))
+    if (in_held(AME_ACT_RIGHT))
         g_ox -= spd;
-    if (in_key_down_raw(SDL_SCANCODE_UP))
+    if (in_held(AME_ACT_UP))
         g_oy += spd;
-    if (in_key_down_raw(SDL_SCANCODE_DOWN))
+    if (in_held(AME_ACT_DOWN))
         g_oy -= spd;
     return 0;
 }

@@ -39,9 +39,12 @@ add_test(NAME geo3d  COMMAND test_geometry_3d)
 
 add_executable(test_input test_input.c)
 target_link_libraries(test_input PRIVATE ame::3d)
+add_executable(test_error test_error.c)
+target_link_libraries(test_error PRIVATE ame::3d)
 add_executable(test_audio test_audio.c)
 target_link_libraries(test_audio PRIVATE ame::3d)
 add_test(NAME input COMMAND test_input)
+add_test(NAME error COMMAND test_error)
 add_test(NAME audio COMMAND test_audio)
 
 # memory game sim (deterministic golden replay)
@@ -79,15 +82,35 @@ add_executable(test_text test_text.c)
 target_link_libraries(test_text PRIVATE ame::3d ame_font)
 add_test(NAME text COMMAND test_text)
 
-# golden render: headless EGL surfaceless + llvmpipe (Linux CI job)
+# golden render: headless EGL surfaceless + llvmpipe (Linux CI job).
+# Keep this capability-gated: a developer machine without EGL development
+# headers/library should still be able to build and run every CPU test.
 if(UNIX AND NOT APPLE)
-    add_executable(test_render test_render.c)
-    target_link_libraries(test_render PRIVATE ame::3d ame_font EGL)
-    add_executable(test_render_2d test_render_2d.c)
-    target_link_libraries(test_render_2d PRIVATE ame::2d EGL)
-    target_compile_definitions(test_render_2d PRIVATE AME_2D=1 SDL_MAIN_HANDLED=1)
-    target_compile_options(test_render_2d PRIVATE -Wno-error=implicit-function-declaration)
-    add_test(NAME render_2d COMMAND test_render_2d)
+    find_path(AME_EGL_INCLUDE_DIR EGL/egl.h)
+    find_library(AME_EGL_LIBRARY NAMES EGL)
+    if(AME_EGL_INCLUDE_DIR AND AME_EGL_LIBRARY)
+        add_executable(test_render test_render.c)
+        target_link_libraries(test_render PRIVATE ame::3d ame_font
+            ${AME_EGL_LIBRARY})
+        target_include_directories(test_render PRIVATE
+            ${AME_EGL_INCLUDE_DIR} ${CMAKE_SOURCE_DIR}/external/stb)
+        target_compile_definitions(test_render PRIVATE SDL_MAIN_HANDLED=1)
+        target_compile_options(test_render PRIVATE -Wno-error=implicit-function-declaration)
+
+        add_executable(test_render_2d test_render_2d.c)
+        target_link_libraries(test_render_2d PRIVATE ame::2d ${AME_EGL_LIBRARY})
+        target_include_directories(test_render_2d PRIVATE ${AME_EGL_INCLUDE_DIR})
+        target_compile_definitions(test_render_2d PRIVATE AME_2D=1 SDL_MAIN_HANDLED=1)
+        target_compile_options(test_render_2d PRIVATE -Wno-error=implicit-function-declaration)
+        add_test(NAME render_2d COMMAND test_render_2d)
+
+        add_test(NAME render COMMAND test_render)
+        set_tests_properties(render PROPERTIES
+            ENVIRONMENT "LIBGL_ALWAYS_SOFTWARE=1")
+    else()
+        message(STATUS "tests: EGL render tests skipped (need EGL headers and library)")
+    endif()
+endif()
 
 # opus decode test: needs opusfile (engine feature) + the asset baked
 # by tools/mkopus_sine (needs the opus ENCODER). Same optional-dep
@@ -127,19 +150,13 @@ if(FYAML_FOUND)
         SDL_MAIN_HANDLED=1 CMAKE_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
     add_test(NAME dialogue COMMAND test_dialogue)
 endif()
-    target_include_directories(test_render PRIVATE ${CMAKE_SOURCE_DIR}/external/stb)
-    target_compile_definitions(test_render PRIVATE SDL_MAIN_HANDLED=1)
-    target_compile_options(test_render PRIVATE -Wno-error=implicit-function-declaration)
-    add_test(NAME render COMMAND test_render)
-    set_tests_properties(render PROPERTIES
-        ENVIRONMENT "LIBGL_ALWAYS_SOFTWARE=1")
-endif()
 
 # editor caret contract - compiled from the REAL app source (not a
 # replica): two-ways law (drawn caret == pen where a new symbol
 # lands; caret left of new ink), determinism, midpoint hit-tests.
 add_executable(test_editor_geom
-    ${CMAKE_SOURCE_DIR}/examples/text_editor/ed_app.c)
+    ${CMAKE_SOURCE_DIR}/examples/text_editor/ed_app.c
+    app_services_stub.c)
 target_compile_definitions(test_editor_geom PRIVATE
     AME_2D=1 AME_INPUT_SDL=1 AME_ED_SELFTEST=1)
 target_link_libraries(test_editor_geom PRIVATE ame::2d ame_font)

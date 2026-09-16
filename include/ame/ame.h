@@ -13,6 +13,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <ame/error.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -36,10 +37,10 @@ extern "C" {
 /* --- logging (agents.txt) --------------------------------------------------
  * Non-essential logs compile to nothing in release. Errors and one-time init
  * lines may always log. Never per-frame/per-keypress spam, never from audio
- * callbacks. */
+ * callbacks. The logger is platform-neutral; the SDL bootstrap may still
+ * forward platform diagnostics to it at the boundary. */
 #ifdef DEBUG
-#  include <SDL3/SDL_log.h>
-#  define LOGD(...) SDL_Log(__VA_ARGS__)
+#  define LOGD(...) ame_log(AME_LOG_DEBUG, __VA_ARGS__)
 #else
 #  define LOGD(...) ((void)0)
 #endif

@@ -3,7 +3,8 @@ name: ci
 # ame-next CI (build.txt): every job builds the engine's OWN code with
 # warnings-as-errors; external/ is exempt. The Linux job also RUNS the
 # tests headlessly (logic + golden render under llvmpipe/EGL surfaceless).
-# Windows/Android/web toolchain jobs are tracked in AGENT_HANDOFF.txt.
+# Windows/macOS/web compile jobs below keep the platform claims honest;
+# Linux remains the only job that runs the headless GL test suite.
 
 on:
   push:
@@ -43,6 +44,13 @@ jobs:
           cmake -S . -B build -G Ninja \
             -DCMAKE_C_COMPILER=clang-19 -DCMAKE_BUILD_TYPE=Debug
           cmake --build build
+
+      - name: game-side SDL boundary gate
+        run: |
+          if grep -RIn "SDL_" examples/ --include='*.c'; then
+            echo "game code touches SDL; keep platform code in src/app_*"
+            exit 1
+          fi
 
       - name: ctest (logic + geometry + audio + text + sim + golden render)
         run: ctest --test-dir build --output-on-failure
@@ -199,3 +207,78 @@ jobs:
           printf 'import Ame.Shader\nimport Ame.Text\n#print axioms Ame.Shader.lookAt_vec\n#print axioms Ame.Text.eol_caret_eq_width\n' > /tmp/ax.lean
           lake env lean /tmp/ax.lean
         working-directory: lean
+
+  windows:
+    name: windows (clang C23 compile)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: ilammy/msvc-dev-cmd@v1
+      - name: toolchain
+        shell: pwsh
+        run: choco install llvm ninja -y --no-progress
+      - name: SDL3 from source
+        shell: pwsh
+        run: |
+          git clone --depth 1 --branch release-3.4.16 https://github.com/libsdl-org/SDL.git $env:RUNNER_TEMP/sdl3
+          cmake -S $env:RUNNER_TEMP/sdl3 -B $env:RUNNER_TEMP/sdl3-build -G Ninja `
+            -DCMAKE_BUILD_TYPE=Release -DSDL_TESTS=OFF -DSDL_EXAMPLES=OFF
+          cmake --build $env:RUNNER_TEMP/sdl3-build
+          cmake --install $env:RUNNER_TEMP/sdl3-build --prefix $env:RUNNER_TEMP/sdl-prefix
+      - name: configure + compile engine
+        shell: pwsh
+        run: |
+          cmake -S . -B build -G Ninja `
+            -DCMAKE_C_COMPILER=clang `
+            -DCMAKE_PREFIX_PATH=$env:RUNNER_TEMP/sdl-prefix `
+            -DAME_BUILD_EXAMPLES=OFF -DAME_BUILD_TESTS=OFF `
+            -DAME_BUILD_BENCHES=OFF -DAME_BUILD_ASYNCINPUT_GAME=OFF `
+            -DCMAKE_BUILD_TYPE=Debug
+          cmake --build build
+
+  macos:
+    name: macOS (Clang C23 compile)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: toolchain
+        run: brew install cmake ninja
+      - name: SDL3 from source
+        run: |
+          git clone --depth 1 --branch release-3.4.16 https://github.com/libsdl-org/SDL.git "$RUNNER_TEMP/sdl3"
+          cmake -S "$RUNNER_TEMP/sdl3" -B "$RUNNER_TEMP/sdl3-build" -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release -DSDL_TESTS=OFF -DSDL_EXAMPLES=OFF \
+            -DCMAKE_INSTALL_PREFIX="$RUNNER_TEMP/sdl-prefix"
+          cmake --build "$RUNNER_TEMP/sdl3-build"
+          cmake --install "$RUNNER_TEMP/sdl3-build"
+      - name: configure + compile engine
+        run: |
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_C_COMPILER=clang \
+            -DCMAKE_PREFIX_PATH="$RUNNER_TEMP/sdl-prefix" \
+            -DAME_BUILD_EXAMPLES=OFF -DAME_BUILD_TESTS=OFF \
+            -DAME_BUILD_BENCHES=OFF -DAME_BUILD_ASYNCINPUT_GAME=OFF \
+            -DCMAKE_BUILD_TYPE=Debug
+          cmake --build build
+
+  web:
+    name: web (Emscripten C23 compile)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: emscripten-core/setup-emsdk@v16
+      - name: compile bundles
+        run: sh web/build.sh
+      - name: verify JavaScript bundles
+        run: |
+          for f in docs/games/*.js; do node --check "$f"; done
+          test -s docs/index.html

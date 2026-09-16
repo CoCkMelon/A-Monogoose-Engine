@@ -28,7 +28,7 @@ fi
 # libfyaml, unavailable under emcc — same rule as a desktop build
 # without the dev package). Generated font atlases are committed, so no
 # host bake step is needed.
-ENGINE="src/audio.c src/audio_ray.c src/camera.c src/events.c src/geometry.c
+ENGINE="src/audio.c src/audio_ray.c src/camera.c src/events.c src/error.c src/geometry.c
     src/input.c src/particles.c src/render.c src/text.c src/tilemap.c
     generated/font_atlas.c generated/font_atlas_dsdf.c
     generated/font_atlas_hires.c generated/shaders_gen.c"

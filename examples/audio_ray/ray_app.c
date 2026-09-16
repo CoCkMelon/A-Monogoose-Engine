@@ -49,7 +49,7 @@ int app_init(void) {
     return 0;
 }
 
-int app_event(const void *ev) { (void)ev; return 0; }
+int app_event(const ame_ev *ev) { (void)ev; return 0; }
 int app_fixed(float dt) {
     (void)dt;
     float mx = 400, my = 225;

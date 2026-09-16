@@ -2,7 +2,7 @@
  *
  * Editing buffer + caret + mouse selection, rendered with the
  * engine's baked-atlas text module through the ONE batch (master
- * used SDL_ttf + a second solid-color shader; ours is one batch:
+ * used a font library plus a second solid-color shader; ours is one batch:
  * glyphs AND caret/selection rects are quads in it).
  *
  * Layout is per line; text_layout gives per-glyph x, so caret and
@@ -18,8 +18,6 @@
 #include <ame/input.h>
 #include <ame/render.h>
 #include <ame/text.h>
-#include <SDL3/SDL.h>
-#include <SDL3/SDL_scancode.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -212,27 +210,27 @@ static void backspace(void) {
     buf[buf_len] = 0;
 }
 
-static char map_key(SDL_Scancode k, bool shift) {
-    if (k >= SDL_SCANCODE_A && k <= SDL_SCANCODE_Z)
-        return (char)((shift ? 'A' : 'a') + (k - SDL_SCANCODE_A));
-    if (k >= SDL_SCANCODE_1 && k <= SDL_SCANCODE_9)
-        return shift ? ")!@#$%^&*"[k - SDL_SCANCODE_1]
-                     : (char)('1' + (k - SDL_SCANCODE_1));
-    if (k == SDL_SCANCODE_0)
+static char map_key(int k, bool shift) {
+    if (k >= AME_KEY_A && k <= AME_KEY_Z)
+        return (char)((shift ? 'A' : 'a') + (k - AME_KEY_A));
+    if (k >= AME_KEY_1 && k <= AME_KEY_9)
+        return shift ? ")!@#$%^&*"[k - AME_KEY_1]
+                     : (char)('1' + (k - AME_KEY_1));
+    if (k == AME_KEY_0)
         return shift ? ')' : '0';
     switch (k) {
-    case SDL_SCANCODE_SPACE: return ' ';
-    case SDL_SCANCODE_MINUS: return shift ? '_' : '-';
-    case SDL_SCANCODE_EQUALS: return shift ? '+' : '=';
-    case SDL_SCANCODE_LEFTBRACKET: return shift ? '{' : '[';
-    case SDL_SCANCODE_RIGHTBRACKET: return shift ? '}' : ']';
-    case SDL_SCANCODE_SEMICOLON: return shift ? ':' : ';';
-    case SDL_SCANCODE_APOSTROPHE: return shift ? '"' : '\'';
-    case SDL_SCANCODE_COMMA: return shift ? '<' : ',';
-    case SDL_SCANCODE_PERIOD: return shift ? '>' : '.';
-    case SDL_SCANCODE_SLASH: return shift ? '?' : '/';
-    case SDL_SCANCODE_BACKSLASH: return shift ? '|' : '\\';
-    case SDL_SCANCODE_GRAVE: return shift ? '~' : '`';
+    case AME_KEY_SPACE: return ' ';
+    case AME_KEY_MINUS: return shift ? '_' : '-';
+    case AME_KEY_EQUALS: return shift ? '+' : '=';
+    case AME_KEY_LEFTBRACKET: return shift ? '{' : '[';
+    case AME_KEY_RIGHTBRACKET: return shift ? '}' : ']';
+    case AME_KEY_SEMICOLON: return shift ? ':' : ';';
+    case AME_KEY_APOSTROPHE: return shift ? '"' : '\'';
+    case AME_KEY_COMMA: return shift ? '<' : ',';
+    case AME_KEY_PERIOD: return shift ? '>' : '.';
+    case AME_KEY_SLASH: return shift ? '?' : '/';
+    case AME_KEY_BACKSLASH: return shift ? '|' : '\\';
+    case AME_KEY_GRAVE: return shift ? '~' : '`';
     default: return 0;
     }
 }
@@ -241,6 +239,9 @@ static uint8_t prev_keys[AME_KEYS_MAX];
 static bool prev_left;
 
 int app_init(void) {
+    if (!in_bind_key(AME_ACT_CANCEL, AME_KEY_ESCAPE)
+        || !in_bind_button(AME_ACT_CONFIRM, AME_BTN_LEFT))
+        return 1;
     camera_viewport(camera_ortho2d(camera_desc(&CAM)), VIEW_W, VIEW_H);
     /* world (0,0) = window TOP-LEFT: pos = view center. Without
      * this the view centers on world origin and every sprite
@@ -279,7 +280,7 @@ int app_init(void) {
     return 0;
 }
 
-int app_event(const void *ev) { (void)ev; return 0; }
+int app_event(const ame_ev *ev) { (void)ev; return 0; }
 
 /* measurement hooks (QA): AME_ED_CARET=<flat> pins the caret,
  * AME_ED_SOLID_CARET stops the blink, AME_ED_TRACE prints the live
@@ -327,7 +328,7 @@ static int ed_fixed(float dt) {
         }
     }
 
-    if (in_key_down_raw(SDL_SCANCODE_ESCAPE))
+    if (in_held(AME_ACT_CANCEL))
         return 1;
 
     for (int k = 0; k < AME_KEYS_MAX; k++) {
@@ -337,21 +338,21 @@ static int ed_fixed(float dt) {
             continue;
         }
         prev_keys[k] = 1;
-        bool shift = in_key_down_raw(SDL_SCANCODE_LSHIFT)
-                     || in_key_down_raw(SDL_SCANCODE_RSHIFT);
+        bool shift = in_key_down_raw(AME_KEY_LSHIFT)
+                     || in_key_down_raw(AME_KEY_RSHIFT);
         switch (k) {
-        case SDL_SCANCODE_BACKSPACE:
+        case AME_KEY_BACKSPACE:
             backspace();
             dirty = 1;
             break;
-        case SDL_SCANCODE_RETURN:
-        case SDL_SCANCODE_KP_ENTER:
+        case AME_KEY_RETURN:
+        case AME_KEY_KP_ENTER:
             insert_char('\n');
             dirty = 1;
             break;
-        case SDL_SCANCODE_LEFT:
-        case SDL_SCANCODE_RIGHT: {
-            int step = k == SDL_SCANCODE_LEFT ? -1 : 1;
+        case AME_KEY_LEFT:
+        case AME_KEY_RIGHT: {
+            int step = k == AME_KEY_LEFT ? -1 : 1;
             if (shift && !sel_active) {
                 sel_anchor = caret;
                 sel_active = 1;
@@ -374,18 +375,18 @@ static int ed_fixed(float dt) {
             dirty = 1;
             break;
         }
-        case SDL_SCANCODE_HOME:
+        case AME_KEY_HOME:
             caret = 0;
             sel_clear();
             dirty = 1;
             break;
-        case SDL_SCANCODE_END:
+        case AME_KEY_END:
             caret = buf_len;
             sel_clear();
             dirty = 1;
             break;
         default: {
-            char c = map_key((SDL_Scancode)k, shift);
+            char c = map_key((int)k, shift);
             if (c) {
                 insert_char(c);
                 dirty = 1;
@@ -398,7 +399,7 @@ static int ed_fixed(float dt) {
     /* mouse: press sets caret+anchor, drag extends (logic-side geometry) */
     float mx = -1, my = -1;
     in_mouse_pos(&mx, &my);
-    bool left = in_mouse_button_raw(AME_BTN_LEFT);
+    bool left = in_held(AME_ACT_CONFIRM);
     if (left && mx >= 0) {
         int idx = mouse_to_index(&logic_geom, mx, my);
         if (!prev_left) {
@@ -493,9 +494,9 @@ int app_render(void) {
                          PAD + l * draw_geom.line_h, white, 10);
 
     /* caret (blink 1 Hz - presentation-only clock; solid for QA) */
-    static Uint64 t0;
+    static double t0;
     if (!t0)
-        t0 = SDL_GetTicks();
+        t0 = ame_time_seconds();
     static int solid = -1;
     if (solid < 0)
         solid = getenv("AME_ED_SOLID_CARET") ? 1 : 0;
@@ -530,7 +531,7 @@ int app_render(void) {
                    (ax == bx && ay == by) ? "OK" : "MISMATCH");
         }
     }
-    if (solid || (((SDL_GetTicks() - t0) / 500u) & 1u) == 0u) {
+    if (solid || (int)((ame_time_seconds() - t0) / 0.5) % 2 == 0) {
         float cx, cy;
         index_to_px(&draw_geom, cur.caret, &cx, &cy);
         rp_push_sprite(&(ame_rp_sprite){ .tex = rp_white_texture(),

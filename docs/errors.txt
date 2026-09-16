@@ -1,0 +1,37 @@
+ame-next ENGINE SPEC
+File: errors.txt
+
+GOAL
+Failures carry a stable enum code and a human-readable base message. Modules
+return their existing status values and set a thread-local diagnostic; the
+caller decides whether to retry, add context, or log once at the boundary.
+
+PUBLIC API
+  ame_error_code code = ame_last_error_code();
+  const char *detail = ame_last_error_detail();
+  ame_log_error(code, detail);
+  /* or let the logger format the current code + detail: */
+  ame_log_last_error();
+
+The list in include/ame/error.h is the single source for the enum, symbolic
+name, default severity, and base string. Do not compare or parse diagnostic
+text to branch program logic. Use the code for control flow and the detail for
+logs.
+
+LOGGING
+  ame_log(AME_LOG_ERROR, "load level %s", path);
+  ame_log_open("ame.log");
+  ame_log_close();
+
+The logger always writes stderr and mirrors records to the optional append-only
+file. Output is serialized across the render and logic threads. Set
+AME_LOG_FILE in the SDL bootstrap to open a file at startup. SDL-specific
+strings are captured at the platform boundary while SDL_GetError() is still
+valid; game code does not include SDL headers.
+
+RULE
+A low-level failure sets the error and returns. It does not log immediately.
+The app/bootstrap or the operation owner logs once, with the module's code and
+platform detail preserved. Successful operations do not erase a previous
+failure from another operation; call ame_clear_error() before a new boundary
+when that distinction matters.

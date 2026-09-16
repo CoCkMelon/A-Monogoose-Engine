@@ -126,16 +126,19 @@ EXAMPLE API (input.h, extern "C")
 
   in_begin_step()           on logic thread: read atomics, compute
                             this fixed step's held/pressed/released
-  in_bind_key(action, key)  key = NI_KEY_* code (asyncinput build) or
-                            SDL scancode/button (gamepad, AME_INPUT_SDL
-                            build, web)
+  in_bind_key(action, key)     key = canonical AME_KEY_* id
+  in_bind_button(action, btn)  btn = AME_BTN_LEFT/MIDDLE/RIGHT
   in_held(action)
+  in_btn_held(button)       polled button state after in_begin_step()
   in_pressed(action)        true for one fixed step on press
   in_released(action)
   in_axis(axis_id)          float
 
 Mouse position for UI/picking is exposed in world space via the
-camera (camera_screen_to_world).
+camera (camera_screen_to_world).  A left click is an intent, not an event
+leak: `in_click_consumed(&x, &y)` returns each queued click once on the logic
+thread, with coordinates captured at button-down time.  The engine owns the
+cross-thread queue and fixed-point representation.
 
 BANNED
   - if (event.key == X) checks sprinkled through gameplay.

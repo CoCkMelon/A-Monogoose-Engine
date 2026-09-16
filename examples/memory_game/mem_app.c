@@ -7,7 +7,8 @@
  *   main thread  : reads the latest snapshot, draws cards + table + label
  *                 text + billboard scoreboard + SOFTWARE CURSOR in ONE pass
  *
- * The system cursor is hidden (SDL_HideCursor) — some GL/Wayland setups
+ * The system cursor is hidden through the platform-neutral app service —
+ * some GL/Wayland setups
  * lose it — and the game draws its own in-scene cursor quad instead.
  */
 #include <ame/app.h>
@@ -20,8 +21,6 @@
 #include <ame/render.h>
 #include <ame/text.h>
 
-#include <SDL3/SDL.h>
-#include <stdatomic.h>
 #include <stdio.h>
 #include <inttypes.h>
 #include <unistd.h>
@@ -79,9 +78,8 @@ static int g_srv_gone;
 static mem_config CFG; /* launch config, read once at boot (no getenv later) */
 static int g_autoplay;
 
-/* pick intent: main thread publishes click px, logic consumes */
-static _Atomic uint32_t pick_flag;
-static _Atomic uint32_t pick_x, pick_y; /* px * 16 */
+/* click intents are owned by the input module; the logic thread consumes
+ * them through in_click_consumed(). */
 
 /* audio voice ids */
 static int au_flip = -1, au_match = -1, au_miss = -1, au_win = -1;
@@ -160,6 +158,8 @@ static void online_pump(void) {
 /* --- app hooks (engine calls these; loop.txt) ------------------------------ */
 
 int app_init(void) {
+    if (!in_bind_button(AME_ACT_CONFIRM, AME_BTN_LEFT))
+        return 1;
     camera_viewport(camera_pos(camera_persp3d(camera_desc(&CAM)),
                                0, 3.2f, 3.4f),
                     1280, 720);
@@ -252,19 +252,19 @@ int app_init(void) {
         for (int try = 0; try < 3 && CLI_FD < 0; try++) {
             CLI_FD = mem_net_connect(host, (uint16_t)port, 500);
             if (CLI_FD < 0)
-                SDL_Delay(200);
+                ame_sleep_seconds(0.2);
         }
         if (CLI_FD >= 0
             && mem_net_send(CLI_FD, MEM_MSG_JOIN, 0xff, 0, 0, NULL, 0) == 0) {
-            Uint32 deadline = SDL_GetTicks() + 3000;
-            while (CLI.states == 0 && SDL_GetTicks() < deadline) {
+            double deadline = ame_time_seconds() + 3.0;
+            while (CLI.states == 0 && ame_time_seconds() < deadline) {
                 mem_msgv m;
                 int r;
                 while ((r = mem_net_rx_step(&CLI_RX, CLI_FD, &m)) == 1)
                     mem_client_on(&CLI, &m);
                 if (r < 0)
                     break;
-                SDL_Delay(1);
+                ame_sleep_seconds(0.001);
             }
         }
         if (CLI_FD >= 0 && CLI.states > 0) {
@@ -299,11 +299,10 @@ int app_init(void) {
     ame_geo_rebuild_broadphase();
 
     mem_snap_snap_init(&SNAP);
-    atomic_store(&pick_flag, 0);
     publish_snapshot(-1);
 
     /* software cursor: the game draws its own; hide the system one */
-    SDL_HideCursor();
+    ame_cursor_visible(false);
 
     if (CFG.fakemouse.present)
         in_on_mouse_move(CFG.fakemouse.x,
@@ -316,15 +315,8 @@ int app_init(void) {
     return 0;
 }
 
-int app_event(const void *ev) {
-    const SDL_Event *e = ev;
-    if (e->type == SDL_EVENT_MOUSE_BUTTON_DOWN
-        && e->button.button == SDL_BUTTON_LEFT) {
-        atomic_store(&pick_x, (uint32_t)(e->button.x * 16.0f));
-        atomic_store(&pick_y, (uint32_t)(e->button.y * 16.0f));
-        atomic_store(&pick_flag, 1);
-        return 1;
-    }
+int app_event(const ame_ev *ev) {
+    (void)ev;
     return 0;
 }
 
@@ -366,11 +358,9 @@ static int hover_from_mouse(void) {
 }
 
 static void try_pick(void) {
-    if (!atomic_load_explicit(&pick_flag, memory_order_acquire))
+    float mx, my;
+    if (!in_click_consumed(&mx, &my))
         return;
-    atomic_store_explicit(&pick_flag, 0, memory_order_release);
-    float mx = (float)atomic_load(&pick_x) / 16.0f;
-    float my = (float)atomic_load(&pick_y) / 16.0f;
 
     if (mem_over(SIM)) {
         if (g_online) {
@@ -638,13 +628,13 @@ static void draw_cursor(const mem_snap *s) {
 static void take_screenshot(int w, int h) {
     static uint8_t px[1280 * 720 * 4];
     if (!rp_read_pixels(px, w, h)) {
-        SDL_Log("memory_game: screenshot read failed");
+        ame_log(AME_LOG_ERROR, "memory_game: screenshot read failed");
         return;
     }
     if (stbi_write_png(g_shot_path, w, h, 4, px, w * 4))
-        SDL_Log("memory_game: screenshot -> %s", g_shot_path);
+        ame_log(AME_LOG_INFO, "memory_game: screenshot -> %s", g_shot_path);
     else
-        SDL_Log("memory_game: screenshot write failed");
+        ame_log(AME_LOG_ERROR, "memory_game: screenshot write failed");
 }
 
 /* --- Stage 2 particles: single-pass billboards -------------------
@@ -832,10 +822,7 @@ int app_render(void) {
         g_shot_frames_left--;
         if (g_shot_frames_left == 0) {
             take_screenshot(CAM.vw, CAM.vh);
-            SDL_Event e;
-            SDL_zero(e);
-            e.type = SDL_EVENT_QUIT;
-            SDL_PushEvent(&e);
+            ame_request_quit();
         }
     }
     return 0;
@@ -847,5 +834,5 @@ void app_quit(void) {
         close(CLI_FD);
         CLI_FD = -1;
     }
-    SDL_ShowCursor();
+    ame_cursor_visible(true);
 }
