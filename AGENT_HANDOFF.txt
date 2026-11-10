@@ -1151,3 +1151,52 @@ regular files persist; .git state does not. Therefore:
    fails ("couldn't find remote ref") - fetch a ref, then reset.
 4. The instant a remote+PAT exist: push, then verify the remote tip
    via the branches API - an unpushed fix is a failure (user rule).
+
+=====================================================================
+SESSION: trunk consolidation + Biscuit Fuel port (Arena agent, 2026-11)
+=====================================================================
+Trunk: branch ame-next-trunk, tag ame-next-biscuit-trunk at 85f8ed9
+(baseline tag ame-next-trunk-baseline at 985141b). Commit chain:
+d9f298a docs -> 30f7f7c obj/mesh -> 2158d83 prefab -> c1ef6b7 prefab
+xform -> df8cf14 input F-keys -> 4f652ea OBJ point markers ->
+92f7a89 level tool OBJ markers -> a61b3a4 biscuit port -> f987f0c ci
+shot -> e8f53b9 debug overlay -> 85f8ed9 pixel-space + bg groups.
+
+WHAT IS GREEN
+- Serial ctest 27/27 (incl. test_biscuit_sim 14 checks: OBJ marker
+  names -> prefab spawn, drive+burn, goal win, restart).
+- examples/biscuit runs headless (llvmpipe): level mesh from runtime
+  OBJ via rp_push_mesh per group, car/platforms/cookies drawn with
+  rp_push_quad/tri, HUD + dialogue + debug watch via trunk text.
+  Proof: shots/biscuit.png (AME_SHOT_PPM + AME_SHOT_NOFLIP=1; the PPM
+  writer flips rows unless NOFLIP for top-left-origin reads).
+- memory_game/text_editor/audio examples unchanged and still pass.
+
+RENDER CONTRACT LEARNED THE HARD WAY (read before porting 2D games)
+- rp_push_quad/tri/sprite/mesh coordinates are CAMERA-CENTRED world
+  PIXELS, y DOWN. The rp camera applies the view translation, so game
+  code must submit world*ppu (y negated) and NOT subtract the camera;
+  mesh xforms carry scale/flip only. Screen-anchored UI = add
+  rp_screen_origin (the text module does this itself).
+- 2D games want rp_desc_depth(false): layer values 0..255 are the draw
+  order; with the default depth test on, layer-z quads clip against
+  the ortho depth range and silently vanish (only mesh slices drew).
+- HUD/UI quads must be pushed BETWEEN rp_begin_frame and
+  rp_end_frame of the SAME batch (bf_view_draw ... bf_view_present).
+
+BRANCH GC (needs repo credentials - not available in the sandbox)
+Tag ame-next-biscuit-trunk is the release point; after pushing it:
+  git push origin --delete agent/ame-next-20260905-4ad0fd06 \
+    agent/ame-next-lib-settings-loop-20260909 \
+    agent/ame-next-phys-binds-20260909 agent/ame-next-struct-batch-20260909 \
+    agent/ame-render-passes-20260909 ame-next-f2c36ea03349a2ca \
+    web-engine-archive-20260906
+keep master (reference) until the owner says otherwise. Local clones
+here hold only ame-next-trunk + api-edit + master.
+
+STILL OPEN (next session)
+- glTF import (optional), Assimp bake for non-biscuit scenes, full
+  debug inspector, Blender addon - all explicitly later per plan.
+- F5 hot reload is code-identical to cold load (bf_view_reload_level);
+  headless cannot inject key events, so it is verified by review +
+  the cold-path tests, not by a keypress.
