@@ -43,6 +43,11 @@ enum {
     AME_KEY_RIGHTBRACKET = 48, AME_KEY_BACKSLASH = 49,
     AME_KEY_SEMICOLON = 51, AME_KEY_APOSTROPHE = 52, AME_KEY_GRAVE = 53,
     AME_KEY_COMMA = 54, AME_KEY_PERIOD = 55, AME_KEY_SLASH = 56,
+    /* function keys (SDL scancodes 58..69): dev-only conveniences such
+     * as hot reload bind here; games never need them to play */
+    AME_KEY_F1 = 58, AME_KEY_F2 = 59, AME_KEY_F3 = 60, AME_KEY_F4 = 61,
+    AME_KEY_F5 = 62, AME_KEY_F6 = 63, AME_KEY_F7 = 64, AME_KEY_F8 = 65,
+    AME_KEY_F9 = 66, AME_KEY_F10 = 67, AME_KEY_F11 = 68, AME_KEY_F12 = 69,
     AME_KEY_HOME = 74, AME_KEY_END = 77,
     AME_KEY_RIGHT = 79, AME_KEY_LEFT = 80, AME_KEY_DOWN = 81,
     AME_KEY_UP = 82, AME_KEY_KP_ENTER = 88,
