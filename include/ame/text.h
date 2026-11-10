@@ -57,6 +57,12 @@ typedef struct {
                             * phantom pen for elements that don't exist) */
     int          truncated; /* bit 1: more than AME_TXT_MAX_GLYPHS codepoints
                              * bit 2: more than AME_TXT_MAX_LINES lines */
+    /* INK BOX in scaled layout px: tight bounds of the glyph cells that
+     * actually draw (face metrics at layout time). w/h are the line box
+     * (leading included); callers that fit text to a surface (card faces,
+     * labels on props) must size/centre by ink, not by w/h. Empty layout:
+     * ink_x1 < ink_x0. */
+    float        ink_x0, ink_y0, ink_x1, ink_y1;
 } ame_text_layout;
 
 /* register the baked atlas with the renderer (creates one texture).
@@ -126,6 +132,13 @@ void text_draw_world(const ame_text_layout *l, const float pose[16],
 /* baked atlas info (for tests and draw math) */
 int   text_font_px(void);
 float text_line_h(void);
+/* cap height of the current face in FACE px (max ink height over the
+ * digit/upper-case range): world-space text that must FIT a surface
+ * sizes by ink, not by the line box (line_h includes leading). */
+float text_cap_h(void);
+/* baseline ascent of the current face in FACE px (line origin -> ink top
+ * for cap glyphs); pairs with text_cap_h for ink-box centering. */
+float text_ascent_h(void);
 
 #ifdef __cplusplus
 }

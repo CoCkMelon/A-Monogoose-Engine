@@ -214,6 +214,30 @@ int text_test_force_hires(void) {
     return g_hires_tex;
 }
 
+static float g_cap_px;
+
+float text_cap_h(void) { return g_cap_px > 0.0f ? g_cap_px : 1.0f; }
+
+float text_ascent_h(void) { return cur_ascent(); }
+
+/* cap height: tallest ink cell over digits + upper case (the range card
+ * faces and scoreboards actually print). Computed once per init. */
+static void text_compute_cap(void)
+{
+    float cap = 0.0f;
+    for (uint32_t c = '0'; c <= '9'; c++) {
+        int g = glyph_find(c);
+        if (g >= 0 && (float)ame_font_glyphs[g].ah > cap)
+            cap = (float)ame_font_glyphs[g].ah;
+    }
+    for (uint32_t c = 'A'; c <= 'Z'; c++) {
+        int g = glyph_find(c);
+        if (g >= 0 && (float)ame_font_glyphs[g].ah > cap)
+            cap = (float)ame_font_glyphs[g].ah;
+    }
+    g_cap_px = cap > 0.0f ? cap : 1.0f;
+}
+
 int text_init(bool nearest_sampling) {
     /* renderer-restart re-entry: ALL faces went stale with the GL
      * context; re-registering the pixel atlas is the reset point (the
@@ -240,6 +264,7 @@ int text_init(bool nearest_sampling) {
     free(rgba);
     if (g_atlas_tex < 0 && ame_last_error_code() == AME_ERR_OK)
         ame_set_error(AME_ERR_TEXT_ATLAS, "pixel atlas upload failed");
+    text_compute_cap();
     return g_atlas_tex;
 }
 
@@ -507,6 +532,49 @@ static int text_layout_core(const char *utf8, float box_w, int align,
 
     out->w = pen_snap(max_line_w); /* EOL caret sits here exactly */
     out->h = (float)(pen_y + (double)cur_line_h() * scale);
+
+    /* tight ink box: same per-face cell math the draw paths use, so a
+     * caller fitting text to a surface centres/sizes by real ink. */
+    float ix0 = 1e9f, iy0 = 1e9f, ix1 = -1e9f, iy1 = -1e9f;
+    for (int i = 0; i < out->count; i++) {
+        const ame_txt_el *e = &out->el[i];
+        if (e->glyph == AME_TXT_TAB || e->glyph < 0)
+            continue;
+        float x0, y0, w, h;
+        if (g_font_mode == AME_FONT_SMOOTH && g_hires_tex >= 0
+            && hires_glyph_find(ame_font_glyphs[e->glyph].cp) >= 0) {
+            const ame_hires_glyph *d =
+                &ame_hires_glyphs[hires_glyph_find(ame_font_glyphs[e->glyph].cp)];
+            x0 = e->x + (float)d->xoff * scale;
+            y0 = e->y + (AME_HIRES_ASCENT + (float)d->yoff) * scale;
+            w = (float)d->aw * HIRES_CELL_K * scale;
+            h = (float)d->ah * HIRES_CELL_K * scale;
+        } else if (g_font_mode == AME_FONT_DSDF && g_dsdf_tex >= 0
+                   && dsdf_glyph_find(ame_font_glyphs[e->glyph].cp) >= 0) {
+            const ame_dsdf_glyph *d =
+                &ame_dsdf_glyphs[dsdf_glyph_find(ame_font_glyphs[e->glyph].cp)];
+            x0 = e->x + (float)d->xoff * scale;
+            y0 = e->y + (AME_DSDF_ASCENT + (float)d->yoff) * scale;
+            w = (float)d->aw * scale;
+            h = (float)d->ah * scale;
+        } else {
+            const ame_font_glyph *g = &ame_font_glyphs[e->glyph];
+            x0 = e->x + (float)g->xoff * scale;
+            y0 = e->y + (cur_ascent() + (float)g->yoff) * scale;
+            w = (float)g->aw * scale;
+            h = (float)g->ah * scale;
+        }
+        if (w <= 0.0f || h <= 0.0f)
+            continue; /* spaces: pen only, no ink */
+        if (x0 < ix0) ix0 = x0;
+        if (y0 < iy0) iy0 = y0;
+        if (x0 + w > ix1) ix1 = x0 + w;
+        if (y0 + h > iy1) iy1 = y0 + h;
+    }
+    out->ink_x0 = ix0;
+    out->ink_y0 = iy0;
+    out->ink_x1 = ix1;
+    out->ink_y1 = iy1;
     return out->count;
 }
 
@@ -656,6 +724,11 @@ void text_draw_world(const ame_text_layout *l, const float pose[16],
         return;
     ame_m4 m;
     memcpy(m.m, pose, sizeof m.m);
+    /* layout scale: el[] pens are already scaled at layout time, but the
+     * glyph cells below are raw atlas metrics - scale them here exactly
+     * like draw_glyph does, or scale!=1 world text renders at face size
+     * (screen path was correct; world path silently dropped it). */
+    const float sc = l->scale > 0.0f ? l->scale : 1.0f;
     for (int i = 0; i < l->count; i++) {
         const ame_txt_el *e = &l->el[i];
         if (e->glyph == AME_TXT_TAB)
@@ -667,24 +740,26 @@ void text_draw_world(const ame_text_layout *l, const float pose[16],
         bool marked = false; /* DSDF face: marked quad for a DSDF pass */
         if (e->glyph < 0) {
             fallback_box(&w, &h);
+            w *= sc;
+            h *= sc;
             u0 = v0 = 0.5f;
             u1 = v1 = 0.504f;
             x0 = e->x;
-            y0 = e->y + cur_ascent() - h;
+            y0 = e->y + cur_ascent() * sc - h;
         } else if (g_font_mode == AME_FONT_SMOOTH && g_hires_tex >= 0
                    && hires_glyph_find(ame_font_glyphs[e->glyph].cp) >= 0) {
             /* smooth face in WORLD space: pose-transformed hires cell
              * (quad spans layout px, UVs the full-res 2x cell) */
             const ame_hires_glyph *d =
                 &ame_hires_glyphs[hires_glyph_find(ame_font_glyphs[e->glyph].cp)];
-            w = (float)d->aw * HIRES_CELL_K;
-            h = (float)d->ah * HIRES_CELL_K;
+            w = (float)d->aw * HIRES_CELL_K * sc;
+            h = (float)d->ah * HIRES_CELL_K * sc;
             u0 = (float)d->ax / (float)AME_HIRES_ATLAS_WIDTH;
             v0 = (float)d->ay / (float)AME_HIRES_ATLAS_HEIGHT;
             u1 = (float)(d->ax + d->aw) / (float)AME_HIRES_ATLAS_WIDTH;
             v1 = (float)(d->ay + d->ah) / (float)AME_HIRES_ATLAS_HEIGHT;
-            x0 = e->x + (float)d->xoff;
-            y0 = e->y + AME_HIRES_ASCENT + (float)d->yoff;
+            x0 = e->x + (float)d->xoff * sc;
+            y0 = e->y + (AME_HIRES_ASCENT + (float)d->yoff) * sc;
             tex = g_hires_tex;
         } else if (g_font_mode == AME_FONT_DSDF && g_dsdf_tex >= 0
                    && dsdf_glyph_find(ame_font_glyphs[e->glyph].cp) >= 0) {
@@ -692,26 +767,26 @@ void text_draw_world(const ame_text_layout *l, const float pose[16],
              * (margins included; bearings already carry them) */
             const ame_dsdf_glyph *d =
                 &ame_dsdf_glyphs[dsdf_glyph_find(ame_font_glyphs[e->glyph].cp)];
-            w = (float)d->aw;
-            h = (float)d->ah;
+            w = (float)d->aw * sc;
+            h = (float)d->ah * sc;
             u0 = (float)d->ax / (float)AME_DSDF_ATLAS_W;
             v0 = (float)d->ay / (float)AME_DSDF_ATLAS_H;
             u1 = (float)(d->ax + d->aw) / (float)AME_DSDF_ATLAS_W;
             v1 = (float)(d->ay + d->ah) / (float)AME_DSDF_ATLAS_H;
-            x0 = e->x + (float)d->xoff;
-            y0 = e->y + AME_DSDF_ASCENT + (float)d->yoff;
+            x0 = e->x + (float)d->xoff * sc;
+            y0 = e->y + (AME_DSDF_ASCENT + (float)d->yoff) * sc;
             tex = g_dsdf_tex;
             marked = true;
         } else {
             const ame_font_glyph *g = &ame_font_glyphs[e->glyph];
-            w = (float)g->aw;
-            h = (float)g->ah;
+            w = (float)g->aw * sc;
+            h = (float)g->ah * sc;
             u0 = (float)g->ax / (float)AME_FONT_ATLAS_WIDTH;
             v0 = (float)g->ay / (float)AME_FONT_ATLAS_HEIGHT;
             u1 = (float)(g->ax + g->aw) / (float)AME_FONT_ATLAS_WIDTH;
             v1 = (float)(g->ay + g->ah) / (float)AME_FONT_ATLAS_HEIGHT;
-            x0 = e->x + (float)g->xoff;
-            y0 = e->y + cur_ascent() + (float)g->yoff;
+            x0 = e->x + (float)g->xoff * sc;
+            y0 = e->y + (cur_ascent() + (float)g->yoff) * sc;
         }
         /* glyph quad corners in layout space -> world pose */
         ame_v3 c0 = ame_m4_xform_point(m, ame_v3_(x0, y0, 0));

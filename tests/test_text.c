@@ -339,6 +339,23 @@ int main(void) {
         UT_ASSERTF(lsca.el[i].x == floorf(lsca.el[i].x),
                    "scaled el[%d].x fractional (%.3f)", i, lsca.el[i].x);
 
+    UT_CASE("ink box: tight glyph bounds, scale-aware");
+    {
+        ame_text_layout li, l1, le;
+        text_layout("8", 0, AME_TEXT_ALIGN_L, 2.0f, &li);
+        UT_ASSERT(li.count == 1);
+        float ih = li.ink_y1 - li.ink_y0;
+        float iw = li.ink_x1 - li.ink_x0;
+        UT_ASSERTF(ih > 0.0f && iw > 0.0f, "ink box empty (%.2f x %.2f)",
+                   (double)iw, (double)ih);
+        UT_ASSERTF(ih <= li.h, "ink taller than line box (%.2f > %.2f)",
+                   (double)ih, (double)li.h);
+        text_layout("8", 0, AME_TEXT_ALIGN_L, 1.0f, &l1);
+        UT_ASSERT_NEAR(ih, 2.0f * (l1.ink_y1 - l1.ink_y0), 0.01f);
+        text_layout(" ", 0, AME_TEXT_ALIGN_L, 1.0f, &le);
+        UT_ASSERT(le.ink_x1 < le.ink_x0); /* no ink: inverted box */
+    }
+
     UT_OK();
     return ut_done("test_text");
 }
