@@ -41,6 +41,13 @@ typedef struct {
     char name[AME_MESH_NAME_MAX];
     int first_idx; /* offset into ame_mesh.idx where this group starts */
     int idx_count; /* triangle indices in the group (multiple of 3) */
+    int first_vert; /* offset into ame_mesh.verts; -1 for point markers */
+    int vert_count; /* corner verts in the group; for a POINT marker this
+                     * counts the locator vertices instead (see point) */
+    float point[3]; /* POINT marker origin: centroid of the group's
+                     * locator vertices (a DCC empty exported as vertices,
+                     * no faces) - i.e. a spawn/marker position. Zeroed for
+                     * geometry groups, whose first_vert >= 0. */
 } ame_mesh_group;
 
 typedef struct ame_mesh {

@@ -197,6 +197,8 @@ static int copy_name(const char *s, const char *end, char *dst, int dst_cap)
 typedef struct {
     char name[AME_MESH_NAME_MAX];
     int first_idx;
+    int first_vert; /* corner-vertex array (faces) */
+    int first_pos;  /* position array (v lines) */
 } obj_grp_t;
 
 int ame_obj_parse(const char *text, ame_mesh *out)
@@ -282,6 +284,8 @@ int ame_obj_parse(const char *text, ame_mesh *out)
             memset(g->name, 0, sizeof g->name);
             copy_name(s + 2, end, g->name, AME_MESH_NAME_MAX);
             g->first_idx = idx.n;
+            g->first_vert = verts.n;
+            g->first_pos = pos.n / 3;
         } else if (s < end && s[0] == 'f' && s + 1 < end && s[1] == ' ') {
             const int nv = pos.n / 3, nvt = uv.n / 3, nvn = nrm.n / 3;
             cor.n = 0;
@@ -378,8 +382,10 @@ int ame_obj_parse(const char *text, ame_mesh *out)
         p = eol ? eol + 1 : end;
     }
 
-    /* pos/uv/nrm/corner scratch are consumed inside the loop only */
-    free(pos.d);
+    /* uv/nrm/corner scratch are consumed inside the loop only; the
+     * position array lives on until the group ranges are closed */
+    const float *pos_save = pos.d;
+    const int pos_n3 = pos.n / 3;
     free(uv.d);
     free(nrm.d);
     free(cor.d);
@@ -409,12 +415,36 @@ int ame_obj_parse(const char *text, ame_mesh *out)
         }
         for (int i = 0; i < ngrp; i++) {
             int last = (i + 1 < ngrp) ? grps[i + 1].first_idx : idx.n;
+            int vlast = (i + 1 < ngrp) ? grps[i + 1].first_vert : verts.n;
+            int plast = (i + 1 < ngrp) ? grps[i + 1].first_pos : pos_n3;
             int cnt = last - grps[i].first_idx;
-            if (cnt <= 0)
-                continue;
+            int vcnt = vlast - grps[i].first_vert;
+            int pcnt = plast - grps[i].first_pos;
+            if (cnt <= 0 && pcnt <= 0)
+                continue; /* empty object: nothing to draw, nothing to spawn */
             memcpy(kept[nkept].name, grps[i].name, sizeof kept[nkept].name);
             kept[nkept].first_idx = grps[i].first_idx;
             kept[nkept].idx_count = cnt;
+            kept[nkept].point[0] = kept[nkept].point[1] =
+                kept[nkept].point[2] = 0.0f;
+            if (cnt > 0) {
+                kept[nkept].first_vert = grps[i].first_vert;
+                kept[nkept].vert_count = vcnt;
+            } else {
+                /* POINT marker: locator vertices, no faces. Centroid of
+                 * the position range is the marker origin. */
+                kept[nkept].first_vert = -1;
+                kept[nkept].vert_count = pcnt;
+                for (int k = 0; k < pcnt; k++) {
+                    const float *pp = &pos_save[(grps[i].first_pos + k) * 3];
+                    kept[nkept].point[0] += pp[0];
+                    kept[nkept].point[1] += pp[1];
+                    kept[nkept].point[2] += pp[2];
+                }
+                kept[nkept].point[0] /= (float)pcnt;
+                kept[nkept].point[1] /= (float)pcnt;
+                kept[nkept].point[2] /= (float)pcnt;
+            }
             nkept++;
         }
         if (nkept == 0) {
@@ -423,6 +453,7 @@ int ame_obj_parse(const char *text, ame_mesh *out)
         }
     }
     free(grps);
+    free((void *)pos_save);
 
     out->verts = verts.d;
     out->vert_count = verts.n;

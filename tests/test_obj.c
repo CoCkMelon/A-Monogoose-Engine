@@ -167,6 +167,30 @@ int main(void)
         UT_OK();
     }
 
+    UT_CASE("point markers: vertex-only groups survive");
+    {
+        ame_mesh m;
+        UT_ASSERT(ame_obj_parse("g mesh\nv 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n"
+                                "o C_cookie_03\nv 12.5 1.25 0\n"
+                                "o S_spawn_p1\nv 3.0 1.0 0\n",
+                                &m)
+                  == 0);
+        UT_ASSERTF(m.group_count == 3, "groups %d != 3", m.group_count);
+        const ame_mesh_group *g = ame_mesh_group_find(&m, "C_cookie_03");
+        UT_ASSERT(g && g->idx_count == 0 && g->vert_count == 1);
+        UT_ASSERTF(g->first_vert == -1, "point first_vert %d != -1",
+                   g->first_vert);
+        UT_ASSERT_NEAR(g->point[0], 12.5f, 1e-6f);
+        UT_ASSERT_NEAR(g->point[1], 1.25f, 1e-6f);
+        g = ame_mesh_group_find(&m, "S_spawn_p1");
+        UT_ASSERT(g && g->idx_count == 0 && g->point[0] == 3.0f);
+        g = ame_mesh_group_find(&m, "mesh");
+        UT_ASSERT(g && g->idx_count == 3 && g->vert_count == 3);
+        UT_ASSERT(g->first_vert == 0 && g->point[0] == 0.0f);
+        ame_mesh_free(&m);
+        UT_OK();
+    }
+
     UT_CASE("CRLF line endings parse");
     {
         ame_mesh m;
