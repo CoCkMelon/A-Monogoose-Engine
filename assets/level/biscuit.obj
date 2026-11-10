@@ -16901,17 +16901,45 @@ g boxes
 # box cx=-8.5 cy=1.1 w=3.0 h=2.2
 # box cx=12.0 cy=2.4 w=3.2 h=0.45
 g markers
-# marker kind=0 x=8.0 y=0.55 a=25.0
-# marker kind=0 x=22.0 y=0.55 a=25.0
-# marker kind=0 x=30.0 y=1.25 a=25.0
-# marker kind=0 x=38.0 y=0.55 a=25.0
-# marker kind=1 x=12.0 y=3.1 a=25.0
-# marker kind=2 x=18.5 y=0.4 a=0.0
-# marker kind=2 x=35.5 y=0.4 a=0.0
-# marker kind=3 x=25.5 y=0.55 a=0.52
-# marker kind=3 x=33.2 y=1.35 a=0.48
-# marker kind=4 x=0.0 y=1.15 a=0.0
-# marker kind=4 x=12.0 y=1.15 a=0.0
-# marker kind=4 x=21.5 y=1.15 a=0.0
-# marker kind=4 x=30.0 y=1.25 a=0.0
-# marker kind=5 x=44.0 y=1.1 a=1.4
+# marker C_cookie_00 kind=0 x=8.0 y=0.55 a=25.0
+o C_cookie_00
+v 8.000000 0.550000 0.000000
+# marker C_cookie_01 kind=0 x=22.0 y=0.55 a=25.0
+o C_cookie_01
+v 22.000000 0.550000 0.000000
+# marker C_cookie_02 kind=0 x=30.0 y=1.25 a=25.0
+o C_cookie_02
+v 30.000000 1.250000 0.000000
+# marker C_cookie_03 kind=0 x=38.0 y=0.55 a=25.0
+o C_cookie_03
+v 38.000000 0.550000 0.000000
+# marker J_jump_04 kind=1 x=12.0 y=3.1 a=25.0
+o J_jump_04
+v 12.000000 3.100000 0.000000
+# marker M_mine_05 kind=2 x=18.5 y=0.4 a=0.0
+o M_mine_05
+v 18.500000 0.400000 0.000000
+# marker M_mine_06 kind=2 x=35.5 y=0.4 a=0.0
+o M_mine_06
+v 35.500000 0.400000 0.000000
+# marker W_saw_07 kind=3 x=25.5 y=0.55 a=0.52
+o W_saw_07
+v 25.500000 0.550000 0.000000
+# marker W_saw_08 kind=3 x=33.2 y=1.35 a=0.48
+o W_saw_08
+v 33.200000 1.350000 0.000000
+# marker S_spawn_09 kind=4 x=0.0 y=1.15 a=0.0
+o S_spawn_09
+v 0.000000 1.150000 0.000000
+# marker S_spawn_10 kind=4 x=12.0 y=1.15 a=0.0
+o S_spawn_10
+v 12.000000 1.150000 0.000000
+# marker S_spawn_11 kind=4 x=21.5 y=1.15 a=0.0
+o S_spawn_11
+v 21.500000 1.150000 0.000000
+# marker S_spawn_12 kind=4 x=30.0 y=1.25 a=0.0
+o S_spawn_12
+v 30.000000 1.250000 0.000000
+# marker G_goal_13 kind=5 x=44.0 y=1.1 a=1.4
+o G_goal_13
+v 44.000000 1.100000 0.000000
