@@ -63,6 +63,15 @@ jobs:
             timeout 60 ./examples/memory_game/memory_game
           test -s game_shot.png
 
+      - name: headless biscuit shot (runtime OBJ level + rp_push_* + text)
+        run: |
+          cd build
+          SDL_VIDEODRIVER=offscreen SDL_AUDIO_DRIVER=dummy \
+          LIBGL_ALWAYS_SOFTWARE=1 AME_WINDOW_W=960 AME_WINDOW_H=540 \
+          AME_SHOT_PPM=biscuit_shot.ppm AME_SHOT_FRAMES=40 AME_SHOT_NOFLIP=1 \
+            timeout -s KILL 60 ./examples/biscuit/biscuit || true
+          test -s biscuit_shot.ppm
+
       - name: release build (warnings-as-errors, -O3, LTO)
         run: |
           cmake -S . -B build-rel -G Ninja \
@@ -77,6 +86,7 @@ jobs:
           path: |
             build/game_shot.png
             build/render_golden.png
+            build/biscuit_shot.ppm
           if-no-files-found: warn
 
   asan:
