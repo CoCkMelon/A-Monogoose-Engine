@@ -88,6 +88,11 @@ add_executable(test_obj test_obj.c)
 target_link_libraries(test_obj PRIVATE ame::3d)
 add_test(NAME obj COMMAND test_obj)
 
+# prefab registry: marker name / kind prefix -> spawn callback
+add_executable(test_prefab test_prefab.c)
+target_link_libraries(test_prefab PRIVATE ame::3d)
+add_test(NAME prefab COMMAND test_prefab)
+
 # golden render: headless EGL surfaceless + llvmpipe (Linux CI job).
 # Keep this capability-gated: a developer machine without EGL development
 # headers/library should still be able to build and run every CPU test.
