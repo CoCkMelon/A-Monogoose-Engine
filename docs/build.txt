@@ -111,7 +111,8 @@ FOLDER LAYOUT
   include/ame/            public headers (extern "C")
   src/                    implementation (pure C; the engine itself
                           has NO C++ translation unit - geometry is
-                          C, no runtime obj loader, etc.)
+                          C, the runtime OBJ reader is C, etc. Assimp
+                          stays in tools/ as a C++ host tool.)
   content/                YAML/TOML content you edit
   tools/                  codegen and bakers, run at build time;
                           the ASSIMP importer lives here (a C++ host

@@ -203,9 +203,13 @@ typedef struct {
 void rp_point_light(const ame_rp_point_light *l);
 void rp_lighting_off(void);
 
-/* --- Assimp-baked geometry in the batch ------------------------------------
- * tools/assimp2c.c bakes models to C arrays at BUILD time (levels.txt:
- * no runtime obj/parser). verts are interleaved pos xyz / nrm xyz /
+/* --- Cooked / imported geometry in the batch -------------------------------
+ * ONE mesh type, TWO sources (levels.txt "STATIC GEOMETRY - TWO PATHS,
+ * ONE MESH TYPE"): tools/assimp2c.c bakes models to C arrays at BUILD
+ * time (ship/CI/web), and ame_obj_load_file parses a .obj at runtime
+ * (dev iteration + hot reload). Both fill ame_mesh_vert + an unsigned
+ * index list, so both arrive here unchanged. verts are interleaved
+ * pos xyz / nrm xyz /
  * uv (matches ame_mesh_vert). xform = optional column-major 4x4
  * (ame_m4) applied to positions; normals rotate by the upper 3x3.
  * Per-vertex normals pair with rp_set_lit(1). Returns tris pushed. */

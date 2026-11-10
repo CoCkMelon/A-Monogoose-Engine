@@ -54,8 +54,11 @@ CHOICES MADE (fixed - change here only if you must)
              At least 1000 Hz simulation (or update-on-input-callback
              for real-time actions) is NON-NEGOTIABLE for low latency;
              see loop.txt.
-  Geometry:  model geometry via Assimp (build-time tool) - do not
-             hand-write a runtime .obj parser.
+  Geometry:  model geometry via TWO converging paths - a small runtime
+             OBJ reader for dev iteration/hot reload, and Assimp as a
+             build-time host tool for cooked ship data. Both produce
+             the same in-memory mesh. Never link Assimp into the game.
+             See levels.txt.
   Assets:    ship an assets folder OR embed files into the binary with
              C23 #embed (the engine builds as C23 everywhere). No
              mandated data-pack pipeline. See deploy.txt.

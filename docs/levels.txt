@@ -16,29 +16,64 @@ RULES
 2. NO runtime parsing of a fancy YAML scene format with embedded
    rules or systems. That exact half-built schema is banned.
 
-3. Model geometry is imported with ASSIMP (see STATIC GEOMETRY). The
-   point is to NOT hand-roll a runtime .obj parser. Imported/cooked
-   model files are then LOADED by the game at startup, either from an
-   assets folder or embedded content (distribution is deploy.txt;
-   shipping
+3. Model geometry arrives by TWO paths that converge on ONE in-memory
+   mesh type (see STATIC GEOMETRY): a runtime OBJ reader for DEV
+   iteration, and the Assimp/baker cook path for SHIP. Cooked model
+   files are then LOADED by the game at startup, either from an assets
+   folder or embedded content (distribution is deploy.txt; shipping
    source/cooked asset files is fine, embedding is the easy option).
 
 4. Loading a level builds ONE immutable static GEOMETRY world (for the
    geometry/collision-query module, physics.txt) and ONE static draw
-   list for the renderer, both built once at load.
+   list for the renderer, both built once at load. A DEV reload of the
+   level mesh rebuilds both exactly ONCE, the same way a cold load
+   does - never per frame, and never by re-parsing geometry inside the
+   frame loop.
 
-STATIC GEOMETRY - USE ASSIMP, DON'T WRITE A .OBJ PARSER
-  Import model geometry with ASSIMP (a mature importer) instead of
-  writing a runtime .obj reader by hand. Prefer it as a BUILD-TIME /
-  AUTHORING host tool in tools/: it reads source model files
-  (obj, gltf/glb, fbx, etc.) and writes out model files the engine
-  loads - a simple format the engine can read directly, or gltf/glb
-  read at load. Assimp is C++, so it lives in a separate tool
-  executable and is never linked into the pure-C engine or game
-  (matching the host-tool rule in text.txt). This keeps the runtime
-  simple while avoiding fragile hand-written geometry parsing.
-  For 3D prefer gltf/glb as the source format (materials/transforms
-  in the file).
+STATIC GEOMETRY - TWO PATHS, ONE MESH TYPE
+  An earlier revision of this file banned a runtime OBJ parser. That
+  ban is RETRACTED: it was over-broad, and it kept deleting a useful
+  iteration path. The rule is not "one importer", it is "one mesh
+  type". Both paths below must produce the SAME in-memory mesh
+  (ame_mesh_vert pos/nrm/uv + unsigned index list, i.e. exactly what
+  rp_push_mesh consumes), so switching a level from dev to cooked data
+  changes no game code.
+
+    DCC export (Blender/other)
+        |
+        +-- runtime OBJ (DEV, hot reload) ----+
+        |     ame_obj_load_file               |
+        |                                     +--> same ame_mesh
+        +-- tools/assimp2c / baker (SHIP) ----+          |
+                                                             v
+                                          immutable draw list + static
+                                          colliders, built ONCE at load
+
+  DEV path - runtime OBJ. The point is fast iteration: export from the
+  DCC to .obj, reload it in the running game (F5 / file watch), see the
+  change without a recompile or a rebake. The parser is deliberately
+  small: v / vt / vn, triangle and quad faces (fan-triangulated), and
+  o / g object-group NAMES preserved so markers survive a multi-object
+  export. It parses to CPU arrays only - it never touches GL, and it
+  never grows into a materials/animation/skinning kitchen sink. When a
+  level genuinely needs materials, animation or a scene graph, that is
+  the cue to move to glTF or the bake path, not to fatten the OBJ
+  reader.
+
+  SHIP path - Assimp / baker. Import model geometry with ASSIMP as a
+  BUILD-TIME / AUTHORING host tool in tools/: it reads source model
+  files (obj, gltf/glb, fbx, ...) and writes cooked model data the
+  engine loads - C arrays (tools/assimp2c) or a packed blob. Assimp is
+  C++, so it lives in a separate tool executable and is NEVER linked
+  into the pure-C engine or game (matching the host-tool rule in
+  text.txt). CI, web/WASM and release builds ship cooked data only: no
+  Assimp in the game binary. For 3D prefer gltf/glb as the SOURCE
+  format (materials/transforms in the file).
+
+  Live .blend is NOT a runtime format on either path. The DCC is the
+  scene editor; it participates by exporting, never by being linked or
+  read live.
+
   Colliders are inferred from object names in the imported data, for
   example BoxCollider, CircleCollider, EdgeCollider, ChainCollider,
   MeshCollider. Non-collider objects become draw geometry. Markers
@@ -48,6 +83,26 @@ MARKERS AND SPAWNS
 Named markers in the geometry/tool become spawn-point tables and
 trigger volumes. Gameplay refers to them by integer id, not by
 looking up strings every frame.
+
+Authoring rules (v1) - the marker identity lives in the OBJECT NAME,
+and the name carries ONLY a kind prefix plus a stable id:
+
+    P_player        E_slime_01      T_door_keyred
+    S_spawn_p1      G_goal          C_cookie_03
+    K_col_*         (collision proxy; or the project's own convention)
+
+  - Short prefixes, one kind letter, stable id. Blender ID names are
+    capped at 63 BYTES, so a name is not a place for data.
+  - NOT in names: health, speeds, timers, dialogue ids, or any other
+    long/rich tunable. Stuffing component data into names is banned.
+  - Rich tunables go in a SIDECAR (YAML/JSON beside the scene) and/or
+    a GENERATED HEADER emitted next to the scene by the level tool -
+    scene_ids.h (marker name -> enum id) and scene_vars.h (the small
+    tunable blob). The game #includes those headers and binds values
+    after the prefab spawn; no runtime string lookups per frame, no
+    reflection required for v1.
+  - A Blender addon for authoring components/variables is a LATER
+    nicety. Nothing in v1 blocks on it.
 
 VARIABLE CONTENT (dialogue, tuning, messages)
 Author in YAML or TOML under a content folder. A codegen tool runs
@@ -71,13 +126,24 @@ BANNED
   - A registry where components are added by string at runtime.
   - Rebuilding level content in another language for web.
   - Putting gameplay logic into a data file.
+  - Linking Assimp into the engine or a game binary (host tools only).
+  - Loading a live .blend at runtime.
+  - Encoding rich component data in DCC object names.
+  NOT banned: a small runtime OBJ reader on the dev path (see STATIC
+  GEOMETRY). Do not delete obj.h "because the spec said so" - that
+  text is gone.
 
 CHECK
   Editing a content YAML (a dialogue line, a message) and rebuilding
   changes the game with no code edit.
-  Model geometry is imported (via Assimp or its cooked output) and
-  loads to build colliders from object names and spawn actors at the
-  right spots. No hand-written runtime .obj parser is used.
+  Model geometry loads to build colliders from object names and spawn
+  actors at the right spots.
+  BOTH geometry paths - runtime OBJ (dev) and assimp2c/bake (ship) -
+  produce the same in-memory mesh type and draw through the same
+  renderer entry point, so a level can switch between them with no
+  game-code change.
+  No Assimp symbol is linked into a game binary; no .blend is opened
+  at runtime.
   No runtime allocation during play after initial load.
   Storing logic in a scene file is impossible (there is no scene
   file runtime).
