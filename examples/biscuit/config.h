@@ -22,6 +22,20 @@
 /* Unity-like Debug.DrawLine overlay (track segs, wheel circles). */
 #define APP_DEBUG_DRAW 1
 
+/* Dev-path level OBJ (levels.txt TWO PATHS): the runtime reader loads
+   this for iteration/hot reload; the baked level_gen arrays are the cook
+   fallback. Override with BF_LEVEL_OBJ for a different export. */
+#ifndef BF_LEVEL_OBJ
+#define BF_LEVEL_OBJ "assets/level/biscuit.obj"
+#endif
+
+#include <stdlib.h>
+static inline const char *bf_level_obj_path(void)
+{
+    const char *e = getenv("BF_LEVEL_OBJ");
+    return (e && e[0]) ? e : BF_LEVEL_OBJ;
+}
+
 /* Where `--selftest` writes its BMP. Relative to the process working
    directory, so the self-test works in any checkout; pass a path to
    `--selftest <file>` to override it. */

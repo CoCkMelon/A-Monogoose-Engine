@@ -93,6 +93,29 @@ add_executable(test_prefab test_prefab.c)
 target_link_libraries(test_prefab PRIVATE ame::3d)
 add_test(NAME prefab COMMAND test_prefab)
 
+# Biscuit Fuel sim on trunk (GL-free): level via OBJ marker names ->
+# prefab, drive, burn fuel, win. The render half is the headless
+# screenshot smoke; this is the playable-loop bar in ctest.
+set(BF ${CMAKE_SOURCE_DIR}/examples/biscuit)
+add_executable(test_biscuit_sim test_biscuit_sim.c
+    ${BF}/abilities.c
+    ${BF}/bf_audio.c
+    ${BF}/dialogue_manager.c
+    ${BF}/gameplay.c
+    ${BF}/level_gen.c
+    ${BF}/phys_geo.c
+    ${BF}/physics.c
+    ${BF}/triggers.c
+    ${BF}/entities/car.c
+    ${BF}/entities/human.c)
+target_include_directories(test_biscuit_sim PRIVATE ${BF} ${BF}/render)
+target_link_libraries(test_biscuit_sim PRIVATE ame::2d Threads::Threads)
+target_compile_definitions(test_biscuit_sim PRIVATE
+    BF_LEVEL_OBJ="${CMAKE_SOURCE_DIR}/assets/level/biscuit.obj")
+target_compile_options(test_biscuit_sim PRIVATE
+    -Wall -Wextra -Werror -ffp-contract=off)
+add_test(NAME biscuit_sim COMMAND test_biscuit_sim)
+
 # golden render: headless EGL surfaceless + llvmpipe (Linux CI job).
 # Keep this capability-gated: a developer machine without EGL development
 # headers/library should still be able to build and run every CPU test.

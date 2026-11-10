@@ -12,17 +12,9 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* dev path: the runtime OBJ beside the source tree (hot reload target).
- * cook path: level_gen.h arrays baked by tools/level_to_c.py. */
-#ifndef BF_LEVEL_OBJ
-#define BF_LEVEL_OBJ "assets/level/biscuit.obj"
-#endif
-
-static const char *level_obj_path(void)
-{
-    const char *env = getenv("BF_LEVEL_OBJ");
-    return (env && env[0]) ? env : BF_LEVEL_OBJ;
-}
+/* dev path: the runtime OBJ (hot reload target, config.h); cook path:
+ * the level_gen.h arrays baked by tools/level_to_c.py. */
+#define level_obj_path() bf_level_obj_path()
 
 /* --- static level mesh: TWO sources, ONE ame_mesh (levels.txt) ---------- */
 static int build_from_obj(bf_view *v)
@@ -51,9 +43,9 @@ static int build_from_baked(bf_view *v)
     for (int i = 0; i < level_n_vert; i++) {
         const LevelVert *s = &level_verts[i];
         ame_mesh_vert *d = &m.verts[i];
-        d->pos[0] = s->px;
-        d->pos[1] = s->py;
-        d->pos[2] = s->pz;
+        d->pos[0] = s->x;
+        d->pos[1] = s->y;
+        d->pos[2] = s->z;
         d->nrm[0] = s->nx;
         d->nrm[1] = s->ny;
         d->nrm[2] = s->nz;
@@ -121,21 +113,25 @@ void bf_view_shutdown(bf_view *v)
     memset(v, 0, sizeof *v);
 }
 
-/* world -> view pixels (ortho2d is 1:1 in pixels; the camera centre is the
- * car, so a world point lands at (w - cam) * ppu + viewport centre) */
+/* world -> PIXEL-SPACE world coords: ortho2d is 1:1 in pixels and the
+ * batch takes camera-centred world pixels ((0,0) = view centre), NOT
+ * screen pixels - rp_screen_origin is the screen-anchored variant the
+ * text module applies itself. Forgetting this offsets everything by half
+ * a viewport. */
 static float sx(const bf_view *v, float wx)
 {
-    return (wx - v->cam_x) * v->ppu + (float)v->vw * 0.5f;
+    return (wx - v->cam_x) * v->ppu;
 }
 
 static float sy(const bf_view *v, float wy)
 {
-    return (wy - v->cam_y) * v->ppu + (float)v->vh * 0.5f;
+    return (v->cam_y - wy) * v->ppu; /* batch pixel space is y-DOWN */
 }
 
 static void push_quad_xy(bf_view *v, float x0, float y0, float x1, float y1,
                          float z, const float tint[4])
 {
+    (void)v;
     rp_push_quad(&(ame_rp_quad){ .tex = rp_white_texture(),
         .p0 = { x0, y0, z }, .p1 = { x1, y0, z }, .p2 = { x1, y1, z },
         .p3 = { x0, y1, z }, .u0 = 0, .v0 = 0, .u1 = 1, .v1 = 1,
@@ -220,10 +216,10 @@ void bf_view_draw(bf_view *v, const BfSnap *s)
     if (v->level.vert_count > 0) {
         float m[16] = { 0 };
         m[0] = v->ppu;
-        m[5] = v->ppu;
+        m[5] = -v->ppu; /* world y up -> batch pixel y down */
         m[10] = 1.0f;
-        m[12] = -v->cam_x * v->ppu + (float)v->vw * 0.5f;
-        m[13] = -v->cam_y * v->ppu + (float)v->vh * 0.5f;
+        m[12] = -v->cam_x * v->ppu;
+        m[13] = v->cam_y * v->ppu;
         m[15] = 1.0f;
         const float rock[4] = { 0.42f, 0.36f, 0.26f, 1.0f };
         rp_push_mesh(&(ame_rp_mesh){ .tex = rp_white_texture(),
@@ -298,6 +294,10 @@ void bf_view_draw(bf_view *v, const BfSnap *s)
                 disc(v, s->wheel_x[i], s->wheel_y[i] - s->wheel_r, 0.06f, 5.1f,
                      (const float[4]){ 0.2f, 1.0f, 0.3f, 0.9f });
 #endif
+}
 
+void bf_view_present(bf_view *v)
+{
+    (void)v;
     rp_end_frame();
 }

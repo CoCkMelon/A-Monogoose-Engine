@@ -1,5 +1,7 @@
 #include "physics.h"
 #include "phys_geo.h"
+
+#include <stddef.h>
 #include <math.h>
 
 void phys_world_clear(PhysWorld *w)

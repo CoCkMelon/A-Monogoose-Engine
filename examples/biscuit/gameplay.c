@@ -8,6 +8,11 @@
 #include "sim.h"
 #include "triggers.h"
 #include "level_gen.h"
+#include "scene_ids.h"
+
+#include <ame/mesh.h>
+#include <ame/obj.h>
+#include <ame/prefab.h>
 
 #include "bf_audio.h"
 
@@ -48,8 +53,91 @@ void sim_teleport_unlocked(float x, float y)
     G.human.vx = G.human.vy = 0;
 }
 
+/* --- markers: object NAME -> prefab builder (levels.txt MARKERS) --------
+ * The dev path reads the level OBJ and spawns every named point object
+ * through the prefab registry (kind prefix -> builder, position from the
+ * point vertex). Tunables that must NOT live in names (the fuel amount)
+ * come from the generated scene_ids.h twin. The cook path (no OBJ) runs
+ * the baked level_markers table instead; both are generated from the same
+ * JSON, so both resolve identically. */
+static const SceneMarkerId *ids_find(const char *name)
+{
+    for (int i = 0; i < scene_id_count; i++)
+        if (strcmp(scene_ids[i].name, name) == 0)
+            return &scene_ids[i];
+    return NULL;
+}
+
+#define MK_BUILDER(fn, call)                                                  \
+    static ame_handle fn(void *u, const char *n, const float p[3], float a)   \
+    {                                                                         \
+        (void)u;                                                              \
+        const SceneMarkerId *id = ids_find(n);                                \
+        float tun = id ? id->a : 0.0f;                                        \
+        (void)a;                                                              \
+        (void)tun;                                                            \
+        call;                                                                 \
+        return (ame_handle){ .idx = 1, .gen = 1 };                            \
+    }
+
+MK_BUILDER(mk_fuel, triggers_add_fuel(p[0], p[1], tun))
+MK_BUILDER(mk_jump, triggers_add_jump_cookie(p[0], p[1], tun))
+MK_BUILDER(mk_mine, triggers_add_mine(p[0], p[1]))
+MK_BUILDER(mk_saw, triggers_add_saw(p[0], p[1], tun > 0.1f ? tun : 0.55f))
+MK_BUILDER(mk_spawn, (triggers_add_spawn(p[0], p[1]),
+                      G.n_spawn == 1 ? (G.spawn_x = p[0], G.spawn_y = p[1])
+                                     : 0))
+MK_BUILDER(mk_goal, (G.goal_x = p[0], G.goal_y = p[1],
+                     G.goal_w = tun > 0.1f ? tun : 1.4f))
+
+static void register_marker_kinds(void)
+{
+    static int done;
+    if (done)
+        return;
+    done = 1;
+    ame_prefab_register_prefix("C_cookie_", mk_fuel, NULL);
+    ame_prefab_register_prefix("J_jump_", mk_jump, NULL);
+    ame_prefab_register_prefix("M_mine_", mk_mine, NULL);
+    ame_prefab_register_prefix("W_saw_", mk_saw, NULL);
+    ame_prefab_register_prefix("S_spawn_", mk_spawn, NULL);
+    ame_prefab_register_prefix("G_goal_", mk_goal, NULL);
+}
+
+static int build_markers_from_obj(void)
+{
+    ame_mesh m;
+    if (ame_obj_load_file(bf_level_obj_path(), &m) != 0)
+        return 0;
+    int spawned = 0;
+    for (int i = 0; i < m.group_count; i++) {
+        const ame_mesh_group *g = &m.groups[i];
+        if (g->vert_count < 1 || !ame_prefab_match(g->name))
+            continue;
+        float cx, cy;
+        if (g->idx_count == 0) { /* point marker: locator origin */
+            cx = g->point[0];
+            cy = g->point[1];
+        } else { /* geometry group: centroid of its verts */
+            cx = cy = 0.0f;
+            for (int k = 0; k < g->vert_count; k++) {
+                cx += m.verts[g->first_vert + k].pos[0];
+                cy += m.verts[g->first_vert + k].pos[1];
+            }
+            cx /= (float)g->vert_count;
+            cy /= (float)g->vert_count;
+        }
+        float p[3] = { cx, cy, 0.0f };
+        if (ame_handle_valid(ame_prefab_spawn(g->name, g->name, p, 0.0f)))
+            spawned++;
+    }
+    ame_mesh_free(&m);
+    return spawned > 0;
+}
+
 static void build_course(void)
 {
+    register_marker_kinds();
     /* Course comes from the build-time bezier → C mesh (level_gen). */
     phys_world_clear(&G.world);
     triggers_reset_items();
@@ -72,6 +160,10 @@ static void build_course(void)
     G.spawn_y = APP_START_CAR_Y;
     G.spawn_i = 0;
 
+    if (build_markers_from_obj())
+        return; /* dev path: markers came from the OBJ names */
+
+    /* cook path: the baked marker table */
     for (int i = 0; i < level_n_marker; i++) {
         const LevelMarker *m = &level_markers[i];
         switch (m->kind) {
@@ -255,8 +347,8 @@ void bf_tick(float dt, double now_s)
     triggers_tick(dt);
     float tx = driving ? G.car.x : G.human.x;
     float ty = driving ? G.car.y : G.human.y;
-    G.cam_x += (tx - G.cam_x) * clampf(1.0f - expf(-dt * 6.0f), 0.0f, 1.0f);
-    G.cam_y += ((ty + 0.7f) - G.cam_y) * clampf(1.0f - expf(-dt * 6.0f), 0.0f, 1.0f);
+    G.cam_x += (tx - G.cam_x) * ame_clampf(1.0f - expf(-dt * 6.0f), 0.0f, 1.0f);
+    G.cam_y += ((ty + 0.7f) - G.cam_y) * ame_clampf(1.0f - expf(-dt * 6.0f), 0.0f, 1.0f);
     pthread_mutex_unlock(&G.mu);
 }
 

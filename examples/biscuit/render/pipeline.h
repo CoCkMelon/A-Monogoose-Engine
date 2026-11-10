@@ -27,7 +27,10 @@ typedef struct bf_view {
 
 int  bf_view_init(bf_view *v, int vw, int vh);
 void bf_view_resize(bf_view *v, int vw, int vh);
+/* begins the frame and draws the world; the caller draws UI (ui.c) and
+ * then calls bf_view_present() - glyphs must land in the SAME batch. */
 void bf_view_draw(bf_view *v, const BfSnap *s);
+void bf_view_present(bf_view *v);
 void bf_view_shutdown(bf_view *v);
 
 /* dev hot reload (levels.txt): re-read the level OBJ and rebuild the

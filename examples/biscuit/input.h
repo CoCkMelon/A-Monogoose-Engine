@@ -16,6 +16,7 @@ enum {
     BF_ACT_ADVANCE,
     BF_ACT_JUMP,
     BF_ACT_QUIT,
+    BF_ACT_RELOAD, /* dev: re-read the level OBJ (levels.txt hot reload) */
     BF_ACT_COUNT
 };
 
@@ -23,7 +24,8 @@ enum {
 void game_input_bindings(void);
 /* clear held state (restart) */
 void game_input_reset(void);
-/* logic thread, start of app_fixed: maps actions onto bf_hold_*/bf_request_* */
+/* logic thread, start of app_fixed: maps actions onto the bf_hold_* and
+ * bf_request_* gameplay entry points */
 void game_input_poll(void);
 
 #endif /* BF_INPUT_H */

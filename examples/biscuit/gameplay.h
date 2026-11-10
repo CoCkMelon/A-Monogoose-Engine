@@ -1,6 +1,8 @@
 #ifndef GAMEPLAY_H
 #define GAMEPLAY_H
 
+#include <stdint.h>
+
 /*
  * Biscuit Fuel simulation (gameplay). No GL, no SDL.
  * Game lives here; the engine is include/ame + src.

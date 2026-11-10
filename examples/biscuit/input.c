@@ -23,6 +23,7 @@ void game_input_bindings(void)
     in_bind_key(BF_ACT_JUMP, AME_KEY_SPACE);
     in_bind_key(BF_ACT_QUIT, AME_KEY_ESCAPE);
     in_bind_key(BF_ACT_QUIT, AME_KEY_Q);
+    in_bind_key(BF_ACT_RELOAD, AME_KEY_F5);
 }
 
 void game_input_reset(void)

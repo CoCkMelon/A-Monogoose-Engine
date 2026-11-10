@@ -14,6 +14,7 @@
 
 #include <ame/ame.h>
 #include <ame/app.h>
+#include <ame/input.h>
 #include <ame/render.h>
 #include <ame/text.h>
 
@@ -36,7 +37,14 @@ int app_init(void)
     ame_rp_desc d;
     rp_desc_begin(&d);
     rp_desc_clear(&d, 0.10f, 0.13f, 0.20f, 1.0f);
+    /* 2D painter order: `layer` is the draw order; a depth test would clip
+     * the layer values (and the ribbon's extruded z) against the ortho
+     * depth range */
+    rp_desc_depth(&d, false);
     rp_desc_size(&d, VIEW.vw, VIEW.vh);
+    /* the level ribbon is ~2.4k tris on its own; the default batch cap
+     * would silently drop it plus everything pushed after it */
+    rp_desc_max_quads(&d, 32768);
     rp_desc_camera(&d, &VIEW.cam);
     if (rp_init(&d) != 0)
         return 1;
@@ -61,6 +69,12 @@ int app_event(const ame_ev *ev)
 int app_fixed(float dt)
 {
     game_input_poll();
+    if (in_pressed(BF_ACT_RELOAD)) {
+        /* dev hot reload (levels.txt): rebuild the immutable mesh and the
+         * course exactly once, the same way a cold load does */
+        bf_view_reload_level(&VIEW);
+        bf_reset(1);
+    }
     bf_tick(dt, (float)(ame_time_seconds() - T0));
     bf_cues_drain();
     BfSnap s;
@@ -79,7 +93,8 @@ int app_render(void)
     static BfSnap frame;
     (void)BfSnap_latest_copy(&SNAP, &frame);
     bf_view_draw(&VIEW, &frame);
-    ui_render_hud(&frame, VIEW.vw, VIEW.vh);
+    ui_render_hud(&frame, VIEW.vw, VIEW.vh); /* same batch as the world */
+    bf_view_present(&VIEW);
     return 0;
 }
 
