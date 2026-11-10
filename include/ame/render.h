@@ -28,6 +28,7 @@
 
 #include <ame/ame.h>
 #include <ame/camera.h>
+#include <ame/mesh.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -212,13 +213,9 @@ void rp_lighting_off(void);
  * pos xyz / nrm xyz /
  * uv (matches ame_mesh_vert). xform = optional column-major 4x4
  * (ame_m4) applied to positions; normals rotate by the upper 3x3.
- * Per-vertex normals pair with rp_set_lit(1). Returns tris pushed. */
-typedef struct {
-    float pos[3];
-    float nrm[3];
-    float uv[2];
-} ame_mesh_vert;
-
+ * Per-vertex normals pair with rp_set_lit(1). Returns tris pushed.
+ * ame_mesh_vert and the index list live in ame/mesh.h so the loaders
+ * (obj, assimp2c) and this entry point share one type. */
 typedef struct {
     int tex;
     const ame_mesh_vert *verts;

@@ -45,7 +45,8 @@ typedef enum {
     X(AME_ERR_PLATFORM,           AME_LOG_ERROR,    "platform operation failed") \
     X(AME_ERR_INPUT,              AME_LOG_ERROR,    "input operation failed") \
     /* Append new codes; existing numeric values remain stable. */ \
-    X(AME_ERR_BATCH_FULL,         AME_LOG_ERROR,    "render batch is full")
+    X(AME_ERR_BATCH_FULL,         AME_LOG_ERROR,    "render batch is full") \
+    X(AME_ERR_MESH_FORMAT,        AME_LOG_ERROR,    "mesh data is malformed or empty")
 
 typedef enum {
 #define AME_ERROR_ENUM(code, level, text) code,
