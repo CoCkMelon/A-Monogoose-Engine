@@ -93,6 +93,11 @@ add_executable(test_prefab test_prefab.c)
 target_link_libraries(test_prefab PRIVATE ame::3d)
 add_test(NAME prefab COMMAND test_prefab)
 
+# v1 debug overlay registry (watch list -> trunk text at draw time)
+add_executable(test_debug_watch test_debug_watch.c)
+target_link_libraries(test_debug_watch PRIVATE ame::3d)
+add_test(NAME debug_watch COMMAND test_debug_watch)
+
 # Biscuit Fuel sim on trunk (GL-free): level via OBJ marker names ->
 # prefab, drive, burn fuel, win. The render half is the headless
 # screenshot smoke; this is the playable-loop bar in ctest.

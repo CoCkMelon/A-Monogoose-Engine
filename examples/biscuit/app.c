@@ -15,6 +15,7 @@
 #include <ame/ame.h>
 #include <ame/app.h>
 #include <ame/input.h>
+#include <ame/debug.h>
 #include <ame/render.h>
 #include <ame/text.h>
 
@@ -24,9 +25,19 @@ static bf_view VIEW;
 static BfSnap_snap SNAP;
 static double T0;
 
+/* live watch floats for the trunk debug overlay (ame/debug.h): the sim
+ * snapshot feeds them per frame, the overlay reads the pinned pointers. */
+static float g_w_car_x, g_w_car_y, g_w_speed, g_w_fuel, g_w_hp;
+
 int app_init(void)
 {
     game_input_bindings();
+    /* v1 debug overlay: hand-registered floats, no reflection */
+    ame_debug_watch("car_x", &g_w_car_x);
+    ame_debug_watch("car_y", &g_w_car_y);
+    ame_debug_watch("vx", &g_w_speed);
+    ame_debug_watch("fuel", &g_w_fuel);
+    ame_debug_watch("hp", &g_w_hp);
     bf_reset(1);
     game_input_reset();
     bf_set_input_ok(1);
@@ -94,6 +105,15 @@ int app_render(void)
     (void)BfSnap_latest_copy(&SNAP, &frame);
     bf_view_draw(&VIEW, &frame);
     ui_render_hud(&frame, VIEW.vw, VIEW.vh); /* same batch as the world */
+#if APP_DEBUG_DRAW
+    g_w_car_x = frame.car_x;
+    g_w_car_y = frame.car_y;
+    g_w_speed = frame.car_vx;
+    g_w_fuel = frame.fuel;
+    g_w_hp = frame.hp;
+    ame_debug_watch_draw((float)VIEW.vw - 250.0f, 14.0f, 1.5f,
+                         (const float[4]){ 0.75f, 0.95f, 0.75f, 1.0f }, 60.0f);
+#endif
     bf_view_present(&VIEW);
     return 0;
 }
