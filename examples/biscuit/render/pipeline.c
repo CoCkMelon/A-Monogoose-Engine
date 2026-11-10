@@ -120,12 +120,14 @@ void bf_view_shutdown(bf_view *v)
  * a viewport. */
 static float sx(const bf_view *v, float wx)
 {
-    return (wx - v->cam_x) * v->ppu;
+    (void)v;
+    return wx * v->ppu; /* rp camera does the centering */
 }
 
 static float sy(const bf_view *v, float wy)
 {
-    return (v->cam_y - wy) * v->ppu; /* batch pixel space is y-DOWN */
+    (void)v;
+    return -wy * v->ppu; /* batch pixel space is y-DOWN */
 }
 
 static void push_quad_xy(bf_view *v, float x0, float y0, float x1, float y1,
@@ -205,7 +207,7 @@ void bf_view_draw(bf_view *v, const BfSnap *s)
     v->cam_x = s->cam_x;
     v->cam_y = s->cam_y;
     /* pixel space is world * ppu; the camera centre is the actor */
-    camera_pos(&v->cam, s->cam_x * v->ppu, s->cam_y * v->ppu, 0.0f);
+    camera_pos(&v->cam, s->cam_x * v->ppu, -s->cam_y * v->ppu, 0.0f);
     camera_build(&v->cam);
     rp_set_camera(&v->cam);
 
@@ -218,14 +220,34 @@ void bf_view_draw(bf_view *v, const BfSnap *s)
         m[0] = v->ppu;
         m[5] = -v->ppu; /* world y up -> batch pixel y down */
         m[10] = 1.0f;
-        m[12] = -v->cam_x * v->ppu;
-        m[13] = v->cam_y * v->ppu;
+        /* translation is the rp camera's job, not the mesh xform */
+        m[12] = 0.0f;
+        m[13] = 0.0f;
         m[15] = 1.0f;
+        /* per-group tints: the level OBJ carries one group per curve/box,
+         * so bg silhouettes read as distant hills instead of track rock */
         const float rock[4] = { 0.42f, 0.36f, 0.26f, 1.0f };
-        rp_push_mesh(&(ame_rp_mesh){ .tex = rp_white_texture(),
-            .verts = v->level.verts, .vert_count = v->level.vert_count,
-            .idx = v->level.idx, .idx_count = v->level.idx_count, .xform = m,
-            .tint = { rock[0], rock[1], rock[2], rock[3] }, .layer = 1.0f });
+        const float bgcol[4] = { 0.15f, 0.19f, 0.27f, 1.0f };
+        const ame_mesh *lm = &v->level;
+        int ng = lm->group_count > 0 ? lm->group_count : 1;
+        for (int gi = 0; gi < ng; gi++) {
+            const ame_mesh_group *g =
+                lm->group_count > 0 ? &lm->groups[gi] : NULL;
+            if (g && g->idx_count <= 0)
+                continue; /* point markers spawn, never draw */
+            const float *tint = rock;
+            float layer = 1.0f;
+            if (g && strncmp(g->name, "curve_bg", 8) == 0) {
+                tint = bgcol;
+                layer = 0.5f; /* behind the track band */
+            }
+            rp_push_mesh(&(ame_rp_mesh){ .tex = rp_white_texture(),
+                .verts = lm->verts, .vert_count = lm->vert_count,
+                .idx = g ? lm->idx + g->first_idx : lm->idx,
+                .idx_count = g ? g->idx_count : lm->idx_count, .xform = m,
+                .tint = { tint[0], tint[1], tint[2], tint[3] },
+                .layer = layer });
+        }
     }
 
     /* platforms (boxes the sim collides against) */
