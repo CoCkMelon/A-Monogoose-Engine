@@ -201,21 +201,18 @@ int app_init(void) {
         .center = { 0, 0, 0 }, .extent = 5.0f });
 
     if (text_init(true) >= 0) {
-        /* face labels use the SMOOTH face (hires DejaVu, plain quads):
-         * laid out AND drawn under it. If the hires atlas is
-         * unavailable text_set_font falls back to PIXEL for both, so
-         * layout metrics and draw stay consistent either way. */
-        text_init_hires();
-        text_set_font(AME_FONT_SMOOTH);
+        /* face symbols are PIXEL-face ink printed on the card plane:
+         * crisp under the oblique camera (the SMOOTH hires face blurred
+         * into soup on the tilted quads). Laid out once, sized to the
+         * card at draw time from the layout's own pixel height. */
         char buf[16];
         pair_layout_count = (GRID_COLS * GRID_ROWS) / 2;
         if (pair_layout_count > 32)
             pair_layout_count = 32;
         for (int p = 0; p < pair_layout_count; p++) {
             snprintf(buf, sizeof buf, "%d", p + 1);
-            text_layout(buf, 0, AME_TEXT_ALIGN_C, 1.2f, &pair_layout[p]);
+            text_layout(buf, 0, AME_TEXT_ALIGN_C, 2.0f, &pair_layout[p]);
         }
-        text_set_font(AME_FONT_PIXEL);
     }
 
     ame_synth_cfg flip = { .wave = AME_WAVE_TRIANGLE, .freq = 660.0f,
@@ -552,12 +549,20 @@ static void card_label_pose(const mem_snap *s, int i,
     ame_v3 right = ame_v3_(1, 0, 0);
     ame_v3 ydir  = ame_v3_(0, -sa, -ca);
     ame_v3 nrm   = ame_v3_(0, -ca, sa);
-    /* px metrics -> card units */
-    const float gs = 1.15f / (float)text_font_px();
+    /* px metrics -> card units: size by INK (cap height), not by the
+     * line box - line_h carries leading, so fitting l->h left the print
+     * timid and off-centre. The print fills ~62% of the card height and
+     * is centred on its ink box (the old fixed 1.15/font_px ignored the
+     * layout scale entirely and overflowed the card: cropped symbols). */
+    const float ink_w = l->ink_x1 - l->ink_x0;
+    const float ink_h = l->ink_y1 - l->ink_y0;
+    const float gs = (ink_h > 0.0f) ? (CARD_H * 0.62f) / ink_h : 0.1f;
     ame_v3 t = ame_v3_(s->x[i], lift + 0.004f, s->z[i]);
     t = ame_v3_add(t, ame_v3_scale(nrm, 0.012f));
-    t = ame_v3_sub(t, ame_v3_scale(right, l->w * gs * 0.5f));
-    t = ame_v3_sub(t, ame_v3_scale(ydir, l->h * gs * 0.5f));
+    /* centre the INK box (tight glyph bounds) on the face, not the line
+     * box: leading/side bearings otherwise shift the print off-centre */
+    t = ame_v3_sub(t, ame_v3_scale(right, (l->ink_x0 + ink_w * 0.5f) * gs));
+    t = ame_v3_sub(t, ame_v3_scale(ydir, (l->ink_y0 + ink_h * 0.5f) * gs));
     pose[0] = right.x * gs; pose[4] = ydir.x * gs; pose[8] = nrm.x;  pose[12] = t.x;
     pose[1] = right.y * gs; pose[5] = ydir.y * gs; pose[9] = nrm.y;  pose[13] = t.y;
     pose[2] = right.z * gs; pose[6] = ydir.z * gs; pose[10] = nrm.z; pose[14] = t.z;
@@ -750,14 +755,28 @@ int app_render(void) {
     for (int i = 0; i < s->count; i++)
         card_quad(s, i, 10);
 
-    /* card face labels: SMOOTH-face text ON the card plane (same flip
-     * transform, recomputed from the live angle every frame, so the
-     * label rotates with the card through the flip). UI pass (0). */
+    /* card face symbols: PIXEL ink printed ON the card plane, glued to
+     * the face (same flip transform, recomputed from the live angle
+     * every frame). PERMANENT: no reveal gate, no spawn - the print is
+     * part of the card at all times and rotates with it through every
+     * flip. Visibility is physical, not logical: face down, the print
+     * sits 0.012 units BEHIND the card plane (pose normal flips with
+     * the face) and the depth test hides it, exactly like real ink on
+     * card stock. UI pass (0). */
     ame_rp_pass_frame ui = { 0 };
     rp_pass_begin(&ui);
-    text_set_font(AME_FONT_SMOOTH);
     for (int i = 0; i < s->count; i++) {
-        if (s->angle[i] > 120.0f && s->pair[i] < (uint32_t)pair_layout_count) {
+        if (s->pair[i] < (uint32_t)pair_layout_count) {
+            /* physical backface cull of the PRINT only: ink lives on the
+             * face plane, so it is visible exactly while the face normal
+             * points at the camera (face down or mid-flip away: the card
+             * stock occludes its own print, no logical reveal gate). */
+            float a = s->angle[i] * (float)AME_PI / 180.0f;
+            float ny = -cosf(a), nz = sinf(a);
+            float vy = CAM.pos.y - (s->y[i] + s->lift[i]);
+            float vz = CAM.pos.z - s->z[i];
+            if (ny * vy + nz * vz <= 0.0f)
+                continue;
             const ame_text_layout *l = &pair_layout[s->pair[i]];
             float pose[16];
             card_label_pose(s, i, l, pose);
@@ -765,7 +784,6 @@ int app_render(void) {
             text_draw_world(l, pose, tint, 20);
         }
     }
-    text_set_font(AME_FONT_PIXEL);
 
     /* scoreboard: in-scene billboard above the far table edge.
      * PIXEL face (explicit: the label block above runs SMOOTH). */
