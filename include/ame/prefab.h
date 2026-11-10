@@ -24,8 +24,12 @@ extern "C" {
 #endif
 
 /* Returns a handle into the game's own pool; AME_HANDLE_INVALID to
- * reject the instance (unknown kind, pool full, ...). */
-typedef ame_handle (*ame_prefab_fn)(void *user, const char *instance_name);
+ * reject the instance (unknown kind, pool full, ...).
+ * pos/angle carry the marker transform (Unity's Instantiate takes one):
+ * pos is the object origin in world units, angle the authored yaw in
+ * radians; pos may be NULL for name-only spawns. */
+typedef ame_handle (*ame_prefab_fn)(void *user, const char *instance_name,
+                                    const float pos[3], float angle);
 
 void ame_prefab_reset(void);
 
@@ -44,7 +48,8 @@ const char *ame_prefab_match(const char *object_name);
  * full object name, so the game can keep stable ids). AME_HANDLE_INVALID
  * when nothing matches or the builder rejects. */
 ame_handle ame_prefab_spawn(const char *object_name,
-                           const char *instance_name);
+                           const char *instance_name, const float pos[3],
+                           float angle);
 
 #ifdef __cplusplus
 }

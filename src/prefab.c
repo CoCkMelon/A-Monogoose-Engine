@@ -80,10 +80,12 @@ const char *ame_prefab_match(const char *object_name)
     return e ? e->key : NULL;
 }
 
-ame_handle ame_prefab_spawn(const char *object_name, const char *instance_name)
+ame_handle ame_prefab_spawn(const char *object_name, const char *instance_name,
+                           const float pos[3], float angle)
 {
     const ame_prefab_entry *e = find(object_name);
     if (!e)
         return AME_HANDLE_INVALID;
-    return e->fn(e->user, instance_name ? instance_name : object_name);
+    return e->fn(e->user, instance_name ? instance_name : object_name, pos,
+                 angle);
 }
