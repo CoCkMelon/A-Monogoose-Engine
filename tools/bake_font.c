@@ -45,6 +45,10 @@ int main(int argc, char **argv) {
     double mdiv = argc > 6 ? atof(argv[6]) : 1.0;
     int atlas_w = argc > 7 ? atoi(argv[7]) : ATLAS_W_DEFAULT;
     int atlas_h = argc > 8 ? atoi(argv[8]) : ATLAS_H_DEFAULT;
+    /* mono: 1-bit coverage (threshold at half). Pixel typefaces ship no
+     * semitones; stb's AA raster would bake grey fringes the face never
+     * had. The SMOOTH/DSDF bakes keep anti-aliasing (they need it). */
+    int mono = argc > 9 && strcmp(argv[9], "mono") == 0;
     if (!(mdiv > 0.0))
         mdiv = 1.0;
     if (atlas_w < 64)
@@ -143,6 +147,10 @@ int main(int argc, char **argv) {
                 free(atlas);
                 free(data);
                 return 1;
+            }
+            if (mono) {
+                for (int bi = 0; bi < gw * gh; bi++)
+                    bmp[bi] = bmp[bi] >= 128 ? 255 : 0;
             }
             for (int yy = 0; yy < gh; yy++)
                 memcpy(atlas + (size_t)(cy + yy) * atlas_w + (size_t)cx,

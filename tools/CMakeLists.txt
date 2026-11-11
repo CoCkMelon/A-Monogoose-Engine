@@ -18,7 +18,7 @@ add_custom_command(
     COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_SOURCE_DIR}/generated
     COMMAND ${CMAKE_COMMAND} -E chdir ${CMAKE_SOURCE_DIR}/generated
             $<TARGET_FILE:bake_font> ${CMAKE_SOURCE_DIR}/assets/fonts/PixelifySans-Regular.ttf
-            ${AME_FONT_PX} font_atlas
+            ${AME_FONT_PX} font_atlas ame_font AME_FONT 1.0 1024 1024 mono
     DEPENDS bake_font ${CMAKE_SOURCE_DIR}/assets/fonts/PixelifySans-Regular.ttf
     COMMENT "baking font atlas (${AME_FONT_PX}px)"
     VERBATIM)
