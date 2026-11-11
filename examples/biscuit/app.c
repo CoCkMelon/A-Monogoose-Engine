@@ -111,7 +111,7 @@ int app_render(void)
     g_w_speed = frame.car_vx;
     g_w_fuel = frame.fuel;
     g_w_hp = frame.hp;
-    ame_debug_watch_draw((float)VIEW.vw - 250.0f, 14.0f, 1.5f,
+    ame_debug_watch_draw((float)VIEW.vw - 380.0f, 14.0f, 1.5f,
                          (const float[4]){ 0.75f, 0.95f, 0.75f, 1.0f }, 60.0f);
 #endif
     bf_view_present(&VIEW);

@@ -8,7 +8,7 @@
  * than plain (zeroth-order) SDF bilinear sampling - sharper corners
  * at the same atlas resolution, robust in perspective (3D) too.
  *
- * Pipeline (deterministic, no external deps beyond stb_truetype):
+ * Pipeline (deterministic, host dep: FreeType for the source raster):
  *   1. rasterize each glyph's coverage at 4x the base pixel size
  *   2. exact signed EDT on the 4x bitmap (Felzenszwalb 1D transform,
  *      rows then columns, seeds inside/outside separately)
@@ -33,8 +33,8 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define STB_TRUETYPE_IMPLEMENTATION
-#include <stb_truetype.h>
+#include <ft2build.h>
+#include FT_FREETYPE_H
 
 #define BASE_PX 32
 #define SS 4              /* supersampling factor for the EDT source */
@@ -128,29 +128,22 @@ int main(int argc, char **argv) {
     const char *prefix = argv[2];
     (void)argc;
 
-    FILE *f = fopen(ttf_path, "rb");
-    if (!f) { fprintf(stderr, "cannot open %s\n", ttf_path); return 1; }
-    fseek(f, 0, SEEK_END);
-    long len = ftell(f);
-    fseek(f, 0, SEEK_SET);
-    unsigned char *data = malloc((size_t)len);
-    if (!data || fread(data, 1, (size_t)len, f) != (size_t)len) {
-        fprintf(stderr, "read fail\n");
+    /* two face instances: base px for advances/metrics, SS*base px for
+     * the EDT source coverage. Metrics MUST match bake_font.c exactly
+     * (shared layout): same FreeType face-size metrics, same formula. */
+    FT_Library lib = NULL;
+    FT_Face face_base = NULL, face_ss = NULL;
+    if (FT_Init_FreeType(&lib) || FT_New_Face(lib, ttf_path, 0, &face_base)
+        || FT_New_Face(lib, ttf_path, 0, &face_ss)
+        || FT_Set_Pixel_Sizes(face_base, 0, BASE_PX)
+        || FT_Set_Pixel_Sizes(face_ss, 0, BASE_PX * SS)) {
+        fprintf(stderr, "cannot open %s\n", ttf_path);
         return 1;
     }
-    fclose(f);
-
-    stbtt_fontinfo info;
-    if (!stbtt_InitFont(&info, data, 0)) {
-        fprintf(stderr, "stbtt_InitFont failed\n");
-        return 1;
-    }
-    /* metrics MUST match bake_font.c exactly (shared layout) */
-    float scale = stbtt_ScaleForPixelHeight(&info, (float)BASE_PX);
-    float scale4 = stbtt_ScaleForPixelHeight(&info, (float)BASE_PX * SS);
-    int ascent, descent, line_gap;
-    stbtt_GetFontVMetrics(&info, &ascent, &descent, &line_gap);
-    (void)scale;
+    float ascent_px = (float)face_base->size->metrics.ascender / 64.0f;
+    float descent_px = (float)-face_base->size->metrics.descender / 64.0f;
+    float height_px = (float)face_base->size->metrics.height / 64.0f;
+    float line_gap_px = height_px - (ascent_px + descent_px);
 
     /* pass 1: rasterize + build fields per glyph, keep in memory */
     int nranges = (int)(sizeof RANGES / sizeof RANGES[0]);
@@ -163,20 +156,34 @@ int main(int argc, char **argv) {
 
     for (int r = 0; r < nranges; r++) {
         for (uint32_t cp = RANGES[r].lo; cp <= RANGES[r].hi; cp++) {
-            int adv, lsb;
-            stbtt_GetCodepointHMetrics(&info, (int)cp, &adv, &lsb);
-            int gw4, gh4, xoff4, yoff4;
-            unsigned char *bmp = stbtt_GetCodepointBitmap(
-                &info, 0, scale4, (int)cp, &gw4, &gh4, &xoff4, &yoff4);
+            if (!FT_Get_Char_Index(face_base, cp))
+                continue; /* unmapped: runtime draws the fallback box */
+            if (FT_Load_Char(face_base, cp, FT_LOAD_NO_HINTING))
+                continue;
+            float adv_f = (float)face_base->glyph->advance.x / 64.0f;
+            if (FT_Load_Char(face_ss, cp, FT_LOAD_RENDER | FT_LOAD_NO_HINTING
+                                          | FT_LOAD_TARGET_NORMAL))
+                continue;
+            const FT_Bitmap *bm4 = &face_ss->glyph->bitmap;
+            int gw4 = (int)bm4->width, gh4 = (int)bm4->rows;
+            int pitch4 = bm4->pitch;
+            int xoff4 = face_ss->glyph->bitmap_left;
+            int yoff4 = -face_ss->glyph->bitmap_top;
             int cw = gw4 / SS + 2 * MARGIN;
             int ch = gh4 / SS + 2 * MARGIN;
-            if (gw4 == 0 || gh4 == 0) {
-                stbtt_FreeBitmap(bmp, NULL);
+            bool blank4 = gw4 == 0 || gh4 == 0 || !bm4->buffer;
+            if (!blank4) {
+                blank4 = true;
+                for (int yy = 0; yy < gh4 && blank4; yy++)
+                    for (int xx = 0; xx < gw4; xx++)
+                        if (bm4->buffer[(size_t)yy * pitch4 + xx]) { blank4 = false; break; }
+            }
+            if (blank4) {
                 if (cp == ' ') {
                     glyphs[ng] = (dsdf_glyph){ .cp = cp, .ax = 0, .ay = 0,
                                                .aw = 0, .ah = 0, .xoff = 0,
                                                .yoff = 0,
-                                               .advance = adv * scale };
+                                               .advance = adv_f };
                     cell_d[ng] = NULL;
                     ng++;
                 }
@@ -196,7 +203,8 @@ int main(int argc, char **argv) {
                     int sx = x - MARGIN * SS;
                     unsigned char cov = (sy >= 0 && sy < gh4 && sx >= 0
                                          && sx < gw4)
-                                            ? bmp[(size_t)sy * gw4 + sx]
+                                            ? bm4->buffer[(size_t)sy * pitch4
+                                                            + sx]
                                             : 0;
                     size_t at = (size_t)y * pw + x;
                     if (cov > 127) {
@@ -233,14 +241,13 @@ int main(int argc, char **argv) {
             free(dout);
             free(in_bin);
             free(out_bin);
-            stbtt_FreeBitmap(bmp, NULL);
 
             glyphs[ng] = (dsdf_glyph){ .cp = cp, .ax = 0, .ay = 0,
                                        .aw = (uint16_t)cw,
                                        .ah = (uint16_t)ch,
                                        .xoff = (int16_t)((int)floor(xoff4 / (double)SS) - MARGIN),
                                        .yoff = (int16_t)((int)floor(yoff4 / (double)SS) - MARGIN),
-                                       .advance = adv * scale };
+                                       .advance = adv_f };
             cell_d[ng] = field;
             ng++;
         }
@@ -320,12 +327,11 @@ int main(int argc, char **argv) {
     fprintf(oh, "#define AME_DSDF_ATLAS_H %d\n", atlas_h);
     fprintf(oh, "#define AME_DSDF_RANGE %.1ff\n", RANGE);
     /* vertical metrics at BASE_PX (same formula as bake_font.c) */
-    fprintf(oh, "#define AME_DSDF_ASCENT %.1ff\n",
-            (float)ascent * scale);
+    fprintf(oh, "#define AME_DSDF_ASCENT %.1ff\n", ascent_px);
     fprintf(oh, "#define AME_DSDF_LINE_H %.1ff\n",
-            (float)ascent * scale + (float)(-descent) * scale
-                + (float)line_gap * scale + BASE_PX * 0.25f); /* bake_font
-                * formula: same leading so line math is shared */
+            ascent_px + descent_px + line_gap_px
+                + BASE_PX * 0.25f); /* bake_font formula: same leading so
+                * line math is shared */
     fprintf(oh, "typedef struct {\n    uint32_t cp;\n"
                 "    uint16_t ax, ay, aw, ah;\n"
                 "    int16_t xoff, yoff;\n    float advance;\n"
@@ -356,7 +362,9 @@ int main(int argc, char **argv) {
     free(atlas);
     free(glyphs);
     free(cell_d);
-    free(data);
+    FT_Done_Face(face_base);
+    FT_Done_Face(face_ss);
+    FT_Done_FreeType(lib);
     printf("baked %d DSDF glyphs (%dx%d RGBA, range %.0f) -> "
            "font_atlas_dsdf.c/h\n", ng, ATLAS_W, atlas_h, RANGE);
     return 0;

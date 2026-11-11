@@ -9,7 +9,8 @@ Textures have two supported paths:
 
   rp_load_texture_file(path, nearest)
       Iteration path. The engine decodes PNG, JPEG, TGA, BMP, and the other
-      formats supported by the vendored stb_image decoder, forces RGBA8,
+      formats supported by the vendored stb_image decoder (runtime image
+      I/O only - font atlases are baked by the FreeType host tools), forces RGBA8,
       uploads the texture, and frees the decoder buffer.
 
 The file helper returns a normal texture id or -1. On failure inspect

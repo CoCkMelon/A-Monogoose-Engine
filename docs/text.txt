@@ -52,7 +52,14 @@ DECISIONS (from the requirements)
      reads. The in-engine side stays C23; if a runtime rasterizer is
      ever needed in-engine, it lives in the single allowed C++ shim.
      This host tool is BUILD-TIME ONLY - it is never linked into the
-     engine.
+     engine. The rasterizer backend is FreeType (system package,
+     build.txt): FT_LOAD_NO_HINTING for deterministic bakes, MONO
+     target for the 1-bit PIXEL face and NORMAL (AA) target for the
+     hires/DSDF coverage sources. Vertical metrics come from the
+     font's OS/2 table as FreeType reports them (ascender/
+     descender/height at the baked px size); line_h adds 25% leading
+     in the baker. Ink-less glyphs (space) bake NO atlas cell and an
+     all-zero cell rect, so the layout ink box stays tight.
 
 FACES (text_set_font; layout AND draw both run under the face)
   - PIXEL (default): Pixelify, nearest sampling, integer glyph

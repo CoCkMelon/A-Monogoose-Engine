@@ -3,17 +3,17 @@
 #define FONT_ATLAS_DSDF_H
 #include <stdint.h>
 #define AME_DSDF_ATLAS_W 1024
-#define AME_DSDF_ATLAS_H 800
+#define AME_DSDF_ATLAS_H 976
 #define AME_DSDF_RANGE 8.0f
-#define AME_DSDF_ASCENT 25.5f
-#define AME_DSDF_LINE_H 40.0f
+#define AME_DSDF_ASCENT 30.0f
+#define AME_DSDF_LINE_H 45.0f
 typedef struct {
     uint32_t cp;
     uint16_t ax, ay, aw, ah;
     int16_t xoff, yoff;
     float advance;
 } ame_dsdf_glyph;
-extern const unsigned char ame_dsdf_atlas[3276800];
+extern const unsigned char ame_dsdf_atlas[3997696];
 extern const ame_dsdf_glyph ame_dsdf_glyphs[];
 extern const int ame_dsdf_glyph_count;
 #endif

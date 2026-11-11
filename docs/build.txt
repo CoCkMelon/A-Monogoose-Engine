@@ -130,6 +130,15 @@ THIRD_PARTY RULES
     only (levels.txt). It is C++ and is a separate tool executable;
     it is never linked into the engine or the game. The engine and
     game stay pure C and never see Assimp headers.
+  - FreeType (MIT/GPL dual, system package libfreetype-dev) is a
+    BUILD-TIME HOST dependency of the font bakers (tools/bake_font*,
+    found via find_package(Freetype)); it replaced vendored
+    stb_truetype for glyph rasterization. It is NEVER linked into the
+    engine or the game: only the host tools link Freetype::Freetype,
+    and their output stays plain C arrays in generated/. Present on
+    GitHub ubuntu runners (add libfreetype-dev to any new CI job that
+    configures cmake - find_package runs at configure time even when
+    the tool targets are not built).
   - libfyaml (MIT, YAML 1.2, C) is a RUNTIME dependency, used by the
     dialogue module, by save/load (save.txt), and by settings
     definitions (settings.txt). Include it from one place; compile it

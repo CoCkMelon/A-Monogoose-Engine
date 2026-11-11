@@ -4,19 +4,34 @@
  * emits plain C arrays (generated/font_atlas.c/.h) that the C23 engine links
  * directly. Deterministic, zero startup cost, identical on native and web.
  *
- * The baker is a host tool: it is never linked into the engine, and it is the
- * single TU that touches stb_truetype (external/, warning-exempt).
+ * The baker is a host tool: it is never linked into the engine, and it is
+ * the single TU that touches FreeType (host dependency, find_package in
+ * tools/CMakeLists.txt). Raster modes:
+ *   mono  -> FT_LOAD_TARGET_MONO: a true 1-bit raster. Pixel typefaces ship
+ *            no semitones; an AA raster would bake grey fringes the face
+ *            never had (the pre-FreeType baker thresholded stb's AA - the
+ *            monochrome mode makes that hack unnecessary).
+ *   default-> FT_LOAD_TARGET_NORMAL: 8-bit coverage for the SMOOTH hires
+ *            face (its bilinear pipeline needs smooth coverage).
+ * FT_LOAD_NO_HINTING in both: the bake must depend on the outline and the
+ * pixel size only, never on a hinter's version-specific decisions.
+ *
+ * Vertical metrics are FreeType's face-size metrics (hhea/OS-2 per FT's
+ * face loading): ascent = ascender/64, descent = -descender/64, and
+ * line_h = height/64 + px/4 (the historical quarter-pixel of extra leading).
  *
  * usage: bake_font <font.ttf> <pixel_size> <out_prefix>
+ *            [sym_prefix] [mac_prefix] [metric_div] [atlas_w] [atlas_h]
+ *            [mono]
  */
+#include <ft2build.h>
+#include FT_FREETYPE_H
+
 #include <math.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-
-#define STB_TRUETYPE_IMPLEMENTATION /* single TU, build-time tool only */
-#include <stb_truetype.h>           /* external/stb include dir */
 
 /* glyph ranges: latin, latin-1 supplement + latin-ext-A, cyrillic */
 static const struct { uint32_t lo, hi; } RANGES[] = {
@@ -33,7 +48,7 @@ int main(int argc, char **argv) {
     if (argc < 4) {
         fprintf(stderr, "usage: %s <font.ttf> <pixel_size> <out_prefix> "
                 "[sym_prefix] [mac_prefix] [metric_div] [atlas_w] "
-                "[atlas_h]\n", argv[0]);
+                "[atlas_h] [mono]\n", argv[0]);
         return 1;
     }
     const char *ttf_path = argv[1];
@@ -45,9 +60,6 @@ int main(int argc, char **argv) {
     double mdiv = argc > 6 ? atof(argv[6]) : 1.0;
     int atlas_w = argc > 7 ? atoi(argv[7]) : ATLAS_W_DEFAULT;
     int atlas_h = argc > 8 ? atoi(argv[8]) : ATLAS_H_DEFAULT;
-    /* mono: 1-bit coverage (threshold at half). Pixel typefaces ship no
-     * semitones; stb's AA raster would bake grey fringes the face never
-     * had. The SMOOTH/DSDF bakes keep anti-aliasing (they need it). */
     int mono = argc > 9 && strcmp(argv[9], "mono") == 0;
     if (!(mdiv > 0.0))
         mdiv = 1.0;
@@ -55,25 +67,34 @@ int main(int argc, char **argv) {
         atlas_w = ATLAS_W_DEFAULT;
     if (atlas_h < 64)
         atlas_h = ATLAS_H_DEFAULT;
+    if (px < 4) {
+        fprintf(stderr, "pixel size too small\n");
+        return 1;
+    }
 
-    FILE *f = fopen(ttf_path, "rb");
-    if (!f) { fprintf(stderr, "cannot open %s\n", ttf_path); return 1; }
-    fseek(f, 0, SEEK_END);
-    long len = ftell(f);
-    fseek(f, 0, SEEK_SET);
-    unsigned char *data = malloc((size_t)len);
-    if (fread(data, 1, (size_t)len, f) != (size_t)len) { fprintf(stderr, "read fail\n"); return 1; }
-    fclose(f);
-
-    stbtt_fontinfo info;
-    if (!stbtt_InitFont(&info, data, 0)) { fprintf(stderr, "stbtt_InitFont failed\n"); return 1; }
-    float scale = stbtt_ScaleForPixelHeight(&info, (float)px);
-
-    int ascent, descent, line_gap;
-    stbtt_GetFontVMetrics(&info, &ascent, &descent, &line_gap);
-    float ascent_px = ascent * scale;
-    float descent_px = -descent * scale; /* positive distance below baseline */
-    float line_h = ascent_px + descent_px + line_gap * scale + px * 0.25f;
+    FT_Library lib = NULL;
+    FT_Face face = NULL;
+    if (FT_Init_FreeType(&lib)) {
+        fprintf(stderr, "FT_Init_FreeType failed\n");
+        return 1;
+    }
+    if (FT_New_Face(lib, ttf_path, 0, &face)) {
+        fprintf(stderr, "cannot open %s\n", ttf_path);
+        FT_Done_FreeType(lib);
+        return 1;
+    }
+    if (FT_Set_Pixel_Sizes(face, 0, (FT_UInt)px)) {
+        fprintf(stderr, "FT_Set_Pixel_Sizes failed\n");
+        FT_Done_Face(face);
+        FT_Done_FreeType(lib);
+        return 1;
+    }
+    /* face-size metrics (the OS/2-honouring defaults FreeType loads) */
+    float ascent_px = (float)face->size->metrics.ascender / 64.0f;
+    float descent_px = (float)-face->size->metrics.descender / 64.0f;
+    float height_px = (float)face->size->metrics.height / 64.0f;
+    float line_gap_px = height_px - (ascent_px + descent_px);
+    float line_h = ascent_px + descent_px + line_gap_px + px * 0.25f;
 
     /* shelf packer state */
     unsigned char *atlas = calloc((size_t)atlas_w * atlas_h, 1); /* coverage A8 */
@@ -84,13 +105,18 @@ int main(int argc, char **argv) {
     snprintf(path_h, sizeof path_h, "%s.h", prefix);
     FILE *out_c = fopen(path_c, "w");
     FILE *out_h = fopen(path_h, "w");
-    if (!out_c || !out_h) { fprintf(stderr, "cannot write %s/\n", prefix); return 1; }
+    if (!out_c || !out_h || !atlas) {
+        fprintf(stderr, "cannot write %s/\n", prefix);
+        return 1;
+    }
 
     /* the .c includes its own header by the prefix's basename */
     const char *base = strrchr(prefix, '/');
     base = base ? base + 1 : prefix;
 
-    fprintf(out_h, "/* GENERATED by tools/bake_font.c — do not edit. */\n");
+    fprintf(out_h, "/* GENERATED by tools/bake_font.c (FreeType %d.%d.%d) "
+            "- do not edit. */\n", FREETYPE_MAJOR, FREETYPE_MINOR,
+            FREETYPE_PATCH);
     fprintf(out_h, "#ifndef %s_ATLAS_H\n#define %s_ATLAS_H\n", mac, mac);
     fprintf(out_h, "#include <stdint.h>\n");
     fprintf(out_h, "typedef struct {\n    uint32_t cp;\n    uint16_t ax, ay, aw, ah; /* atlas rect */\n");
@@ -112,26 +138,62 @@ int main(int argc, char **argv) {
     fprintf(out_h, "extern const int %s_glyph_count;\n", sym);
     fprintf(out_h, "#endif\n");
 
-    fprintf(out_c, "/* GENERATED by tools/bake_font.c — do not edit. */\n");
+    fprintf(out_c, "/* GENERATED by tools/bake_font.c (FreeType %d.%d.%d) "
+            "- do not edit. */\n", FREETYPE_MAJOR, FREETYPE_MINOR,
+            FREETYPE_PATCH);
     fprintf(out_c, "#include \"%s.h\"\n", base);
     fprintf(out_c, "const %s_glyph %s_glyphs[] = {\n", sym, sym);
 
     int written = 0;
     for (size_t r = 0; r < sizeof RANGES / sizeof RANGES[0]; r++) {
         for (uint32_t cp = RANGES[r].lo; cp <= RANGES[r].hi; cp++) {
-            int gw, gh, xoff, yoff;
-            unsigned char *bmp = stbtt_GetCodepointBitmap(&info, 0, scale, (int)cp,
-                                                          &gw, &gh, &xoff, &yoff);
-            int advance, lsb;
-            stbtt_GetCodepointHMetrics(&info, (int)cp, &advance, &lsb);
-            if (gw == 0 || gh == 0 || !bmp) {
+            if (!FT_Get_Char_Index(face, cp))
+                continue; /* unmapped: runtime draws the fallback box */
+            if (FT_Load_Char(face, cp,
+                             FT_LOAD_RENDER | FT_LOAD_NO_HINTING |
+                                 (mono ? FT_LOAD_TARGET_MONO
+                                       : FT_LOAD_TARGET_NORMAL))) {
+                fprintf(stderr, "FT_Load_Char U+%04X failed\n", cp);
+                continue;
+            }
+            FT_GlyphSlot g = face->glyph;
+            const FT_Bitmap *bm = &g->bitmap;
+            int gw = (int)bm->width, gh = (int)bm->rows;
+            float advance = (float)g->advance.x / 64.0f;
+            int xoff = g->bitmap_left;
+            int yoff = -g->bitmap_top; /* pen-relative, y down: ink above
+                                        * the baseline carries a negative
+                                        * offset (same contract as before) */
+            /* all-zero bitmap (space, and any ink-less glyph: FreeType
+             * may hand back a 1x1 empty buffer where stb handed back
+             * none): metrics only, no atlas cell, no ink */
+            bool blank = gw == 0 || gh == 0 || !bm->buffer;
+            if (!blank) {
+                blank = true;
+                for (int yy = 0; yy < gh && blank; yy++) {
+                    const unsigned char *src = bm->buffer + (size_t)yy * bm->pitch;
+                    if (bm->pixel_mode == FT_PIXEL_MODE_MONO) {
+                        for (int xx = 0; xx < gw; xx++)
+                            if ((src[xx >> 3] >> (7 - (xx & 7))) & 1) { blank = false; break; }
+                    } else {
+                        for (int xx = 0; xx < gw; xx++)
+                            if (src[xx]) { blank = false; break; }
+                    }
+                }
+            }
+            if (blank) {
                 /* space & friends: metrics only, no atlas cell */
-                stbtt_FreeBitmap(bmp, NULL);
                 if (cp == ' ') {
                     fprintf(out_c, "    { 0x%X, 0,0,0,0, 0,0, %.2ff },\n",
-                            cp, advance * scale / mdiv);
+                            cp, advance / mdiv);
                     written++;
                 }
+                continue;
+            }
+            if (bm->pixel_mode != FT_PIXEL_MODE_MONO
+                && bm->pixel_mode != FT_PIXEL_MODE_GRAY) {
+                fprintf(stderr, "unsupported pixel mode %d at U+%04X\n",
+                        (int)bm->pixel_mode, cp);
                 continue;
             }
             /* padding 1px against bleed (render.txt rule 3 wants >= 1-2px;
@@ -143,26 +205,29 @@ int main(int argc, char **argv) {
             }
             if (cy + gh + 1 > atlas_h) {
                 fprintf(stderr, "atlas full at U+%04X\n", cp);
-                stbtt_FreeBitmap(bmp, NULL);
                 free(atlas);
-                free(data);
+                FT_Done_Face(face);
+                FT_Done_FreeType(lib);
                 return 1;
             }
-            if (mono) {
-                for (int bi = 0; bi < gw * gh; bi++)
-                    bmp[bi] = bmp[bi] >= 128 ? 255 : 0;
+            for (int yy = 0; yy < gh; yy++) {
+                unsigned char *dst = atlas + (size_t)(cy + yy) * atlas_w + cx;
+                const unsigned char *src = bm->buffer + (size_t)yy * bm->pitch;
+                if (bm->pixel_mode == FT_PIXEL_MODE_MONO) {
+                    /* packed 1-bit rows, MSB first -> A8 0/255 */
+                    for (int xx = 0; xx < gw; xx++)
+                        dst[xx] = (src[xx >> 3] >> (7 - (xx & 7))) & 1 ? 255 : 0;
+                } else {
+                    memcpy(dst, src, (size_t)gw);
+                }
             }
-            for (int yy = 0; yy < gh; yy++)
-                memcpy(atlas + (size_t)(cy + yy) * atlas_w + (size_t)cx,
-                       bmp + (size_t)yy * (size_t)gw, (size_t)gw);
-            stbtt_FreeBitmap(bmp, NULL); /* audit fix: was leaked per glyph */
             if (gh > row_h) row_h = gh;
             /* bearings round to int16 layout px (round-half-away); the
              * advance stays float-exact: it drives the snapped pen. */
             fprintf(out_c, "    { 0x%X, %d,%d,%d,%d, %d,%d, %.2ff },\n",
                     cp, cx, cy, gw, gh,
                     (int)llround(xoff / mdiv), (int)llround(yoff / mdiv),
-                    advance * scale / mdiv);
+                    advance / mdiv);
             written++;
             cx += gw + 1;
         }
@@ -179,11 +244,11 @@ int main(int argc, char **argv) {
 
     fclose(out_c);
     fclose(out_h);
-    /* audit fix (P0): this tool runs at BUILD time - a leak here fails
-     * the whole ASan build under LSan (ninja exit 1). Free everything. */
     free(atlas);
-    free(data);
-    printf("baked %d glyphs at %dpx -> %s.c/h (line_h=%.1f ascent=%.1f)\n",
-           written, px, prefix, line_h / mdiv, ascent_px / mdiv);
+    FT_Done_Face(face);
+    FT_Done_FreeType(lib);
+    printf("baked %d glyphs at %dpx -> %s.c/h (line_h=%.1f ascent=%.1f, %s)\n",
+           written, px, prefix, line_h / mdiv, ascent_px / mdiv,
+           mono ? "mono" : "aa");
     return 0;
 }

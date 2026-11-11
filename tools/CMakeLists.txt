@@ -1,10 +1,12 @@
 # tools — BUILD-TIME host tools (never linked into the engine).
-# The font baker is ours but includes vendored stb_truetype, so it compiles
-# WITHOUT warnings-as-errors (vendored-code exemption, build.txt rule 3).
+# The font bakers rasterize through FreeType (host dependency; system
+# package, same precedent as libfyaml in build.txt). They are our own code
+# with no vendored includes left, so they compile warnings-as-errors.
+find_package(Freetype REQUIRED)
 
 add_executable(bake_font bake_font.c)
-target_include_directories(bake_font PRIVATE ${CMAKE_SOURCE_DIR}/external/stb)
-target_compile_options(bake_font PRIVATE -Wall -Wextra -ffp-contract=off)
+target_link_libraries(bake_font PRIVATE Freetype::Freetype)
+target_compile_options(bake_font PRIVATE -Wall -Wextra -Werror -ffp-contract=off)
 if(UNIX AND NOT APPLE)
     target_link_libraries(bake_font PRIVATE m)
 endif()
@@ -44,8 +46,8 @@ add_custom_target(generated_font_hires
 # DSDF baker (dense first-order distance fields; Acta Cybernetica 25,
 # 2021). bakes DejaVuSans -> RGBA atlas (R=dist GB=gradient) + metrics.
 add_executable(bake_font_dsdf bake_font_dsdf.c)
-target_include_directories(bake_font_dsdf PRIVATE ${CMAKE_SOURCE_DIR}/external/stb)
-target_compile_options(bake_font_dsdf PRIVATE -Wall -Wextra -ffp-contract=off)
+target_link_libraries(bake_font_dsdf PRIVATE Freetype::Freetype)
+target_compile_options(bake_font_dsdf PRIVATE -Wall -Wextra -Werror -ffp-contract=off)
 if(UNIX AND NOT APPLE)
     target_link_libraries(bake_font_dsdf PRIVATE m)
 endif()
