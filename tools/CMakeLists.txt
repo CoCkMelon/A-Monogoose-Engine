@@ -2,6 +2,23 @@
 # The font bakers rasterize through FreeType (host dependency; system
 # package, same precedent as libfyaml in build.txt). They are our own code
 # with no vendored includes left, so they compile warnings-as-errors.
+# Under a CROSS build (e.g. MinGW-w64 CI job) the host bakers cannot run:
+# the generated arrays are COMMITTED, so ame_font below compiles them
+# directly and every bake executable/custom command stays out.
+if(CMAKE_CROSSCOMPILING)
+    add_library(ame_font STATIC ${CMAKE_SOURCE_DIR}/generated/font_atlas.c)
+    set_target_properties(ame_font PROPERTIES EXPORT_NAME font)
+    target_include_directories(ame_font PUBLIC
+        $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/generated>
+        $<INSTALL_INTERFACE:include/ame/generated>)
+    target_sources(ame_font PRIVATE
+        ${CMAKE_SOURCE_DIR}/generated/font_atlas_dsdf.c
+        ${CMAKE_SOURCE_DIR}/generated/font_atlas_hires.c
+        ${CMAKE_SOURCE_DIR}/generated/shaders_gen.c)
+    target_compile_options(ame_font PRIVATE -w) # generated data: silence
+    return()
+endif()
+
 find_package(Freetype REQUIRED)
 
 add_executable(bake_font bake_font.c)

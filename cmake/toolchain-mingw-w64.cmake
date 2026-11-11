@@ -1,0 +1,13 @@
+# MinGW-w64 (win64) cross toolchain - build-only CI coverage of the SAME
+# C23 sources (handoff NEXT ACTIONS 1). Games link the official SDL3
+# MinGW dev tarball via CMAKE_PREFIX_PATH; nothing here runs on the host.
+set(CMAKE_SYSTEM_NAME Windows)
+set(CMAKE_SYSTEM_PROCESSOR x86_64)
+set(AME_MINGW_PREFIX x86_64-w64-mingw32)
+set(CMAKE_C_COMPILER   ${AME_MINGW_PREFIX}-gcc)
+set(CMAKE_CXX_COMPILER ${AME_MINGW_PREFIX}-g++)
+set(CMAKE_RC_COMPILER  ${AME_MINGW_PREFIX}-windres)
+set(CMAKE_FIND_ROOT_PATH /usr/${AME_MINGW_PREFIX})
+set(CMAKE_FIND_ROOT_PATH_MODE_PROGRAM NEVER)
+set(CMAKE_FIND_ROOT_PATH_MODE_LIBRARY ONLY)
+set(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE ONLY)

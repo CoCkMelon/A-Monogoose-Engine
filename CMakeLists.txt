@@ -28,7 +28,7 @@ option(AME_BUILD_ASYNCINPUT_GAME "Build the asyncinput-backend game variant" OFF
 # and tests both gate on these): libfyaml (dialogue), opusfile (opus
 # decode, engine), opus (encode, test-asset baker).
 find_package(PkgConfig QUIET)
-if(PkgConfig_FOUND)
+if(PkgConfig_FOUND AND NOT CMAKE_CROSSCOMPILING)
     pkg_check_modules(FYAML QUIET libfyaml)
     pkg_check_modules(OPUSFILE QUIET opusfile)
     pkg_check_modules(OPUS QUIET opus)

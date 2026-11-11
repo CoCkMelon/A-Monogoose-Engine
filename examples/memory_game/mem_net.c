@@ -1,32 +1,90 @@
-/* memory_game — Stage 1 netcode implementation (see mem_net.h). */
+/* memory_game — Stage 1 netcode implementation (see mem_net.h).
+ *
+ * Socket layer is POSIX (BSD sockets) with a thin Winsock2 mapping so the
+ * SAME file cross-compiles for the Windows CI job (winsock2.h ships the
+ * BSD constants; error codes come from WSAGetLastError, hence the MEM_E*
+ * indirection and mem_close/poll wrappers). */
 #include "mem_net.h"
 
-#include <arpa/inet.h>
-#include <errno.h>
-#include <fcntl.h>
-#include <netinet/in.h>
-#include <netinet/tcp.h>
-#include <poll.h>
-#include <stdio.h>
-#include <string.h>
-#include <sys/socket.h>
-#include <sys/types.h>
-#include <unistd.h>
-
-/* --- sockets -------------------------------------------------------------- */
-
-static void set_nonblock(int fd) {
+#ifdef _WIN32
+#  include <winsock2.h>
+#  include <ws2tcpip.h>
+#  include <sys/types.h> /* mingw: ssize_t */
+#  define MEM_NOSIGNAL 0
+#  define MEM_SOCKOPT_IN(p)  ((const char *)(p))
+#  define MEM_SOCKOPT_OUT(p) ((char *)(p))
+#  define MEM_SEND_BUF(p)    ((const char *)(p))
+#  define MEM_RECV_BUF(p)    ((char *)(p))
+#  define MEM_EINTR    WSAEINTR
+#  define MEM_EAGAIN   WSAEWOULDBLOCK /* winsock: one code for both */
+#  define MEM_EINPROGRESS WSAEINPROGRESS
+static int mem_sock_errno(void) { return WSAGetLastError(); }
+static void mem_close(int fd) { closesocket((SOCKET)fd); }
+static int mem_poll(struct pollfd *p, unsigned long n, int ms)
+{
+    return WSAPoll(p, n, ms);
+}
+static void set_nonblock(int fd)
+{
+    u_long nb = 1;
+    ioctlsocket((SOCKET)fd, FIONBIO, &nb);
+}
+static void mem_wsa_once(void)
+{
+    static WSADATA wd;
+    static int done;
+    if (!done) {
+        WSAStartup(MAKEWORD(2, 2), &wd);
+        done = 1;
+    }
+}
+#else
+#  include <arpa/inet.h>
+#  include <errno.h>
+#  include <fcntl.h>
+#  include <netinet/in.h>
+#  include <netinet/tcp.h>
+#  include <poll.h>
+#  include <sys/socket.h>
+#  include <sys/types.h>
+#  include <unistd.h>
+#  define MEM_NOSIGNAL MSG_NOSIGNAL
+#  define MEM_SOCKOPT_IN(p)  (p)
+#  define MEM_SOCKOPT_OUT(p) (p)
+#  define MEM_SEND_BUF(p)    (p)
+#  define MEM_RECV_BUF(p)    (p)
+#  define MEM_EINTR    EINTR
+#  define MEM_EAGAIN   EAGAIN
+#  define MEM_EINPROGRESS EINPROGRESS
+static int mem_sock_errno(void) { return errno; }
+static void mem_close(int fd) { close(fd); }
+static int mem_poll(struct pollfd *p, unsigned long n, int ms)
+{
+    return poll(p, (nfds_t)n, ms);
+}
+static void set_nonblock(int fd)
+{
     int fl = fcntl(fd, F_GETFL, 0);
     if (fl >= 0)
         fcntl(fd, F_SETFL, fl | O_NONBLOCK);
 }
+static void mem_wsa_once(void) { }
+#endif
+
+#include <stdio.h>
+#include <string.h>
+
+void mem_net_close(int fd) { mem_close(fd); }
+
+/* --- sockets -------------------------------------------------------------- */
 
 int mem_net_listen(uint16_t port) {
+    mem_wsa_once();
     int fd = socket(AF_INET, SOCK_STREAM, 0);
     if (fd < 0)
         return -1;
     int one = 1;
-    setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof one);
+    setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, MEM_SOCKOPT_IN(&one), sizeof one);
     struct sockaddr_in a;
     memset(&a, 0, sizeof a);
     a.sin_family = AF_INET;
@@ -38,7 +96,7 @@ int mem_net_listen(uint16_t port) {
     a.sin_addr.s_addr = htonl(INADDR_ANY); /* loopback CI + LAN alike */
     a.sin_port = htons(port);
     if (bind(fd, (struct sockaddr *)&a, sizeof a) < 0 || listen(fd, 4) < 0) {
-        close(fd);
+        mem_close(fd);
         return -1;
     }
     return fd;
@@ -46,18 +104,19 @@ int mem_net_listen(uint16_t port) {
 
 int mem_net_accept(int lst) {
     struct pollfd p = { .fd = lst, .events = POLLIN };
-    if (poll(&p, 1, 0) != 1)
+    if (mem_poll(&p, 1, 0) != 1)
         return -1;
     int fd = accept(lst, NULL, NULL);
     if (fd < 0)
         return -1;
     int one = 1;
-    setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof one);
+    setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, MEM_SOCKOPT_IN(&one), sizeof one);
     set_nonblock(fd);
     return fd;
 }
 
 int mem_net_connect(const char *host, uint16_t port, int timeout_ms) {
+    mem_wsa_once();
     int fd = socket(AF_INET, SOCK_STREAM, 0);
     if (fd < 0)
         return -1;
@@ -68,29 +127,29 @@ int mem_net_connect(const char *host, uint16_t port, int timeout_ms) {
     if (!host || !*host || strcmp(host, "localhost") == 0)
         host = "127.0.0.1";
     if (inet_pton(AF_INET, host, &a.sin_addr) != 1) {
-        close(fd);
+        mem_close(fd);
         return -1;
     }
     set_nonblock(fd);
     if (connect(fd, (struct sockaddr *)&a, sizeof a) < 0
-        && errno != EINPROGRESS) {
-        close(fd);
+        && mem_sock_errno() != MEM_EINPROGRESS) {
+        mem_close(fd);
         return -1;
     }
     struct pollfd p = { .fd = fd, .events = POLLOUT };
-    if (poll(&p, 1, timeout_ms) != 1 || !(p.revents & POLLOUT)) {
-        close(fd);
+    if (mem_poll(&p, 1, timeout_ms) != 1 || !(p.revents & POLLOUT)) {
+        mem_close(fd);
         return -1;
     }
     int err = 0;
     socklen_t el = sizeof err;
-    getsockopt(fd, SOL_SOCKET, SO_ERROR, &err, &el);
+    getsockopt(fd, SOL_SOCKET, SO_ERROR, MEM_SOCKOPT_OUT(&err), &el);
     if (err != 0) {
-        close(fd);
+        mem_close(fd);
         return -1;
     }
     int one = 1;
-    setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof one);
+    setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, MEM_SOCKOPT_IN(&one), sizeof one);
     return fd;
 }
 
@@ -104,14 +163,14 @@ int mem_net_send(int fd, uint8_t type, uint8_t a, uint8_t b, uint8_t c,
     const uint8_t *buf = hdr;
     uint16_t n = 6;
     while (sent < n) {
-        ssize_t w = send(fd, buf + sent, n - sent, MSG_NOSIGNAL);
+        ssize_t w = send(fd, MEM_SEND_BUF(buf + sent), n - sent, MEM_NOSIGNAL);
         if (w > 0) {
             sent += (size_t)w;
-        } else if (w < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
-            if (poll(&p, 1, 50) != 1)
+        } else if (w < 0 && (mem_sock_errno() == MEM_EAGAIN)) {
+            if (mem_poll(&p, 1, 50) != 1)
                 if (--deadline <= 0)
                     return -1;
-        } else if (w < 0 && errno == EINTR) {
+        } else if (w < 0 && mem_sock_errno() == MEM_EINTR) {
             continue;
         } else {
             return -1;
@@ -121,14 +180,14 @@ int mem_net_send(int fd, uint8_t type, uint8_t a, uint8_t b, uint8_t c,
     buf = payload;
     n = len;
     while (sent < n) {
-        ssize_t w = send(fd, buf + sent, n - sent, MSG_NOSIGNAL);
+        ssize_t w = send(fd, MEM_SEND_BUF(buf + sent), n - sent, MEM_NOSIGNAL);
         if (w > 0) {
             sent += (size_t)w;
-        } else if (w < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
-            if (poll(&p, 1, 50) != 1)
+        } else if (w < 0 && (mem_sock_errno() == MEM_EAGAIN)) {
+            if (mem_poll(&p, 1, 50) != 1)
                 if (--deadline <= 0)
                     return -1;
-        } else if (w < 0 && errno == EINTR) {
+        } else if (w < 0 && mem_sock_errno() == MEM_EINTR) {
             continue;
         } else {
             return -1;
@@ -161,7 +220,7 @@ int mem_net_rx_step(mem_net_rx *rx, int fd, mem_msgv *out) {
                 return 1;
             }
         }
-        ssize_t r = recv(fd, rx->buf + rx->have,
+        ssize_t r = recv(fd, MEM_RECV_BUF(rx->buf + rx->have),
                          sizeof rx->buf - rx->have, 0);
         if (r > 0) {
             rx->have += (unsigned)r;
@@ -169,9 +228,9 @@ int mem_net_rx_step(mem_net_rx *rx, int fd, mem_msgv *out) {
         }
         if (r == 0)
             return -1; /* orderly close */
-        if (errno == EAGAIN || errno == EWOULDBLOCK)
+        if (mem_sock_errno() == MEM_EAGAIN)
             return 0;
-        if (errno == EINTR)
+        if (mem_sock_errno() == MEM_EINTR)
             continue;
         return -1;
     }

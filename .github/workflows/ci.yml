@@ -89,6 +89,44 @@ jobs:
             build/biscuit_shot.ppm
           if-no-files-found: warn
 
+  windows-cross:
+    name: windows (MinGW-w64 cross, build-only coverage)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: mingw toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            gcc-mingw-w64-x86-64 g++-mingw-w64-x86-64 cmake ninja-build
+      - name: SDL3 MinGW dev tarball (pinned; same release as linux job)
+        run: |
+          curl -sL -o /tmp/sdl3-mingw.tar.gz \
+            https://github.com/libsdl-org/SDL/releases/download/release-3.4.16/SDL3-devel-3.4.16-mingw.tar.gz
+          tar -xf /tmp/sdl3-mingw.tar.gz -C /tmp
+      # build-only: the SAME C23 sources must COMPILE+LINK for win64
+      # (handoff NEXT ACTIONS 1). Tests/benches stay host-side; the
+      # committed generated arrays feed ame_font (tools/ gates itself
+      # off under CMAKE_CROSSCOMPILING - host bakers cannot run).
+      - name: cross configure + build (engine + games)
+        run: |
+          cmake -S . -B build-win -G Ninja \
+            -DCMAKE_TOOLCHAIN_FILE=cmake/toolchain-mingw-w64.cmake \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_PREFIX_PATH=/tmp/SDL3-3.4.16/x86_64-w64-mingw32 \
+            -DAME_BUILD_TESTS=OFF -DAME_BUILD_BENCHES=OFF
+          cmake --build build-win
+      - name: artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-cross-exes
+          path: |
+            build-win/examples/*/*.exe
+          if-no-files-found: warn
+
   asan:
     name: linux (ASan/UBSan, hot-loop heap check)
     runs-on: ubuntu-latest

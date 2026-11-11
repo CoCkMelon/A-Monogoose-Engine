@@ -62,6 +62,7 @@ typedef struct {
 /* --- sockets (POSIX; blocking connect, nonblocking data) ------------- */
 
 int mem_net_listen(uint16_t port);            /* listen fd or -1        */
+void mem_net_close(int fd);                   /* closesocket/close shim */
 int mem_net_accept(int lst);                  /* client fd or -1        */
 int mem_net_connect(const char *host, uint16_t port, int timeout_ms);
 int mem_net_send(int fd, uint8_t type, uint8_t a, uint8_t b, uint8_t c,

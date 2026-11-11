@@ -81,8 +81,11 @@ PITFALLS HIT THIS SESSION (do not rediscover)
 - pass camera CENTER in 2D: world origin = screen center with pos(0,0).
 
 NOT DONE / NEXT ACTIONS (in order)
-1. Windows job: MinGW-w64 or clang-cl cross build in CI (engine is
-   POSIX-clean; needs SDL3 for the target + the same C23 pin).
+1. DONE 2026-11-11: Windows job - MinGW-w64 cross build in CI
+   (windows-cross job + cmake/toolchain-mingw-w64.cmake; build-only,
+   SDL3 official MinGW tarball pinned 3.4.16; mem_net carries a thin
+   Winsock2 shim, mem_server stays host-side). Engine src/ needed no
+   changes: it was POSIX-clean as claimed.
 2. Web job: Emscripten build of the SAME C (rp GL loader ->
    emscripten_proc_address; GLES desc path exists: rp_desc_gles(true);
    app shim maps the callbacks; text/atlas already data-only).
@@ -93,6 +96,9 @@ NOT DONE / NEXT ACTIONS (in order)
 5. libfyaml vendoring + dialogue/save/settings modules (specs in docs/;
    NOT part of the first game slice).
 6. tools/assimp importer -> cooked model loader (levels.txt).
+   OWNER-DEPRIORITIZED 2026-11-11 (with glTF + remote branch GC):
+   "irrelevant on the way of making game engine compared to other
+   tasks" - do NOT pick these up before the engine-core items above.
 7. audio occlusion raytracer port from A-Mongoose (audio.txt, later stage).
 8. Spec/code drift CI check (agents.txt): header changed -> docs/ changed.
 

@@ -4,6 +4,7 @@
 # baked level_gen arrays as the cook fallback). Folder split kept as the
 # template for games: gameplay/ sim vs render/ vs entities/.
 
+find_package(Threads REQUIRED)
 add_executable(biscuit
     abilities.c
     app.c
@@ -23,7 +24,7 @@ add_executable(biscuit
 target_include_directories(biscuit PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/render)
-target_link_libraries(biscuit PRIVATE ame::2d ame_font)
+target_link_libraries(biscuit PRIVATE ame::2d ame_font Threads::Threads)
 target_compile_definitions(biscuit PRIVATE AME_INPUT_SDL=1)
 # dev path: the level OBJ straight from the source tree, so editing the
 # export + hot reload needs no recompile and no rebake (levels.txt)

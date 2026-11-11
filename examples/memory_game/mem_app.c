@@ -23,7 +23,6 @@
 
 #include <stdio.h>
 #include <inttypes.h>
-#include <unistd.h>
 #include <string.h>
 
 #include "mem_sim.h"
@@ -271,7 +270,7 @@ int app_init(void) {
                    port);
         } else {
             if (CLI_FD >= 0) {
-                close(CLI_FD);
+                mem_net_close(CLI_FD);
                 CLI_FD = -1;
             }
             printf("ame: AME_SERVER unreachable, falling back to local\n");
@@ -868,7 +867,7 @@ int app_render(void) {
 void app_quit(void) {
     if (g_online && CLI_FD >= 0) {
         mem_net_send(CLI_FD, MEM_MSG_QUIT, 0, 0, 0, NULL, 0);
-        close(CLI_FD);
+        mem_net_close(CLI_FD);
         CLI_FD = -1;
     }
     ame_cursor_visible(true);

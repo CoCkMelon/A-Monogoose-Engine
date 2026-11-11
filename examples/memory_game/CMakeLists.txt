@@ -14,15 +14,22 @@ target_link_libraries(memory_game PRIVATE ame::3d ame_font)
 target_compile_definitions(memory_game PRIVATE AME_INPUT_SDL=1)
 target_include_directories(memory_game PRIVATE ${CMAKE_SOURCE_DIR}/external/stb)
 target_compile_options(memory_game PRIVATE -Wall -Wextra -Werror -ffp-contract=off)
+if(WIN32)
+    target_link_libraries(memory_game PRIVATE ws2_32) # winsock2 shim
+endif()
 
-# Stage 1: authoritative server — pure POSIX + the pure sim (no SDL/GL)
-add_executable(mem_server
-    mem_sim.c
-    mem_net.c
-    mem_server.c)
-target_include_directories(mem_server PRIVATE ${CMAKE_SOURCE_DIR}/include)
-target_compile_definitions(mem_server PRIVATE AME_3D=1)
-target_compile_options(mem_server PRIVATE -Wall -Wextra -Werror -ffp-contract=off)
+# Stage 1: authoritative server — pure POSIX + the pure sim (no SDL/GL).
+# Host-side daemon like tools/: kept out of Windows cross builds (the
+# client netcode carries the winsock shim; a windows server is later).
+if(NOT WIN32)
+    add_executable(mem_server
+        mem_sim.c
+        mem_net.c
+        mem_server.c)
+    target_include_directories(mem_server PRIVATE ${CMAKE_SOURCE_DIR}/include)
+    target_compile_definitions(mem_server PRIVATE AME_3D=1)
+    target_compile_options(mem_server PRIVATE -Wall -Wextra -Werror -ffp-contract=off)
+endif()
 
 # deploy.txt fallback: if SDL3 ended up DYNAMIC in a release build,
 # tools/pack.sh bundles the needed libs into lib/ BESIDE this binary;
