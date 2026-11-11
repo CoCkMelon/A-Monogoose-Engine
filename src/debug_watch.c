@@ -4,6 +4,7 @@
  * lays it out once (text_layout is CPU-only, quads go to the batch). */
 #include "ame/debug.h"
 
+#include "ame/render.h"
 #include "ame/text.h"
 
 #include <stdio.h>
@@ -78,32 +79,104 @@ void ame_debug_watch_clear(void)
         g_watch[k].used = false;
 }
 
-int ame_debug_watch_draw(float x, float y, float scale,
-                         const float tint[4], float layer)
+/* column gap between the name and value columns, in layout px */
+#define WATCH_COL_GAP 8.0f
+
+/* compose the two column buffers (same line order); returns line count */
+static int watch_compose(char *names, size_t nsz, char *vals, size_t vsz)
 {
-    char buf[AME_DEBUG_WATCH_MAX * (AME_DEBUG_NAME_MAX + 16)];
     int n = 0;
-    size_t off = 0;
+    size_t no = 0, vo = 0;
     for (int k = 0; k < AME_DEBUG_WATCH_MAX && n < AME_DEBUG_WATCH_MAX; k++) {
         if (!g_watch[k].used)
             continue;
-        int w;
+        int wn = snprintf(names + no, nsz - no, "%s\n", g_watch[k].name);
+        int wv;
         if (g_watch[k].f)
-            w = snprintf(buf + off, sizeof buf - off, "%s: %.2f\n",
-                         g_watch[k].name, (double)*g_watch[k].f);
+            wv = snprintf(vals + vo, vsz - vo, "%.2f\n",
+                          (double)*g_watch[k].f);
         else
-            w = snprintf(buf + off, sizeof buf - off, "%s: %d\n",
-                         g_watch[k].name, *g_watch[k].i);
-        if (w <= 0 || off + (size_t)w >= sizeof buf)
+            wv = snprintf(vals + vo, vsz - vo, "%d\n", *g_watch[k].i);
+        if (wn <= 0 || wv <= 0 || no + (size_t)wn >= nsz
+            || vo + (size_t)wv >= vsz)
             break;
-        off += (size_t)w;
+        no += (size_t)wn;
+        vo += (size_t)wv;
         n++;
     }
+    return n;
+}
+
+/* lay both columns out; returns line count (0 = nothing to draw) */
+static int watch_layout(float scale, ame_text_layout *ln, ame_text_layout *lv)
+{
+    char names[AME_DEBUG_WATCH_MAX * (AME_DEBUG_NAME_MAX + 1)];
+    char vals[AME_DEBUG_WATCH_MAX * 16];
+    int n = watch_compose(names, sizeof names, vals, sizeof vals);
     if (n == 0)
         return 0;
-    ame_text_layout l;
-    if (text_layout_plain(buf, 0.0f, AME_TEXT_ALIGN_L, scale, &l) <= 0)
+    if (text_layout_plain(names, 0.0f, AME_TEXT_ALIGN_L, scale, ln) <= 0)
         return 0;
-    text_draw_screen(&l, x, y, tint, layer);
+    if (text_layout_plain(vals, 0.0f, AME_TEXT_ALIGN_L, scale, lv) <= 0)
+        return 0;
+    return n;
+}
+
+bool ame_debug_watch_size(float scale, float *w, float *h)
+{
+    if (w)
+        *w = 0.0f;
+    if (h)
+        *h = 0.0f;
+    ame_text_layout ln, lv;
+    if (watch_layout(scale, &ln, &lv) == 0)
+        return false;
+    if (w)
+        *w = ln.w + WATCH_COL_GAP * scale + lv.w;
+    if (h)
+        *h = ln.h;
+    return true;
+}
+
+int ame_debug_watch_draw(float x, float y, const ame_debug_watch_style *st)
+{
+    if (!st)
+        return 0;
+    ame_text_layout ln, lv;
+    int n = watch_layout(st->scale, &ln, &lv);
+    if (n == 0)
+        return 0;
+    float vt[4];
+    if (st->value_tint[3] < 0.0f) {
+        vt[0] = st->tint[0]; vt[1] = st->tint[1];
+        vt[2] = st->tint[2]; vt[3] = st->tint[3];
+    } else {
+        vt[0] = st->value_tint[0]; vt[1] = st->value_tint[1];
+        vt[2] = st->value_tint[2]; vt[3] = st->value_tint[3];
+    }
+    /* Scrim pushed BEFORE the columns at layer+1: with depth on, z is
+     * layer*0.001 under LEQUAL, so the later-pushed glyphs (layer) pass
+     * against it; with depth off (2D painter order, biscuit) the later
+     * push is on top anyway. layer-1 would depth-clip the glyphs. */
+    if (st->bg[3] > 0.0f) {
+        float w = ln.w + WATCH_COL_GAP * st->scale + lv.w;
+        /* window px -> world px exactly like text_draw_screen does: the
+         * ortho2d camera may be centred anywhere (biscuit follows the
+         * car), so raw window coords would land off-screen */
+        float ox, oy;
+        rp_screen_origin(&ox, &oy);
+        ame_rp_sprite sc = {
+            .tex = rp_white_texture(),
+            .x = ox + x - st->pad, .y = oy + y - st->pad,
+            .w = w + 2.0f * st->pad, .h = ln.h + 2.0f * st->pad,
+            .u0 = 0.0f, .v0 = 0.0f, .u1 = 1.0f, .v1 = 1.0f,
+            .tint = { st->bg[0], st->bg[1], st->bg[2], st->bg[3] },
+            .layer = st->layer + 1.0f,
+        };
+        rp_push_sprite(&sc);
+    }
+text_draw_screen(&ln, x, y, st->tint, st->layer);
+    text_draw_screen(&lv, x + ln.w + WATCH_COL_GAP * st->scale, y, vt,
+                     st->layer);
     return n;
 }

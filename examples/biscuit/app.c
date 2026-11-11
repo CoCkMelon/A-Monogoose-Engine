@@ -111,8 +111,21 @@ int app_render(void)
     g_w_speed = frame.car_vx;
     g_w_fuel = frame.fuel;
     g_w_hp = frame.hp;
-    ame_debug_watch_draw((float)VIEW.vw - 380.0f, 14.0f, 1.5f,
-                         (const float[4]){ 0.75f, 0.95f, 0.75f, 1.0f }, 60.0f);
+    {   /* anchored by measurement, not by magic offset: the block ends
+         * `margin` px from the right edge at any viewport width/scale */
+        ame_debug_watch_style st = {
+            .scale = 1.5f,
+            .tint = { 0.75f, 0.95f, 0.75f, 1.0f },
+            .value_tint = { 0.93f, 1.0f, 0.93f, 1.0f },
+            .bg = { 0.02f, 0.04f, 0.06f, 0.55f },
+            .pad = 8.0f,
+            .layer = 60.0f,
+        };
+        float ww = 0.0f;
+        ame_debug_watch_size(st.scale, &ww, NULL);
+        ame_debug_watch_draw((float)VIEW.vw - 12.0f - ww - st.pad,
+                           12.0f + st.pad, &st);
+    }
 #endif
     bf_view_present(&VIEW);
     return 0;

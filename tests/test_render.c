@@ -13,6 +13,7 @@
 #include <ame/math.h>
 #include <ame/render.h>
 #include <ame/text.h>
+#include <ame/debug.h>
 #include "font_atlas_dsdf.h" /* dsdf case metrics */
 #include "font_atlas.h" /* generated: ground truth for orientation test */
 
@@ -1193,6 +1194,99 @@ int main(void) {
         PROJ_PX(&c, 3.2f, 0, &ex, &ey);
         UT_ASSERTF(ex < 1600.0f, "point should be visible at 1600x600 (%.0f)", ex);
         #undef PROJ_PX
+    }
+    /* ---- debug watch overlay: anchored, two-column, scrim ----------
+     * The v1 inspector (debug.h) polish proof: measurement-anchored
+     * block stays inside the viewport (right margin untouched), the
+     * value column carries its own tint, and the optional scrim quad
+     * darkens exactly when its alpha is > 0. Scrim-at-layer+1 also
+     * proves the depth-on ordering contract (z = layer*0.001, LEQUAL):
+     * glyphs pushed after the scrim at `layer` must still win. */
+    UT_CASE("debug watch: anchored two-column block + scrim");
+    {
+        static float wx = 1.5f, wy = -7.25f;
+        static int wf = 42;
+        ame_debug_watch_clear();
+        ame_debug_watch("alpha_long_name", &wx);
+        ame_debug_watch("b", &wy);
+        ame_debug_watch_int("frames", &wf);
+        float w1 = 0, h1 = 0, w2 = 0, h2 = 0;
+        UT_ASSERT(ame_debug_watch_size(1.0f, &w1, &h1));
+        UT_ASSERT(ame_debug_watch_size(2.0f, &w2, &h2));
+        UT_ASSERTF(w1 > 0 && h1 > 0, "size zero with 3 watches");
+        UT_ASSERTF(fabsf(w2 - 2 * w1) < 1.5f && fabsf(h2 - 2 * h1) < 1.5f,
+                   "watch block not scale-linear (%.1f->%.1f)",
+                   (double)w1, (double)w2);
+        text_set_font(AME_FONT_PIXEL); /* overlay is a PIXEL-face consumer */
+        ame_rp_pass_frame p0 = { 0 };
+        rp_pass_begin(&p0);
+        ame_camera cw;
+        /* deliberately OFF-CENTRE: the overlay must map window px to
+         * world px through rp_screen_origin (biscuit's camera follows
+         * the car); a raw-window-coord push would land off-screen */
+        camera_viewport(camera_ortho2d(camera_desc(&cw)), W, H);
+        camera_pos(&cw, (float)W * 0.5f + 137.0f, (float)H * 0.5f - 41.0f, 0);
+        camera_build(&cw);
+        rp_set_camera(&cw);
+        ame_debug_watch_style st = {
+            .scale = 2.0f,
+            .tint = { 1.0f, 1.0f, 1.0f, 1.0f },
+            .value_tint = { 0.2f, 1.0f, 0.2f, 1.0f },
+            .bg = { 0.0f, 0.0f, 0.0f, 0.6f },
+            .pad = 6.0f,
+            .layer = 60.0f,
+        };
+        rp_begin_frame(); /* empty: clear-colour + dark-pixel baseline */
+        rp_end_frame();
+        rp_read_pixels(px, W, H);
+        long clear_r = px[0];
+        long dark0 = 0;
+        for (int i = 0; i < W * H * 4; i += 4)
+            if ((long)px[i] * 5 < clear_r * 3)
+                dark0++;
+        /* anchor: text block + pad lands `margin` px from the edge */
+        float bx = (float)W - 8.0f - w2 - st.pad, by = 8.0f + st.pad;
+        rp_begin_frame();
+        int lines = ame_debug_watch_draw(bx, by, &st);
+        rp_end_frame();
+        rp_read_pixels(px, W, H);
+        UT_ASSERTF(lines == 3, "watch drew %d lines, want 3", lines);
+        int clean = 1;
+        for (int yy = 0; yy < H; yy++)
+            for (int xx = W - 4; xx < W; xx++)
+                if ((long)px[(yy * W + xx) * 4] * 5 < clear_r * 4
+                    || (long)px[(yy * W + xx) * 4] > clear_r + 8)
+                    clean = 0;
+        UT_ASSERTF(clean, "anchored block spills into the right margin");
+        int green = 0;
+        for (int i = 0; i < W * H * 4; i += 4)
+            if (px[i + 1] > 60 && px[i + 1] > px[i] + 30)
+                green++;
+        UT_ASSERTF(green > 50, "value column tint missing (%d px)", green);
+        int white = 0;
+        for (int i = 0; i < W * H * 4; i += 4)
+            if (px[i] > 120 && px[i + 1] > 120 && px[i + 2] > 120)
+                white++;
+        UT_ASSERTF(white > 50, "name column tint missing (%d px)", white);
+        long dark1 = 0;
+        for (int i = 0; i < W * H * 4; i += 4)
+            if ((long)px[i] * 5 < clear_r * 3)
+                dark1++;
+        UT_ASSERTF(dark1 > dark0 + 100, "scrim quad missing (%ld->%ld)",
+                   dark0, dark1);
+        st.bg[3] = 0.0f; /* alpha 0: scrim must vanish again */
+        rp_begin_frame();
+        ame_debug_watch_draw(bx, by, &st);
+        rp_end_frame();
+        rp_read_pixels(px, W, H);
+        long dark2 = 0;
+        for (int i = 0; i < W * H * 4; i += 4)
+            if ((long)px[i] * 5 < clear_r * 3)
+                dark2++;
+        UT_ASSERTF(dark2 <= dark0 + 20, "scrim drawn at alpha 0 (%ld)",
+                   dark2);
+        ame_debug_watch_clear();
+        UT_OK();
     }
     rp_shutdown();
     eglMakeCurrent(dpy, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);

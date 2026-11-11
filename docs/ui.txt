@@ -92,3 +92,23 @@ CHECK (when UI is built)
   react (open/close, update bars, typewriter) from C each frame.
   Buttons highlight/hit with pointer input; keyboard/action also
   drives them. Same result native and web. No per-frame allocation.
+
+DEV OVERLAY (include/ame/debug.h - the v1 inspector)
+  - Flat watch table: a game pins floats/ints by pointer at init
+    (ame_debug_watch / _int); the overlay prints them through the ONE
+    trunk text path (PIXEL face). No reflection, no ECS, no per-frame
+    allocation (stack buffers + text_layout).
+  - Draw is TWO ALIGNED COLUMNS: names in style.tint, values in
+    style.value_tint, values left-aligned in a shared column so digits
+    line up vertically. ame_debug_watch_size() measures the block so
+    callers can ANCHOR it (right-aligned: x = vw - margin - w - pad)
+    instead of magic offsets that break when font metrics move.
+  - Optional scrim quad (style.bg, alpha > 0, pad px around the block)
+    for readability over bright scenes. It is pushed at layer+1 before
+    the columns: with depth ON the renderer orders by z = layer*0.001
+    under LEQUAL (later push must not raise layer), with depth OFF the
+    later push paints on top - layer+1 satisfies both. The scrim maps
+    window px through rp_screen_origin like text_draw_screen, so it
+    stays glued to the text under a moving ortho2d camera.
+  - test_render carries the GL proof (anchor margin, two tints, scrim
+    on/off, off-centre camera); test_debug_watch covers the registry.
