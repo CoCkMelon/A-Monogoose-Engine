@@ -478,12 +478,29 @@ int app_fixed(float dt) {
 
 /* --- drawing ---------------------------------------------------------------- */
 
+/* vertical travel of a flipping card: pure rotation about the card's X
+ * axis at table level drives the lower corner hh*sin(a) THROUGH the
+ * table plane. A real hand lifts the card while turning it, so the card
+ * rides an arc: rise = (half height + clearance) * sin(a), peaking at
+ * 90 deg exactly high enough that the lowest corner stays above the
+ * table, and settling back to flat at 0/180. Presentation-only (derived
+ * from the snapshot angle; the sim stays pure). */
+static float card_flip_lift(float angle_deg)
+{
+    float sa = sinf(angle_deg * (float)AME_PI / 180.0f);
+    if (sa < 0.0f)
+        sa = -sa;
+    return (CARD_H * 0.5f + 0.06f) * sa;
+}
+
 static void card_quad(const mem_snap *s, int i, float layer) {
     /* flip = rotation about the card's X axis: local (px,pz) ->
      * y' = pz*sin(a), z' = pz*cos(a). 0 deg = face down, 180 = face up. */
     float a = s->angle[i] * (float)AME_PI / 180.0f;
     float sa = sinf(a), ca = cosf(a);
-    float cx = s->x[i], cy = s->y[i] + s->lift[i], cz = s->z[i];
+    float cx = s->x[i];
+    float cy = s->y[i] + s->lift[i] + card_flip_lift(s->angle[i]);
+    float cz = s->z[i];
     float hw = CARD_W * 0.5f, hh = CARD_H * 0.5f;
     float px[4] = { -hw, hw, hw, -hw };
     float pz[4] = { -hh, -hh, hh, hh };
@@ -545,7 +562,7 @@ static void card_label_pose(const mem_snap *s, int i,
                             const ame_text_layout *l, float pose[16]) {
     float a = s->angle[i] * (float)AME_PI / 180.0f;
     float sa = sinf(a), ca = cosf(a);
-    float lift = s->lift[i];
+    float lift = s->lift[i] + card_flip_lift(s->angle[i]);
     ame_v3 right = ame_v3_(1, 0, 0);
     ame_v3 ydir  = ame_v3_(0, -sa, -ca);
     ame_v3 nrm   = ame_v3_(0, -ca, sa);
@@ -773,7 +790,9 @@ int app_render(void) {
              * stock occludes its own print, no logical reveal gate). */
             float a = s->angle[i] * (float)AME_PI / 180.0f;
             float ny = -cosf(a), nz = sinf(a);
-            float vy = CAM.pos.y - (s->y[i] + s->lift[i]);
+            float vy = CAM.pos.y
+                       - (s->y[i] + s->lift[i]
+                          + card_flip_lift(s->angle[i]));
             float vz = CAM.pos.z - s->z[i];
             if (ny * vy + nz * vz <= 0.0f)
                 continue;
