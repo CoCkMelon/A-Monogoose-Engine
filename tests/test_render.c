@@ -538,9 +538,11 @@ int main(void) {
             fclose(f);
         }
         /* ink mass sane: different faces have different ink density
-         * (DejaVu vs Pixelify), so the band is wide - it exists to
-         * catch broken-alpha renders (garbage ~0.03x or blowout ~5x) */
-        UT_ASSERTF(mass > a8_mass * 2 / 5 && mass < a8_mass * 8 / 5,
+         * (DejaVu hires vs the PIXEL face), so the band is wide - it
+         * exists to catch broken-alpha renders (garbage ~0.03x or
+         * blowout ~5x). Measured: Pixelify 1.1x, Unifont 1.88x (thin
+         * 1-bit strokes vs DejaVu's heavier outlines). */
+        UT_ASSERTF(mass > a8_mass / 4 && mass < a8_mass * 5 / 2,
                    "hires ink mass drifted (a8=%ld hires=%ld)", a8_mass, mass);
         /* the smooth path MUST produce a soft edge, the pixel path must not */
         UT_ASSERTF(aa > 40, "no anti-aliasing band (%d px)", aa);
@@ -893,9 +895,22 @@ int main(void) {
     int sy = (int)((1.0f - ((c.y / c.w) + 1.0f) * 0.5f) * H);
     sx = sx < 0 ? 0 : sx >= W ? W - 1 : sx;
     sy = sy < 0 ? 0 : sy >= H ? H - 1 : sy;
-    uint8_t r = px[(sy * W + sx) * 4], g = px[(sy * W + sx) * 4 + 1];
-    UT_ASSERTF(r > g, "expected reddish pixel at (%d,%d), got %d,%d,%d",
-               sx, sy, r, g, px[(sy * W + sx) * 4 + 2]);
+    /* font-shape-independent: the world text line can cross the card
+     * center with any face, so accept a reddish pixel in a window
+     * around the projected center (the card spans many pixels) */
+    int hit = 0, hx = sx, hy = sy;
+    for (int dy = -12; dy <= 12 && !hit; dy++)
+        for (int dx = -12; dx <= 12 && !hit; dx++) {
+            int xx = sx + dx, yy = sy + dy;
+            if (xx < 0 || xx >= W || yy < 0 || yy >= H)
+                continue;
+            if (px[(yy * W + xx) * 4] > px[(yy * W + xx) * 4 + 1] + 20) {
+                hit = 1; hx = xx; hy = yy;
+            }
+        }
+    uint8_t r = px[(hy * W + hx) * 4], g = px[(hy * W + hx) * 4 + 1];
+    UT_ASSERTF(hit && r > g, "expected reddish pixel near (%d,%d), got %d,%d,%d",
+               sx, sy, r, g, px[(hy * W + hx) * 4 + 2]);
 
     long bright = 0;
     for (long i = 0; i < W * H; i++)

@@ -11,9 +11,9 @@ typedef struct {
 #define AME_FONT_ATLAS_WIDTH 1024
 #define AME_FONT_ATLAS_HEIGHT 1024
 #define AME_FONT_PX 32
-#define AME_FONT_ASCENT 30.00f
-#define AME_FONT_DESCENT 9.00f
-#define AME_FONT_LINE_H 46.00f
+#define AME_FONT_ASCENT 28.00f
+#define AME_FONT_DESCENT 4.00f
+#define AME_FONT_LINE_H 40.00f
 extern const unsigned char ame_font_atlas_a8[1048576];
 extern const ame_font_glyph ame_font_glyphs[];
 extern const int ame_font_glyph_count;

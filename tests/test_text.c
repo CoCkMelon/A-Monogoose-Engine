@@ -279,7 +279,7 @@ int main(void) {
         UT_ASSERT(text_font_mode() == AME_FONT_SMOOTH);
         int ns = text_layout("hello typed text", 0, AME_TEXT_ALIGN_L, 1.0f, &ls);
         UT_ASSERT(ns == 16);
-        /* DejaVu advances differ from Pixelify: layout must actually move */
+        /* DejaVu advances differ from Unifont: layout must actually move */
         UT_ASSERTF(ls.w != l.w, "smooth layout identical to pixel (%.1f)",
                    (double)ls.w);
         for (int i = 0; i < ns; i++) {

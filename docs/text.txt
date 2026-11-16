@@ -62,7 +62,9 @@ DECISIONS (from the requirements)
      all-zero cell rect, so the layout ink box stays tight.
 
 FACES (text_set_font; layout AND draw both run under the face)
-  - PIXEL (default): Pixelify, nearest sampling, integer glyph
+  - PIXEL (default): GNU Unifont (unambiguous bitmap digits; replaced
+    Pixelify Sans whose quirky digit shapes read as mirrored ink),
+    nearest sampling, integer glyph
     sizes. The pixel-art face; also the FALLBACK: requesting a
     face whose atlas was never uploaded (text_init_hires /
     text_init_dsdf not called) is a no-op and the mode stays PIXEL,
@@ -82,7 +84,7 @@ FACES (text_set_font; layout AND draw both run under the face)
   between faces or frames. Tests assert this per face.
 
 FONT SOURCE
-  - Bundle the font bytes as data (Pixelify for PIXEL, DejaVuSans
+  - Bundle the font bytes as data (Unifont for PIXEL, DejaVuSans
     for SMOOTH/DSDF). For pixel-art 2D, nearest sampling and
     integer glyph sizes. The SMOOTH face is the softer choice at
     draw (bilinear over 2x cells); the DSDF face replaces

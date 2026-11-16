@@ -36,9 +36,9 @@ add_custom_command(
             ${CMAKE_SOURCE_DIR}/generated/font_atlas.h
     COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_SOURCE_DIR}/generated
     COMMAND ${CMAKE_COMMAND} -E chdir ${CMAKE_SOURCE_DIR}/generated
-            $<TARGET_FILE:bake_font> ${CMAKE_SOURCE_DIR}/assets/fonts/PixelifySans-Regular.ttf
+            $<TARGET_FILE:bake_font> ${CMAKE_SOURCE_DIR}/assets/fonts/Unifont.otf
             ${AME_FONT_PX} font_atlas ame_font AME_FONT 1.0 1024 1024 mono
-    DEPENDS bake_font ${CMAKE_SOURCE_DIR}/assets/fonts/PixelifySans-Regular.ttf
+    DEPENDS bake_font ${CMAKE_SOURCE_DIR}/assets/fonts/Unifont.otf
     COMMENT "baking font atlas (${AME_FONT_PX}px)"
     VERBATIM)
 add_custom_target(generated_font DEPENDS ${CMAKE_SOURCE_DIR}/generated/font_atlas.c)
