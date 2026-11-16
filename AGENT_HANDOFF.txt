@@ -1288,3 +1288,34 @@ the trunk port converts the format to TOML. Parser plan: single-
 file tomlc99-style (MIT) vendored under external/ when settings/
 save implementation starts; emit via fprintf. Specs only - no code
 changed in this pass.
+
+=====================================================================
+PLAN ADDITION (2026-11-14): runtime-interpret vs AOT-bake benchmarks
+=====================================================================
+Benchmark campaign quantifying the performance delta between
+runtime-parsed data and build-time-baked (AOT) data, per content
+type, so the format/path choices rest on measurement instead of
+assumption:
+- SETTINGS: runtime TOML parse at init (planned settings module,
+  settings.definitions.toml) vs a baked C header (generated table).
+  One-shot init cost; measure against the startup budget. Rides
+  with the settings port (B structure + TOML conversion).
+- DIALOGUES: runtime YAML via libfyaml (dialogue.txt DEFAULT) vs
+  bake-to-C via tools/dlg2c.c (dialogue.txt OPTIONAL). Both paths
+  exist today - benchable NOW.
+- LEVELS/ASSETS: runtime OBJ (ame_obj_parse, biscuit levels) vs
+  level_to_c.py baked C. Both exist - benchable NOW.
+METRICS: cold parse/load ms; hot-path lookup cost (dialogue node
+fetch, setting value read); resident memory; artifact size. Run on
+desktop AND the slowest shipping targets (armeabi-v7a Android, wasm
+web) - CPU-bound parsing scales down badly.
+HARNESS: extend benches/ (bench_core.c pattern) with a bench_data
+suite, same monotonic-clock methodology; revive the B-rewrite's
+BENCH_REPORT.md practice for the number tables; optional CI job
+records the numbers per push (trend tracking, not gating).
+DECISION RULE (objective): where runtime parsing of a type exceeds
+the agreed startup-budget share on a given target, that type
+defaults to BAKED on that target; runtime stays the default where
+the cost is negligible, preserving editability without rebuilds.
+Results live in BENCH_REPORT.md; specs change only if a default
+flips.
