@@ -103,6 +103,89 @@ bool  in_mouse_button_raw(int button);
 /* helper used by backends and tests: clear all down state */
 void in_clear_down(void);
 
+/* --- device abstraction -----------------------------------------------------
+ * Every input source the engine knows about is a DEVICE in one registry:
+ * keyboard, mouse, touchscreen, gamepads and motion sensors. Games query
+ * the registry for presence/names and read each kind through its own
+ * plain-C surface below; SDL/evdev/web knowledge stays in the backends.
+ * Compass/magnetometer and proximity are NOT in SDL3 - a platform shim
+ * would have to feed in_on_sensor() with its own kinds later. */
+enum {
+    AME_DEV_KEYBOARD = 0, AME_DEV_MOUSE, AME_DEV_TOUCH, AME_DEV_GAMEPAD,
+    AME_DEV_SENSOR_ACCEL, AME_DEV_SENSOR_GYRO, AME_DEV_KIND_COUNT
+};
+#define AME_DEV_NAME_MAX 48
+#define AME_DEV_MAX      16
+
+typedef struct {
+    int  kind;                    /* AME_DEV_* */
+    int  slot;                    /* per-kind index (gamepad 0.., sensor 0) */
+    char name[AME_DEV_NAME_MAX];
+} ame_input_device;
+
+int  in_device_count(void);                  /* present devices */
+bool in_device_info(int idx, ame_input_device *out); /* idx over present */
+bool in_device_present(int kind, int slot);
+
+/* backend registry writes (keyboard+mouse are registered by in_reset) */
+void in_on_device_add(int kind, int slot, const char *name);
+void in_on_device_remove(int kind, int slot);
+
+/* --- touchscreen: first-class multi-touch points --------------------------
+ * Coordinates are NORMALIZED 0..1 (window fraction), matching SDL fingers;
+ * backends convert. The mouse-synthesis path still feeds clicks, so
+ * pointer games keep working; taps are the touch-native consume. */
+#define AME_TOUCH_MAX 8
+typedef struct {
+    long  id;
+    float x, y;      /* normalized */
+    bool  down;
+} ame_input_touch;
+
+void in_on_touch(long id, float x, float y, bool down);
+int  in_touch_count(void);        /* real-time pressed points (sub-tick) */
+bool in_touch_point(int i, ame_input_touch *out);
+bool in_tap_consumed(float *x, float *y);     /* one release edge, consumed once */
+unsigned in_tap_dropped(void);   /* taps lost to a full queue (diagnostics) */
+
+/* --- gamepads -------------------------------------------------------------- */
+#define AME_GAMEPAD_MAX 4
+enum {
+    AME_GP_A = 0, AME_GP_B, AME_GP_X, AME_GP_Y, AME_GP_BACK, AME_GP_START,
+    AME_GP_LSHOULDER, AME_GP_RSHOULDER,
+    AME_GP_DPAD_UP, AME_GP_DPAD_DOWN, AME_GP_DPAD_LEFT, AME_GP_DPAD_RIGHT,
+    AME_GP_BTN_COUNT
+};
+enum {
+    AME_GP_AXIS_LX = 0, AME_GP_AXIS_LY, AME_GP_AXIS_RX, AME_GP_AXIS_RY,
+    AME_GP_AXIS_LT, AME_GP_AXIS_RT, AME_GP_AXIS_COUNT
+};
+void  in_on_gamepad_button(int slot, int btn, bool down);
+void  in_on_gamepad_axis(int slot, int axis, float value); /* -1..1, triggers 0..1 */
+bool  in_gamepad_button(int slot, int btn);   /* step snapshot */
+float in_gamepad_axis(int slot, int axis);    /* step snapshot */
+/* force feedback: false when the slot has no pad or no rumble motor.
+ * No-op (false) on backends without rumble support. */
+bool  in_gamepad_rumble(int slot, float low, float high, int duration_ms);
+/* bindings fold gamepads into the action system: a button, or an axis
+ * past a signed threshold (v >= thr when thr >= 0 else v <= thr). */
+bool in_bind_gamepad(int action, int slot, int btn);
+bool in_bind_gamepad_axis(int action, int slot, int axis, float threshold);
+
+/* --- motion sensors (SDL units: accel m/s^2, gyro rad/s) ------------------ */
+enum { AME_SENSOR_ACCEL = 0, AME_SENSOR_GYRO, AME_SENSOR_COUNT };
+typedef struct {
+    bool (*enable)(int sensor);   /* backend opens the hardware device */
+    void (*disable)(int sensor);
+    bool (*rumble)(int slot, float low, float high, int duration_ms);
+} ame_input_backend;
+void in_set_backend(const ame_input_backend *ops); /* NULL clears */
+bool in_sensor_enable(int sensor);  /* false: no backend or no hardware */
+void in_sensor_disable(int sensor);
+bool in_sensor_enabled(int sensor);
+bool in_sensor_get(int sensor, float out[3], unsigned long long *ts_us);
+void in_on_sensor(int sensor, const float v[3], unsigned long long ts_us);
+
 /* --- asyncinput backend (only in AME_INPUT_ASYNCINPUT builds) -------------- */
 #if defined(AME_INPUT_ASYNCINPUT)
 bool in_asyncinput_init(void);

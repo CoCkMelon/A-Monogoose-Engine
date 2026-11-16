@@ -86,6 +86,71 @@ EMSCRIPTEN_KEEPALIVE void ame_audio_resume(void) {
     audio_attach_sdl();
 }
 
+/* gamepad slots for the browser backend (same contract as native SDL:
+ * hot-plug order slots, canonical buttons/axes; input.txt DEVICES) */
+static SDL_Gamepad *g_gp[AME_GAMEPAD_MAX];
+static bool g_touch_dev_registered;
+
+static int web_gp_slot(SDL_JoystickID inst) {
+    for (int i = 0; i < AME_GAMEPAD_MAX; i++)
+        if (g_gp[i] && SDL_GetGamepadID(g_gp[i]) == inst)
+            return i;
+    return -1;
+}
+
+static void web_gp_open(SDL_JoystickID inst) {
+    if (web_gp_slot(inst) >= 0)
+        return;
+    int slot = -1;
+    for (int i = 0; i < AME_GAMEPAD_MAX; i++)
+        if (!g_gp[i]) { slot = i; break; }
+    if (slot < 0)
+        return;
+    SDL_Gamepad *g = SDL_OpenGamepad(inst);
+    if (!g)
+        return;
+    g_gp[slot] = g;
+    in_on_device_add(AME_DEV_GAMEPAD, slot, SDL_GetGamepadName(g));
+}
+
+static void web_gp_close(int slot) {
+    if (slot < 0 || !g_gp[slot])
+        return;
+    SDL_CloseGamepad(g_gp[slot]);
+    g_gp[slot] = NULL;
+    in_on_device_remove(AME_DEV_GAMEPAD, slot);
+}
+
+static int web_gp_button(SDL_GamepadButton b) {
+    switch (b) {
+    case SDL_GAMEPAD_BUTTON_SOUTH:         return AME_GP_A;
+    case SDL_GAMEPAD_BUTTON_EAST:          return AME_GP_B;
+    case SDL_GAMEPAD_BUTTON_WEST:          return AME_GP_X;
+    case SDL_GAMEPAD_BUTTON_NORTH:         return AME_GP_Y;
+    case SDL_GAMEPAD_BUTTON_BACK:          return AME_GP_BACK;
+    case SDL_GAMEPAD_BUTTON_START:         return AME_GP_START;
+    case SDL_GAMEPAD_BUTTON_LEFT_SHOULDER: return AME_GP_LSHOULDER;
+    case SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER:return AME_GP_RSHOULDER;
+    case SDL_GAMEPAD_BUTTON_DPAD_UP:       return AME_GP_DPAD_UP;
+    case SDL_GAMEPAD_BUTTON_DPAD_DOWN:     return AME_GP_DPAD_DOWN;
+    case SDL_GAMEPAD_BUTTON_DPAD_LEFT:     return AME_GP_DPAD_LEFT;
+    case SDL_GAMEPAD_BUTTON_DPAD_RIGHT:    return AME_GP_DPAD_RIGHT;
+    default:                               return -1;
+    }
+}
+
+static int web_gp_axis(SDL_GamepadAxis a) {
+    switch (a) {
+    case SDL_GAMEPAD_AXIS_LEFTX:        return AME_GP_AXIS_LX;
+    case SDL_GAMEPAD_AXIS_LEFTY:        return AME_GP_AXIS_LY;
+    case SDL_GAMEPAD_AXIS_RIGHTX:       return AME_GP_AXIS_RX;
+    case SDL_GAMEPAD_AXIS_RIGHTY:       return AME_GP_AXIS_RY;
+    case SDL_GAMEPAD_AXIS_LEFT_TRIGGER: return AME_GP_AXIS_LT;
+    case SDL_GAMEPAD_AXIS_RIGHT_TRIGGER:return AME_GP_AXIS_RT;
+    default:                            return -1;
+    }
+}
+
 static void on_event(SDL_Event *e) {
     switch (e->type) {
     case SDL_EVENT_QUIT: {
@@ -115,8 +180,43 @@ static void on_event(SDL_Event *e) {
     default:
         break;
     }
-    /* SDL input backend: write shared atomics ONLY (input.txt) */
+    /* SDL input backend: write shared atomics ONLY (input.txt).
+     * Touch + gamepad mirror the native SDL backend so the browser
+     * gets the same device abstraction (sensor opens stay absent:
+     * no backend ops registered here, in_sensor_enable() is false). */
     switch (e->type) {
+    case SDL_EVENT_FINGER_DOWN:
+    case SDL_EVENT_FINGER_UP:
+    case SDL_EVENT_FINGER_MOTION:
+        if (!g_touch_dev_registered) {
+            g_touch_dev_registered = true;
+            in_on_device_add(AME_DEV_TOUCH, 0, "touchscreen");
+        }
+        in_on_touch((long)e->tfinger.fingerID, e->tfinger.x, e->tfinger.y,
+                    e->type != SDL_EVENT_FINGER_UP);
+        break;
+    case SDL_EVENT_GAMEPAD_ADDED:
+        web_gp_open(e->gdevice.which);
+        break;
+    case SDL_EVENT_GAMEPAD_REMOVED:
+        web_gp_close(web_gp_slot(e->gdevice.which));
+        break;
+    case SDL_EVENT_GAMEPAD_BUTTON_DOWN:
+    case SDL_EVENT_GAMEPAD_BUTTON_UP: {
+        int slot = web_gp_slot(e->gbutton.which);
+        int btn = web_gp_button(e->gbutton.button);
+        if (slot >= 0 && btn >= 0)
+            in_on_gamepad_button(slot, btn,
+                                 e->type == SDL_EVENT_GAMEPAD_BUTTON_DOWN);
+        break;
+    }
+    case SDL_EVENT_GAMEPAD_AXIS_MOTION: {
+        int slot = web_gp_slot(e->gaxis.which);
+        int axis = web_gp_axis(e->gaxis.axis);
+        if (slot >= 0 && axis >= 0)
+            in_on_gamepad_axis(slot, axis, (float)e->gaxis.value / 32767.0f);
+        break;
+    }
     case SDL_EVENT_KEY_DOWN:
     case SDL_EVENT_KEY_UP:
         if (!e->key.repeat)

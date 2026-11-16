@@ -156,3 +156,78 @@ CHECK
   web.
   TSan: asyncinput callback only stores to its own atomics - no data
   race with the logic thread that reads them.
+
+DEVICES (2026-11-13: device abstraction)
+  Every source is a DEVICE in one registry; games query presence and
+  names, never backend structs:
+    in_device_count() / in_device_info(idx, &dev) / in_device_present(kind, slot)
+    kinds: AME_DEV_KEYBOARD, _MOUSE, _TOUCH, _GAMEPAD, _SENSOR_ACCEL, _SENSOR_GYRO
+  Keyboard and mouse are always registered (in_reset); touch registers
+  on first finger, gamepads on hot-plug, sensors on enable.
+
+  Touchscreen: in_on_touch(id, x, y, down) from the backend with
+  NORMALIZED 0..1 coords; games read in_touch_count()/in_touch_point(i, &t)
+  and consume release edges with in_tap_consumed(&x, &y) (the tap
+  queue mirrors the click queue). SDL still synthesizes mouse clicks
+  from touches, so pointer games keep working unchanged; a game drains
+  BOTH queues per step (memory_game's try_pick does) so gestures never
+  pile up on stacks that emit both.
+
+  Gamepads: slots 0..AME_GAMEPAD_MAX-1 in hot-plug order; canonical
+  buttons AME_GP_A/B/X/Y/BACK/START/LSHOULDER/RSHOULDER and axes
+  AME_GP_AXIS_LX/LY/RX/RY/LT/RT (sticks -1..1, triggers 0..1).
+  Raw reads: in_gamepad_button(slot, btn), in_gamepad_axis(slot, axis)
+  (step snapshots). Bindings fold pads into the action system:
+    in_bind_gamepad(action, slot, btn)
+    in_bind_gamepad_axis(action, slot, axis, threshold)
+  axis binds digitalize with a SIGNED threshold (v >= thr, or v <= thr
+  when thr < 0), so one action can answer to key, mouse, pad button and
+  pad axis at once; edges (in_pressed/in_released) include all sources.
+
+  Motion sensors: in_sensor_enable(AME_SENSOR_ACCEL|AME_SENSOR_GYRO)
+  asks the registered backend (in_set_backend) to open the hardware;
+  false when absent. in_sensor_get(sensor, out[3], &ts_us) returns the
+  latest sample in SDL units (accel m/s^2, gyro rad/s) + timestamp us.
+  in_on_sensor() is the backend write surface. Compass/magnetometer
+  and proximity are NOT in SDL3 - a platform shim would add kinds later.
+  Camera is a capture device, not a control device: out of scope here
+  (SDL3 has a camera API if a later stage wants frames as textures).
+
+  Backends: AME_INPUT_SDL maps SDL finger/gamepad/sensor events (src/
+  app_sdl.c); asyncinput and web keep keyboard/mouse today. All of them
+  only call in_on_* - the core (src/input.c) owns state, queues, binds.
+
+DEVICES, round 2 (2026-11-13: pad parity + feedback)
+  Dpad is part of the canonical button set now: AME_GP_DPAD_UP/DOWN/
+  LEFT/RIGHT beside the face buttons, mapped by both SDL backends
+  (native + web).
+  Force feedback: in_gamepad_rumble(slot, low, high, ms) routes through
+  the backend ops (SDL_RumbleGamepad); false with no backend, no pad
+  or a NULL rumble fn - games call it unconditionally and silence is
+  the correct answer on devices without motors. memory_game pulses
+  pad 0 on a matched pair.
+  Web backend parity: app_web.c maps the same finger + gamepad events
+  into the core, so browser builds get touch points, taps and pads;
+  sensors stay absent there (no ops registered, enable() is false).
+  Driving parity (the CHECK above, now real): raymarch_arcade steers
+  with dpad LEFT/RIGHT or left-stick lean (signed thresholds +-0.35)
+  and cancels with B; biscuit binds all four directions to dpad +
+  stick lean, boost to the right trigger (0.5), jump/switch/advance/
+  restart to A/X/START/BACK. QUIT stays keyboard-only on purpose: a
+  pad must never exit a game by accident. Bind capacity is 4 per
+  action across ALL kinds - the games above sit exactly at it.
+  Diagnostics: in_tap_dropped() mirrors the click queue's drop counter
+  (bounded queue, newest tap loses). in_touch_count()/in_touch_point()
+  are real-time reads (sub-tick), like the mouse raw reads.
+
+DEVICES, hunt fixes (2026-11-14: sanitizer sweep)
+  in_clear_down() now clears EVERY down state: keys, mouse, gamepad
+  buttons, live touch slots and the tap queue - a restart on a
+  touch/pad device used to carry ghost buttons and queued taps into
+  the new session.
+  in_on_device_remove(AME_DEV_GAMEPAD, slot) also zeroes that slot's
+  button/axis atomics: a pad yanked mid-tilt (or mid-hold) must not
+  keep driving binds forever. The next in_begin_step() re-snapshots
+  zeros, so stuck buttons fire one released edge - the desirable
+  behavior for hot-unplug. The device registry itself survives
+  in_reset(): devices are physical, reset clears state.

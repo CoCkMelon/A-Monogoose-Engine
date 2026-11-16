@@ -17,6 +17,7 @@
  * the SDL_AppInit/Event/Iterate/Quit loop below (loop.txt rule 1). */
 #define SDL_MAIN_USE_CALLBACKS
 #include <SDL3/SDL_main.h>
+#include "ame/fs.h"
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h> /* generates main() -> SDL_App* callbacks */
@@ -32,6 +33,119 @@
 #include <stdatomic.h>
 
 static SDL_Window *g_window = NULL;
+
+/* --- device abstraction backend (input.h): gamepads + motion sensors.
+ * Touch rides the SDL finger events in the input switch below. All of it
+ * only feeds the platform-neutral core (in_on_*); no gameplay here. */
+static SDL_Gamepad *g_gp[AME_GAMEPAD_MAX];
+static SDL_Sensor  *g_sens[AME_SENSOR_COUNT];
+static bool         g_touch_dev_registered;
+
+static int gp_slot_of_instance(SDL_JoystickID inst) {
+    for (int i = 0; i < AME_GAMEPAD_MAX; i++)
+        if (g_gp[i] && SDL_GetGamepadID(g_gp[i]) == inst)
+            return i;
+    return -1;
+}
+
+static void gp_open(SDL_JoystickID inst) {
+    if (gp_slot_of_instance(inst) >= 0)
+        return;
+    int slot = -1;
+    for (int i = 0; i < AME_GAMEPAD_MAX; i++)
+        if (!g_gp[i]) { slot = i; break; }
+    if (slot < 0)
+        return;
+    SDL_Gamepad *g = SDL_OpenGamepad(inst);
+    if (!g)
+        return;
+    g_gp[slot] = g;
+    in_on_device_add(AME_DEV_GAMEPAD, slot, SDL_GetGamepadName(g));
+}
+
+static void gp_close_slot(int slot) {
+    if (slot < 0 || !g_gp[slot])
+        return;
+    SDL_CloseGamepad(g_gp[slot]);
+    g_gp[slot] = NULL;
+    in_on_device_remove(AME_DEV_GAMEPAD, slot);
+}
+
+static int gp_map_button(SDL_GamepadButton b) {
+    switch (b) {
+    case SDL_GAMEPAD_BUTTON_SOUTH:         return AME_GP_A;
+    case SDL_GAMEPAD_BUTTON_EAST:          return AME_GP_B;
+    case SDL_GAMEPAD_BUTTON_WEST:          return AME_GP_X;
+    case SDL_GAMEPAD_BUTTON_NORTH:         return AME_GP_Y;
+    case SDL_GAMEPAD_BUTTON_BACK:          return AME_GP_BACK;
+    case SDL_GAMEPAD_BUTTON_START:         return AME_GP_START;
+    case SDL_GAMEPAD_BUTTON_LEFT_SHOULDER: return AME_GP_LSHOULDER;
+    case SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER:return AME_GP_RSHOULDER;
+    case SDL_GAMEPAD_BUTTON_DPAD_UP:       return AME_GP_DPAD_UP;
+    case SDL_GAMEPAD_BUTTON_DPAD_DOWN:     return AME_GP_DPAD_DOWN;
+    case SDL_GAMEPAD_BUTTON_DPAD_LEFT:     return AME_GP_DPAD_LEFT;
+    case SDL_GAMEPAD_BUTTON_DPAD_RIGHT:    return AME_GP_DPAD_RIGHT;
+    default:                               return -1;
+    }
+}
+
+static int gp_map_axis(SDL_GamepadAxis a) {
+    switch (a) {
+    case SDL_GAMEPAD_AXIS_LEFTX:        return AME_GP_AXIS_LX;
+    case SDL_GAMEPAD_AXIS_LEFTY:        return AME_GP_AXIS_LY;
+    case SDL_GAMEPAD_AXIS_RIGHTX:       return AME_GP_AXIS_RX;
+    case SDL_GAMEPAD_AXIS_RIGHTY:       return AME_GP_AXIS_RY;
+    case SDL_GAMEPAD_AXIS_LEFT_TRIGGER: return AME_GP_AXIS_LT;
+    case SDL_GAMEPAD_AXIS_RIGHT_TRIGGER:return AME_GP_AXIS_RT;
+    default:                            return -1;
+    }
+}
+
+static bool sdl_sensor_enable(int sensor) {
+    if (g_sens[sensor])
+        return true;
+    SDL_SensorType want = sensor == AME_SENSOR_ACCEL ? SDL_SENSOR_ACCEL
+                                                     : SDL_SENSOR_GYRO;
+    int n = 0;
+    SDL_SensorID *ids = SDL_GetSensors(&n);
+    if (!ids)
+        return false;
+    bool ok = false;
+    for (int i = 0; i < n && !ok; i++) {
+        if (SDL_GetSensorTypeForID(ids[i]) != want)
+            continue;
+        SDL_Sensor *sn = SDL_OpenSensor(ids[i]);
+        if (!sn)
+            continue;
+        g_sens[sensor] = sn;
+        in_on_device_add(AME_DEV_SENSOR_ACCEL + sensor, 0,
+                         SDL_GetSensorName(sn));
+        ok = true;
+    }
+    SDL_free(ids);
+    return ok;
+}
+
+static void sdl_sensor_disable(int sensor) {
+    if (!g_sens[sensor])
+        return;
+    SDL_CloseSensor(g_sens[sensor]);
+    g_sens[sensor] = NULL;
+    in_on_device_remove(AME_DEV_SENSOR_ACCEL + sensor, 0);
+}
+
+static bool sdl_gamepad_rumble(int slot, float low, float high, int ms) {
+    if (slot < 0 || slot >= AME_GAMEPAD_MAX || !g_gp[slot])
+        return false;
+    return SDL_RumbleGamepad(g_gp[slot], (Uint16)(low * 0xFFFFu),
+                             (Uint16)(high * 0xFFFFu), (Uint32)ms);
+}
+
+static const ame_input_backend g_sdl_input_backend = {
+    .enable = sdl_sensor_enable,
+    .disable = sdl_sensor_disable,
+    .rumble = sdl_gamepad_rumble,
+};
 static float g_mouse_scale = 1.0f; /* window px per point (HiDPI) */
 static bool g_expose_redraw = true; /* offscreen (headless QA) opts out:
                                     * extra presents shift game-frame counters */
@@ -108,9 +222,25 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char **argv) {
         ame_log_last_error();
         return SDL_APP_FAILURE;
     }
+#ifdef __ANDROID__
+    /* Android EGL speaks GLES 2.0/3.0/3.1/3.2 - asking for the desktop
+     * 3.3 numbers makes eglCreateContext fail with EGL_BAD_CONFIG.
+     * 3.0 is exactly the GLSL 300 es the rp GLES branch emits. */
+    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
+    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 0);
+#else
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 3);
+#endif
+#ifdef __ANDROID__
+    /* bionic only speaks GLES: ask for the ES profile explicitly (the
+     * desktop core-profile request is meaningless on this platform) */
+    SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_ES);
+    /* orientation follows the manifest (fullUser): memory_game frames
+     * itself for any aspect via its aspect-fit camera. */
+#else
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
+#endif
     SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
     SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE, 24);
     int win_w = 1280, win_h = 720;
@@ -141,6 +271,7 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char **argv) {
     rp_set_gl_loader((ame_gl_getproc_fn)SDL_GL_GetProcAddress);
 
     in_reset();
+    in_set_backend(&g_sdl_input_backend); /* sensor opens ride the backend */
 #if defined(AME_INPUT_ASYNCINPUT)
     if (!in_asyncinput_init())
         ame_log(AME_LOG_WARN, "asyncinput unavailable (device permissions?) - "
@@ -283,6 +414,45 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
     case SDL_EVENT_MOUSE_WHEEL:
         in_on_wheel(event->wheel.y);
         break;
+    case SDL_EVENT_FINGER_DOWN:
+    case SDL_EVENT_FINGER_UP:
+    case SDL_EVENT_FINGER_MOTION:
+        if (!g_touch_dev_registered) {
+            g_touch_dev_registered = true;
+            in_on_device_add(AME_DEV_TOUCH, 0, "touchscreen");
+        }
+        in_on_touch((long)event->tfinger.fingerID, event->tfinger.x,
+                    event->tfinger.y, event->type != SDL_EVENT_FINGER_UP);
+        break;
+    case SDL_EVENT_GAMEPAD_ADDED:
+        gp_open(event->gdevice.which);
+        break;
+    case SDL_EVENT_GAMEPAD_REMOVED:
+        gp_close_slot(gp_slot_of_instance(event->gdevice.which));
+        break;
+    case SDL_EVENT_GAMEPAD_BUTTON_DOWN:
+    case SDL_EVENT_GAMEPAD_BUTTON_UP: {
+        int slot = gp_slot_of_instance(event->gbutton.which);
+        int btn = gp_map_button(event->gbutton.button);
+        if (slot >= 0 && btn >= 0)
+            in_on_gamepad_button(slot, btn,
+                                 event->type == SDL_EVENT_GAMEPAD_BUTTON_DOWN);
+        break;
+    }
+    case SDL_EVENT_GAMEPAD_AXIS_MOTION: {
+        int slot = gp_slot_of_instance(event->gaxis.which);
+        int axis = gp_map_axis(event->gaxis.axis);
+        if (slot >= 0 && axis >= 0)
+            in_on_gamepad_axis(slot, axis, (float)event->gaxis.value / 32767.0f);
+        break;
+    }
+    case SDL_EVENT_SENSOR_UPDATE:
+        for (int sn = 0; sn < AME_SENSOR_COUNT; sn++)
+            if (g_sens[sn]
+                && SDL_GetSensorID(g_sens[sn]) == event->sensor.which)
+                in_on_sensor(sn, event->sensor.data,
+                             event->sensor.sensor_timestamp / 1000ull);
+        break;
     default:
         break;
     }
@@ -394,6 +564,11 @@ void SDL_AppQuit(void *appstate, SDL_AppResult result) {
 #if defined(AME_INPUT_ASYNCINPUT)
     in_asyncinput_shutdown();
 #endif
+    for (int sn = 0; sn < AME_SENSOR_COUNT; sn++)
+        sdl_sensor_disable(sn);
+    for (int g = 0; g < AME_GAMEPAD_MAX; g++)
+        gp_close_slot(g);
+    in_set_backend(NULL);
     rp_shutdown();
     if (g_gl)
         SDL_GL_DestroyContext(g_gl);

@@ -1,4 +1,5 @@
 #include "gameplay.h"
+#include "ame/fs.h"
 #include "abilities.h"
 #include "config.h"
 #include "dialogue_manager.h"
@@ -542,7 +543,7 @@ int bf_write_bmp(const char *path, int px, int py)
             img[i + 0] = cb; img[i + 1] = cg; img[i + 2] = cr;
         }
     }
-    FILE *f = fopen(path, "wb");
+    FILE *f = ame_fs_fopen(path, "wb");
     if (!f) { free(img); return 0; }
     fwrite("BM", 1, 2, f);
     unsigned rowp = ((unsigned)px * 3 + 3u) & ~3u;

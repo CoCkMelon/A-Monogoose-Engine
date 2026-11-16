@@ -72,6 +72,14 @@ int app_init(void) {
         || !in_bind_key(AME_ACT_RIGHT, AME_KEY_RIGHT)
         || !in_bind_key(AME_ACT_RIGHT, AME_KEY_D))
         return 1;
+    /* gamepad parity (docs/input.txt CHECK): the SAME actions answer
+     * to dpad and left-stick lean, so the character drives identically
+     * with keyboard or pad; capacity is 4 binds per action. */
+    (void)in_bind_gamepad(AME_ACT_CANCEL, 0, AME_GP_B);
+    (void)in_bind_gamepad(AME_ACT_LEFT, 0, AME_GP_DPAD_LEFT);
+    (void)in_bind_gamepad_axis(AME_ACT_LEFT, 0, AME_GP_AXIS_LX, -0.35f);
+    (void)in_bind_gamepad(AME_ACT_RIGHT, 0, AME_GP_DPAD_RIGHT);
+    (void)in_bind_gamepad_axis(AME_ACT_RIGHT, 0, AME_GP_AXIS_LX, 0.35f);
     camera_viewport(camera_ortho2d(camera_desc(&CAM)), VIEW_W, VIEW_H);
     /* world (0,0) = window TOP-LEFT: pos = view center. Without
      * this the view centers on world origin and every sprite

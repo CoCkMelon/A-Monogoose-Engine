@@ -24,6 +24,23 @@ void game_input_bindings(void)
     in_bind_key(BF_ACT_QUIT, AME_KEY_ESCAPE);
     in_bind_key(BF_ACT_QUIT, AME_KEY_Q);
     in_bind_key(BF_ACT_RELOAD, AME_KEY_F5);
+    /* gamepad parity (docs/input.txt CHECK): stick lean + dpad steer,
+     * right trigger boosts, face buttons for the kb-only extras.
+     * QUIT stays keyboard-only so a pad never exits the game by
+     * accident; 4 binds per action is the capacity ceiling. */
+    (void)in_bind_gamepad(BF_ACT_UP, 0, AME_GP_DPAD_UP);
+    (void)in_bind_gamepad_axis(BF_ACT_UP, 0, AME_GP_AXIS_LY, -0.35f);
+    (void)in_bind_gamepad(BF_ACT_DOWN, 0, AME_GP_DPAD_DOWN);
+    (void)in_bind_gamepad_axis(BF_ACT_DOWN, 0, AME_GP_AXIS_LY, 0.35f);
+    (void)in_bind_gamepad(BF_ACT_LEFT, 0, AME_GP_DPAD_LEFT);
+    (void)in_bind_gamepad_axis(BF_ACT_LEFT, 0, AME_GP_AXIS_LX, -0.35f);
+    (void)in_bind_gamepad(BF_ACT_RIGHT, 0, AME_GP_DPAD_RIGHT);
+    (void)in_bind_gamepad_axis(BF_ACT_RIGHT, 0, AME_GP_AXIS_LX, 0.35f);
+    (void)in_bind_gamepad_axis(BF_ACT_BOOST, 0, AME_GP_AXIS_RT, 0.5f);
+    (void)in_bind_gamepad(BF_ACT_SWITCH, 0, AME_GP_X);
+    (void)in_bind_gamepad(BF_ACT_JUMP, 0, AME_GP_A);
+    (void)in_bind_gamepad(BF_ACT_ADVANCE, 0, AME_GP_START);
+    (void)in_bind_gamepad(BF_ACT_RESTART, 0, AME_GP_BACK);
 }
 
 void game_input_reset(void)

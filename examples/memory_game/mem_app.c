@@ -63,6 +63,7 @@ AME_SNAP_DEFINE(mem_snap)
 static mem_game G;
 static mem_snap_snap SNAP;
 static ame_camera CAM;
+static void mem_fit_camera(void); /* defined with the resize hook */
 
 /* Stage 1: online mode (AME_SERVER=host:port). The local hot-seat sim
  * stays the default; online, the app is a THIN VIEW: the authoritative
@@ -159,6 +160,9 @@ static void online_pump(void) {
 int app_init(void) {
     if (!in_bind_button(AME_ACT_CONFIRM, AME_BTN_LEFT))
         return 1;
+    /* device abstraction: the same action answers to gamepad A on any
+     * pad the backend registers in slot 0 (input.txt) */
+    (void)in_bind_gamepad(AME_ACT_CONFIRM, 0, AME_GP_A);
     camera_viewport(camera_pos(camera_persp3d(camera_desc(&CAM)),
                                0, 3.2f, 3.4f),
                     1280, 720);
@@ -166,6 +170,7 @@ int app_init(void) {
     camera_fov_deg(&CAM, 50.0f);
     camera_depth_range(&CAM, 0.1f, 100.0f);
     camera_build(&CAM);
+    mem_fit_camera();
 
     ame_rp_desc d;
     rp_desc_begin(&d);
@@ -320,6 +325,30 @@ void app_resize(int w, int h) {
     /* engine already did rp_viewport; rebuild projection so the aspect
      * never stretches the scene */
     camera_viewport(&CAM, w, h);
+    mem_fit_camera();
+}
+
+/* Aspect-fit framing: landscape keeps the proven close framing; any
+ * narrower aspect (portrait phones) pulls the camera back along the
+ * SAME view direction until the whole board + flips fit both axes. */
+static void mem_fit_camera(void) {
+    const float L0 = sqrtf(3.2f * 3.2f + 3.4f * 3.4f);
+    float d = L0;
+    if (CAM.vh > 0 && CAM.vw > 0) {
+        float aspect = (float)CAM.vw / (float)CAM.vh;
+        if (aspect < 1280.0f / 720.0f) {
+            float tv = tanf(CAM.fov_y * 0.5f);
+            float th = tv * aspect;
+            float dw = 3.0f / (th > 1e-4f ? th : 1e-4f);
+            float dv = 3.1f / (tv > 1e-4f ? tv : 1e-4f);
+            d = dw > dv ? dw : dv;
+            if (d < L0)
+                d = L0;
+        }
+    }
+    float k = d / L0;
+    camera_pos(&CAM, 0, 3.2f * k, 3.4f * k);
+    camera_look(&CAM, 0, 0, 0);
     camera_build(&CAM);
     rp_set_camera(&CAM);
 }
@@ -354,8 +383,18 @@ static int hover_from_mouse(void) {
 }
 
 static void try_pick(void) {
-    float mx, my;
-    if (!in_click_consumed(&mx, &my))
+    float mx = 0, my = 0;
+    bool have = in_click_consumed(&mx, &my);
+    /* touch taps arrive NORMALIZED and, on SDL, alongside a synthesized
+     * mouse click: drain the tap queue every step so gestures never
+     * pile up, and use its point when no click came (tap-only stacks) */
+    float tx, ty;
+    if (in_tap_consumed(&tx, &ty) && !have) {
+        mx = tx * (float)CAM.vw;
+        my = ty * (float)CAM.vh;
+        have = true;
+    }
+    if (!have)
         return;
 
     if (mem_over(SIM)) {
@@ -464,8 +503,12 @@ int app_fixed(float dt) {
                         * logic thread passes 1 ms; the fixed-frame QA
                         * mode passes one render frame) */
     if (prev_phase != (int)SIM->phase) {
-        if (SIM->phase == MEM_PHASE_RESOLVE && SIM->was_match)
+        if (SIM->phase == MEM_PHASE_RESOLVE && SIM->was_match) {
             audio_play(au_match);
+            /* device feedback through the abstraction: a no-op when
+             * no pad is plugged in (input.txt DEVICES, rumble) */
+            (void)in_gamepad_rumble(0, 0.6f, 0.9f, 120);
+        }
         else if (SIM->phase == MEM_PHASE_RESOLVE)
             audio_play(au_miss);
         if (SIM->phase == MEM_PHASE_OVER)
@@ -804,7 +847,9 @@ int app_render(void) {
     }
 
     /* scoreboard: in-scene billboard above the far table edge.
-     * PIXEL face (explicit: the label block above runs SMOOTH). */
+     * PIXEL face, same as the card labels: the settled memory contract
+     * is crisp PIXEL ink printed on the face (no SMOOTH/hires on
+     * tilted quads); the default face is PIXEL, this call keeps it. */
     text_set_font(AME_FONT_PIXEL);
     char line[96];
     const char *left = "P1", *right = "P2";
