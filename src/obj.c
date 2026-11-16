@@ -10,6 +10,7 @@
  * path expands imported faces.
  */
 #include <ame/obj.h>
+#include "ame/fs.h"
 
 #include <math.h>
 #include <stdio.h>
@@ -396,6 +397,7 @@ int ame_obj_parse(const char *text, ame_mesh *out)
         free(verts.d);
         free(idx.d);
         free(grps);
+        free((void *)pos_save); /* hunt 2026-11-14: error path leaked pos */
         ame_mesh_init(out);
         return -1;
     }
@@ -409,6 +411,7 @@ int ame_obj_parse(const char *text, ame_mesh *out)
             free(verts.d);
             free(idx.d);
             free(grps);
+            free((void *)pos_save); /* same leak class as the parse error */
             ame_mesh_init(out);
             ame_set_error(AME_ERR_OUT_OF_MEMORY, "obj groups");
             return -1;
@@ -472,7 +475,7 @@ int ame_obj_load_file(const char *path, ame_mesh *out)
         return -1;
     }
     ame_mesh_init(out);
-    FILE *f = fopen(path, "rb");
+    FILE *f = ame_fs_fopen(path, "rb");
     if (!f) {
         ame_set_errorf(AME_ERR_FILE_OPEN, "%s", path);
         LOGD("obj: cannot open %s\n", path);

@@ -295,9 +295,15 @@ static void bench_text(void) {
     static char long_s[2048];
     {
         char *w = long_s;
-        for (int i = 0; i < 24; i++)
-            w += sprintf(w, "{c=FF8800}Memory{c} pair %02d flips open! ", i);
-        *w = 0;
+        for (int i = 0; i < 24; i++) {
+            /* snprintf with the remaining room: gcc's overflow pass
+             * (ASan flags) rejects the unbounded sprintf worst case */
+            int r = snprintf(w, (size_t)(long_s + sizeof long_s - w),
+                             "{c=FF8800}Memory{c} pair %02d flips open! ", i);
+            if (r < 0 || w + r >= long_s + sizeof long_s)
+                break;
+            w += r;
+        }
     }
     BENCH("text_layout_short", 5000, {
         int n = text_layout(short_s, 0, AME_TEXT_ALIGN_L, 1.0f, &L);
