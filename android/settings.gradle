@@ -1,0 +1,13 @@
+// ame-next android packaging (APK stage of handoff NEXT ACTIONS 3).
+// Gradle wraps the SAME native libs the android-cross CI job builds:
+// jniLibs/ carries libSDL3.so + lib<game>.so (regenerate with
+// tools/android_prebuilt.sh); java side is SDL3's activity template
+// (vendored from the pinned SDL release) + one thin subclass.
+pluginManagement {
+    repositories { google(); mavenCentral(); gradlePluginPortal() }
+}
+dependencyResolutionManagement {
+    repositories { google(); mavenCentral() }
+}
+rootProject.name = "ame-android"
+include ':app'

@@ -1,0 +1,35 @@
+plugins { id 'com.android.application' }
+
+android {
+    namespace 'org.amengine.memory'
+    compileSdk 33
+
+    defaultConfig {
+        applicationId "org.amengine.memory"
+        minSdk 26          // same floor as the NDK cross job (android-26)
+        targetSdk 33
+        versionCode 1
+        versionName "0.1"
+    }
+    splits {
+        // per-ABI APKs beside the universal one: a device-sized
+        // install stays a few MB instead of carrying every ABI
+        abi {
+            enable true
+            reset()
+            include "arm64-v8a", "armeabi-v7a", "x86_64"
+            universalApk true
+        }
+    }
+    buildTypes {
+        release { minifyEnabled false }
+    }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_1_8
+        targetCompatibility JavaVersion.VERSION_1_8
+    }
+    // native libs are PREBUILT (tools/android_prebuilt.sh): the cmake
+    // cross build is the single source of truth (android-cross job);
+    // gradle only packages + signs.
+    packagingOptions { jniLibs.useLegacyPackaging = true }
+}

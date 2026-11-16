@@ -89,6 +89,52 @@ jobs:
             build/biscuit_shot.ppm
           if-no-files-found: warn
 
+  android-cross:
+    name: android (NDK cross, build-only coverage)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: NDK r27c
+        run: |
+          curl -sL -o "$RUNNER_TEMP/ndk.zip" \
+            https://dl.google.com/android/repository/android-ndk-r27c-linux.zip
+          unzip -q "$RUNNER_TEMP/ndk.zip" -d "$RUNNER_TEMP"
+          rm "$RUNNER_TEMP/ndk.zip"
+      - name: SDL3 for Android (pinned release, x86_64)
+        run: |
+          git clone --depth 1 --branch release-3.4.16 \
+            https://github.com/libsdl-org/SDL.git /tmp/sdl3
+          cmake -S /tmp/sdl3 -B /tmp/sdl3-android -G Ninja \
+            -DCMAKE_TOOLCHAIN_FILE=$RUNNER_TEMP/android-ndk-r27c/build/cmake/android.toolchain.cmake \
+            -DANDROID_ABI=x86_64 -DANDROID_PLATFORM=android-26 \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX=/tmp/sdl3-android-prefix -DSDL_TESTS=OFF
+          cmake --build /tmp/sdl3-android
+          cmake --install /tmp/sdl3-android
+      # build-only: the SAME C23 sources must COMPILE+LINK for android
+      # (handoff NEXT ACTIONS 3). Games are SHARED libs exporting
+      # SDL_main (activity model); tests/benches stay host-side.
+      - name: cross configure + build (engine + games)
+        run: |
+          cmake -S . -B build-android -G Ninja \
+            -DCMAKE_TOOLCHAIN_FILE=$RUNNER_TEMP/android-ndk-r27c/build/cmake/android.toolchain.cmake \
+            -DANDROID_ABI=x86_64 -DANDROID_PLATFORM=android-26 \
+            -DCMAKE_PREFIX_PATH=/tmp/sdl3-android-prefix \
+            -DCMAKE_FIND_ROOT_PATH_MODE_PACKAGE=BOTH \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DAME_BUILD_TESTS=OFF -DAME_BUILD_BENCHES=OFF
+          cmake --build build-android
+      - name: artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-cross-libs
+          path: |
+            build-android/examples/*/lib*.so
+          if-no-files-found: warn
+
   windows-cross:
     name: windows (MinGW-w64 cross, build-only coverage)
     runs-on: ubuntu-latest
@@ -330,3 +376,95 @@ jobs:
         run: |
           for f in docs/games/*.js; do node --check "$f"; done
           test -s docs/index.html
+  drift:
+    name: spec/code drift (public header -> docs/)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: drift gate
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            BASE="${{ github.event.pull_request.base.sha }}"
+            HEAD="${{ github.event.pull_request.head.sha }}"
+          else
+            BASE="${{ github.event.before }}"
+            HEAD="${{ github.event.after }}"
+          fi
+          tools/ci_drift_check.sh "$BASE" "$HEAD"
+  android-apk:
+    name: android apk (multi-ABI packaging)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      # the heavy inputs are content-addressed: same NDK/SDL/SDK/gradle
+      # versions -> cache hit, so a push only rebuilds OUR code
+      - name: cache NDK + SDL prefixes
+        uses: actions/cache@v4
+        with:
+          path: |
+            ndk/android-ndk-r27c
+            sdl-prefixes
+          key: android-apk-ndk-r27c-sdl-3.4.16-v1
+      - name: fetch NDK r27c
+        run: |
+          if [ ! -d ndk/android-ndk-r27c ]; then
+            mkdir -p ndk
+            curl -sL -o ndk.zip https://dl.google.com/android/repository/android-ndk-r27c-linux.zip
+            unzip -q ndk.zip -d ndk && rm ndk.zip
+          fi
+      - name: fetch SDL source (pinned tag)
+        run: |
+          if [ ! -d SDL-release-3.4.16 ]; then
+            curl -sL -o sdl.tgz https://github.com/libsdl-org/SDL/archive/refs/tags/release-3.4.16.tar.gz
+            tar xzf sdl.tgz && rm sdl.tgz
+          fi
+      - name: cache android sdk
+        uses: actions/cache@v4
+        with:
+          path: android-sdk
+          key: android-sdk-33-33.0.2-v1
+      - name: android sdk (platform 33 + build-tools)
+        run: |
+          if [ ! -d android-sdk/cmdline-tools/latest ]; then
+            curl -sL -o c.zip https://dl.google.com/android/repository/commandlinetools-linux-9477386_latest.zip
+            unzip -q c.zip
+            mkdir -p android-sdk/cmdline-tools
+            mv cmdline-tools android-sdk/cmdline-tools/latest && rm c.zip
+          fi
+          yes | android-sdk/cmdline-tools/latest/bin/sdkmanager --licenses > /dev/null 2>&1 || true
+          android-sdk/cmdline-tools/latest/bin/sdkmanager "platforms;android-33" "build-tools;33.0.2" > /dev/null
+      - name: cache gradle
+        uses: actions/cache@v4
+        with:
+          path: gradle-7.5
+          key: gradle-7.5-v1
+      - name: fetch gradle 7.5 (JDK11-era AGP 7.4 line)
+        run: |
+          if [ ! -x gradle-7.5/bin/gradle ]; then
+            curl -sL -o g.zip https://services.gradle.org/distributions/gradle-7.5-bin.zip
+            unzip -q g.zip && rm g.zip
+          fi
+      - name: native libs for all APK ABIs
+        run: |
+          AME_ANDROID_BUILD_ROOT="$RUNNER_TEMP/ame-android" \
+          AME_SDL_PREFIX_ROOT="$GITHUB_WORKSPACE/sdl-prefixes" \
+          tools/android_apk_libs.sh \
+            "$GITHUB_WORKSPACE/ndk/android-ndk-r27c" \
+            "$GITHUB_WORKSPACE/SDL-release-3.4.16"
+      - name: assemble debug apks (per-ABI splits + universal)
+        run: |
+          cd android
+          echo "sdk.dir=$GITHUB_WORKSPACE/android-sdk" > local.properties
+          ../gradle-7.5/bin/gradle --no-daemon assembleDebug
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android-apk
+          path: android/app/build/outputs/apk/debug/*.apk

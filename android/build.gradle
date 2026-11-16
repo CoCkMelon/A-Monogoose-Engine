@@ -1,0 +1,3 @@
+// AGP 7.4 + JDK 11: the smallest stack that packages a pure-NDK app
+// (no androidx, no kotlin). Newer AGP needs JDK 17 for no gain here.
+plugins { id 'com.android.application' version '7.4.2' apply false }

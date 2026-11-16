@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- ame-next memory_game on Android: SDL activity model. The game is a
+     shared lib exporting SDL_main; AmeActivity (thin SDLActivity
+     subclass) loads SDL3 + memory_game. Landscape, fullscreen, no
+     title bar: the engine owns every pixel (same contract as desktop). -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application android:label="ame memory"
+                 android:allowBackup="false"
+                 android:hasCode="true">
+        <activity android:name=".AmeActivity"
+                  android:exported="true"
+                  android:configChanges="keyboard|keyboardHidden|orientation|screenSize|screenLayout"
+                  android:screenOrientation="fullUser"
+                  android:theme="@android:style/Theme.NoTitleBar.Fullscreen">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>

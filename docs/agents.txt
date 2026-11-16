@@ -158,3 +158,11 @@ SOURCES (research background; plain links)
     add a rigid-body solver or link Box2D/Box3D into v0 or the engine
     core. Later projects that need real physics use raw Box2D/Box3D
     directly, no engine wrapper (physics.txt, principles).
+
+  SPEC/CODE DRIFT GATE (CI job `drift`, tools/ci_drift_check.sh):
+    any change set touching the game-facing public headers
+    (include/ame/*.h) must touch docs/ in the same change set -
+    header changed -> docs/ changed. The gate diffs the push range
+    (github.event.before..after) or the PR range (base..head); a
+    new-branch push with an all-zero before passes there and gets
+    caught by the PR range instead.

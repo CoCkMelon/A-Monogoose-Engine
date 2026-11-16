@@ -2,6 +2,7 @@
  * Ported in spirit from A-Monogoose-Engine's tilemap.c (same minimal
  * JSON subset), C23, fixed pools, no SDL in the parser. */
 #include "ame/tilemap.h"
+#include "ame/fs.h"
 
 #include <ctype.h>
 #include <stdio.h>
@@ -13,7 +14,7 @@
 /* --- minimal JSON subset helpers (ints, int arrays, first match) ---------- */
 
 static char *read_file_all(const char *path) {
-    FILE *f = fopen(path, "rb");
+    FILE *f = ame_fs_fopen(path, "rb");
     if (!f)
         return NULL;
     if (fseek(f, 0, SEEK_END) != 0) {

@@ -7,9 +7,12 @@
  * composed with #include at init. */
 #include <ame/render.h>
 
-#if defined(__EMSCRIPTEN__)
-#include <GLES3/gl3.h> /* web: GLES3 entry points LINK directly (WebGL2);
-                        * no runtime loader (see load_gl) */
+/* AME_GL_DIRECT: targets where the GLES3 entry points LINK directly and
+ * no runtime loader table exists - web (WebGL2) and Android (bionic
+ * libGLESv3; the NDK sysroot ships no desktop glcorearb.h). */
+#if defined(__EMSCRIPTEN__) || defined(__ANDROID__)
+#define AME_GL_DIRECT 1
+#include <GLES3/gl3.h> /* GLES3 entry points LINK directly; no loader */
 #else
 #include <GL/glcorearb.h> /* Khronos core typedefs+enums; fns via loader */
 #endif
@@ -78,7 +81,7 @@
 /* NAME is the Khronos UPPERCASE token, fn the exported glFunction name.
  * Web: no loader table at all — gl##fn resolves to the real GLES3 symbol,
  * so every call site below compiles unchanged for all targets. */
-#if defined(__EMSCRIPTEN__)
+#ifdef AME_GL_DIRECT
 #define AME_GL_DECL(NAME, fn) /* direct bind: nothing to declare */
 #else
 #define AME_GL_DECL(NAME, fn) static PFNGL##NAME##PROC gl##fn;
@@ -92,7 +95,7 @@ void rp_set_gl_loader(ame_gl_getproc_fn get_proc) {
 }
 
 static bool load_gl(void) {
-#if defined(__EMSCRIPTEN__)
+#ifdef AME_GL_DIRECT
     (void)g_getproc; /* entry points are linked; nothing to resolve */
     return true;
 #else

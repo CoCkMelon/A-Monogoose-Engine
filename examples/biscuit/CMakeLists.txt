@@ -5,7 +5,7 @@
 # template for games: gameplay/ sim vs render/ vs entities/.
 
 find_package(Threads REQUIRED)
-add_executable(biscuit
+ame_add_app(biscuit
     abilities.c
     app.c
     bf_audio.c

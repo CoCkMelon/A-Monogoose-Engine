@@ -4,7 +4,7 @@
 # A-Monogoose examples did).
 
 # default build: SDL input backend (works everywhere, incl. CI)
-add_executable(memory_game
+ame_add_app(memory_game
     mem_sim.c
     mem_net.c
     mem_config.c
@@ -21,7 +21,7 @@ endif()
 # Stage 1: authoritative server — pure POSIX + the pure sim (no SDL/GL).
 # Host-side daemon like tools/: kept out of Windows cross builds (the
 # client netcode carries the winsock shim; a windows server is later).
-if(NOT WIN32)
+if(NOT WIN32 AND NOT ANDROID)
     add_executable(mem_server
         mem_sim.c
         mem_net.c

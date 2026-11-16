@@ -7,6 +7,7 @@
  *     audio->logic via per-voice atomic snapshot (audio_beat_amplitude).
  */
 #include <ame/audio.h>
+#include "ame/fs.h"
 
 #include <SDL3/SDL.h>
 #include <math.h>
@@ -413,7 +414,7 @@ float *audio_load_wav(const char *path, int *frames_out) {
     if (!path || !frames_out)
         return NULL;
     *frames_out = 0;
-    FILE *f = fopen(path, "rb");
+    FILE *f = ame_fs_fopen(path, "rb");
     if (!f)
         return NULL;
     uint8_t rhdr[12];

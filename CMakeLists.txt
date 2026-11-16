@@ -46,10 +46,21 @@ set(AME_WARN_FLAGS "-Wall;-Wextra;-Werror")
 
 # ---------------------------------------------------------------------------
 # Generated content: the font atlas is baked at BUILD TIME (text.txt) by a
-# host tool from assets/fonts/PixelifySans-Regular.ttf. tools/ comes before
+# host tool from assets/fonts/Unifont.otf. tools/ comes before
 # the engine libs so ame_font exists for them to link.
 # ---------------------------------------------------------------------------
 add_subdirectory(tools)
+
+# App target shape: executables everywhere except Android, where the
+# SDL activity model loads the game as a SHARED library and calls the
+# renamed SDL_main (app_sdl.c's main() becomes the exported entry).
+function(ame_add_app name)
+    if(ANDROID)
+        add_library(${name} SHARED ${ARGN})
+    else()
+        add_executable(${name} ${ARGN})
+    endif()
+endfunction()
 
 # ---------------------------------------------------------------------------
 # Dimension is a BUILD option (build.txt rule 6): the engine lib is
@@ -90,6 +101,11 @@ function(ame_dim_lib dim)
     target_compile_definitions(ame_${dim}d PUBLIC AME_${dim}D=1)
     target_link_libraries(ame_${dim}d PUBLIC ${AME_SDL3_LINK})
     target_link_libraries(ame_${dim}d PRIVATE ame_font)
+    if(ANDROID)
+        # AME_GL_DIRECT path: GLES3 entry points resolve at LINK time
+        # from bionic libGLESv3 (no loader table, no desktop GL here)
+        target_link_libraries(ame_${dim}d PUBLIC GLESv3)
+    endif()
     if(UNIX AND NOT APPLE)
         target_link_libraries(ame_${dim}d PUBLIC m)
     endif()

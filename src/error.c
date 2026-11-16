@@ -1,5 +1,6 @@
 /* ame-next — typed errors and process-wide logger. */
 #include <ame/error.h>
+#include "ame/fs.h"
 
 #include <stdarg.h>
 #include <stdatomic.h>
@@ -130,7 +131,7 @@ static void log_lock(void) {
 bool ame_log_open(const char *path) {
     if (!path || !path[0])
         return false;
-    FILE *f = fopen(path, "ab");
+    FILE *f = ame_fs_fopen(path, "ab");
     if (!f)
         return false;
     log_lock();
