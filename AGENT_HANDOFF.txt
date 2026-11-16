@@ -89,7 +89,59 @@ NOT DONE / NEXT ACTIONS (in order)
 2. Web job: Emscripten build of the SAME C (rp GL loader ->
    emscripten_proc_address; GLES desc path exists: rp_desc_gles(true);
    app shim maps the callbacks; text/atlas already data-only).
-3. Android job: NDK toolchain + SDL3 android bootstrap (CMake), GLES.
+3. DONE (build coverage) 2026-11-11: Android job - NDK r27c cross in CI
+   (android-cross job; SDL3 x86_64 from source, pinned 3.4.16;
+   AME_GL_DIRECT GLES3 link path; apps = SHARED libs exporting
+   SDL_main). APK packaging + emulator proof DONE 2026-11-11: android/
+   gradle project (AGP 7.4/JDK11), vendored SDL activity template +
+   thin AmeActivity, jniLibs via tools/android_prebuilt.sh; ran in the
+   x86_64 emulator under TCG (no KVM in sandbox): board + HUD render
+   (shots/emu_mem.webp); app_sdl.c gained the ES 3.0 context request
+   and the SDL_HINT_ORIENTATIONS landscape pin.
+   Pref-path wrap DONE 2026-11-12 (include/ame/fs.h + src/fs.c, test_fs;
+   games never fopen directly any more). Multi-ABI + CI apk DONE
+   2026-11-12: tools/android_apk_libs.sh fills jniLibs/ for arm64-v8a +
+   armeabi-v7a + x86_64 (universal debug APK, copied to the workspace
+   root), CI job android-apk assembles it from scratch per push.
+   Portrait + rotation unlock DONE 2026-11-12 (aspect-fit camera in
+   mem_app, manifest fullUser); size report fixed the same day:
+   stripped payloads + per-ABI splits (arm64 2.8 MB vs 17.4 MB
+   universal unstripped before).
+   Mirror report (user, Note 8T: "symbols X-inverted") RESOLVED
+   2026-11-12: never a render bug - Pixelify Sans's digit designs
+   (7 like a flipped J, 3 like a Cyrillic E) read as mirrored ink;
+   user confirmed after seeing the glyphs up close ("I thought those
+   symbols are alphabet"). Four chirality checks had already cleared
+   the pipeline (atlas ASCII dump, top-down template match 1.000, HUD
+   + card-interior band tests). Fix per user: PIXEL face now bakes
+   GNU Unifont (assets/fonts/Unifont.otf, GPL-2+ with font exception,
+   license in assets/fonts/Unifont-LICENSE.txt) - unambiguous bitmap
+   digits; SMOOTH/DSDF faces stay DejaVu. test_render's inter-face
+   ink-mass band widened (Unifont 1.88x vs Pixelify 1.1x) and the red
+   card probe windowed (font-shape independent).
+   Device abstraction DONE 2026-11-13 (include/ame/input.h + src/
+   input.c + SDL backend in app_sdl.c): one device registry (keyboard,
+   mouse, touch, gamepads, accel/gyro), first-class multi-touch points
+   + one-shot tap queue, gamepad slots with canonical buttons/axes and
+   action bindings (button + signed-threshold axis), sensor enable/get
+   through a backend ops hook (in_set_backend). memory_game binds
+   CONFIRM to pad A and drains taps beside clicks. test_input covers
+   registry/binds/axes/touch/taps/sensors (72 checks). docs/input.txt
+   has the DEVICES section. Camera stays out of scope (capture device;
+   SDL3 camera API is the hook if frames are ever wanted); compass/
+   proximity need a platform shim (not in SDL3).
+   Device abstraction round 2 DONE 2026-11-13: dpad in the canonical
+   button set (both SDL backends), in_gamepad_rumble() through the
+   backend ops (memory pulses on a match), web backend parity for
+   touch + gamepads, and the docs CHECK is real now - raymarch_arcade
+   and biscuit drive identically with keyboard or pad (stick lean via
+   signed axis thresholds + dpad; quit stays kb-only). test_input +3
+   cases (dpad edges, rumble graceful-noop, tap drop accounting).
+   REMAINING for a later stage: emulator-in-CI (needs a KVM runner),
+   x86 (32-bit) ABI only if a target device ever needs it, engine
+   sensor/camera hooks (SDL3 exposes accel/gyro + a camera API;
+   compass/proximity are NOT in SDL3 - platform code only; today the
+   engine input = keyboard/mouse/touch-via-mouse via AME_INPUT_SDL).
 4. Stage 1: ONLINE server-authoritative Memory (README.txt FIRST GAME):
    run mem_sim on a server; message set join/state/your-turn/open-card/
    match/no-match/win; headless two-client loopback test in CI.
@@ -100,7 +152,18 @@ NOT DONE / NEXT ACTIONS (in order)
    "irrelevant on the way of making game engine compared to other
    tasks" - do NOT pick these up before the engine-core items above.
 7. audio occlusion raytracer port from A-Mongoose (audio.txt, later stage).
-8. Spec/code drift CI check (agents.txt): header changed -> docs/ changed.
+8. DONE 2026-11-12: CI job `drift` + tools/ci_drift_check.sh enforce the
+   agents.txt convention (include/ame/*.h touched -> docs/ must be
+   touched in the same change set; push range or PR range, all-zero
+   before passes and gets caught by the PR range). Verified locally:
+   header-only range fails, header+docs / src-only / no-base pass.
+
+SHOT POLICY (user, 2026-11-12): proof screenshots live in shots/ as
+webp ONLY (smallest of lossless/lossy-q72 per file, PPM intermediates
+and duplicate frames deleted; 5.3 MB -> 178 KB). Never commit or keep
+PNG/PPM proofs. Built APKs are copied to the workspace root
+(/home/user/app-debug.apk) because android/**/build/ is snapshot-
+excluded and gets autodeleted.
 
 CONVENTIONS LOCKED
 - C23 everywhere in engine+game; third_party keeps its own standard, no
@@ -1174,7 +1237,7 @@ WHAT IS GREEN
 - examples/biscuit runs headless (llvmpipe): level mesh from runtime
   OBJ via rp_push_mesh per group, car/platforms/cookies drawn with
   rp_push_quad/tri, HUD + dialogue + debug watch via trunk text.
-  Proof: shots/biscuit.png (AME_SHOT_PPM + AME_SHOT_NOFLIP=1; the PPM
+  Proof: shots/biscuit.webp (AME_SHOT_PPM + AME_SHOT_NOFLIP=1; the PPM
   writer flips rows unless NOFLIP for top-left-origin reads).
 - memory_game/text_editor/audio examples unchanged and still pass.
 
@@ -1206,3 +1269,22 @@ STILL OPEN (next session)
 - F5 hot reload is code-identical to cold load (bf_view_reload_level);
   headless cannot inject key events, so it is verified by review +
   the cold-path tests, not by a keypress.
+
+=====================================================================
+DECISION (2026-11-14): TOML for settings + saves; libfyaml = dialogue
+=====================================================================
+docs/settings.txt and docs/save.txt now specify TOML (was YAML).
+Grounds: explicit types, no indentation/coercion silent-failure
+modes, small regular grammar = cheap validation, fewer authoring
+errors, and the easier target to formalize/generate from the Lean
+model (trunk lean proves contracts; B-rewrite lean generates C via
+AmeGen - see the cherry-pick plan). docs/dialogue.txt unchanged in
+substance: dialogue keeps YAML parsed by libfyaml at runtime;
+libfyaml becomes dialogue-ONLY.
+Consequences for the B-harvest plan: B's settings lib (91e222b:
+settings.h/.c + test_settings, YAML/libfyaml, 324 lines) is a
+STRUCTURE reference (schema load, dirty flags, appliers, tests);
+the trunk port converts the format to TOML. Parser plan: single-
+file tomlc99-style (MIT) vendored under external/ when settings/
+save implementation starts; emit via fprintf. Specs only - no code
+changed in this pass.

@@ -1,11 +1,15 @@
 ame-next ENGINE SPEC
-File: save.txt - saving and loading games (YAML)
+File: save.txt - saving and loading games (TOML)
 
 GOAL
-Save and load game progress with YAML, using the same libfyaml
-dependency as dialogue. YAML is good for this because it is
-human-readable (easy to inspect a save, easy to diff after a change)
-and libfyaml already gives a real parser/emitter.
+Save and load game progress with TOML (format decision 2026-11-14:
+settings + saves are TOML, not YAML; dialogue alone keeps
+YAML/libfyaml - see dialogue.txt). TOML is human-readable (easy to
+inspect a save, easy to diff after a change), explicitly typed, and
+its small regular grammar is cheap to validate and easier to
+formalize/generate from the Lean model. Parse with the vendored
+single-file TOML parser (tomlc99-style, MIT, external/); emit with
+plain fprintf - a TOML writer is trivial, a YAML emitter is not.
 
 WHAT TO SERIALIZE (keep it SMALL and durable)
   A save holds DURABLE, mostly-small state, NOT a full dump of the
@@ -22,13 +26,13 @@ WHAT TO SERIALIZE (keep it SMALL and durable)
   data, not stored.
 
 SAVING (emit)
-  On save, walk the small set of durable state and emit YAML with
-  libfyaml's emitter (fy_emitter / fy_document_create then emit),
-  or build the string and fy_emit. Output is one compact YAML file.
+  On save, walk the small set of durable state and emit TOML with a
+  small fprintf writer: [section] headers, key = value lines, quoted
+  strings, inline arrays. Output is one compact .toml file.
 
 LOADING (parse)
-  On load, parse the file with fy_document_build_from_file, read the
-  fields by path (fy_node_by_path), and feed them back into the
+  On load, parse the file with the vendored TOML parser, read the
+  fields by section/key, and feed them back into the
   durable state, then re-init the level and rebuild pools/spawns
   from it (see levels.txt). A missing or corrupt field falls back to
   defaults; a corrupt whole file is reported clearly and ignored, it
@@ -47,14 +51,15 @@ VERSION
 
 WHERE IT LIVES
   The save module (save.h / save.c) knows the durable-state format
-  and uses libfyaml. It does not know gameplay logic beyond the
-  fields it serializes; the game decides what is durable and provides
+  and uses the vendored TOML parser. It does not know gameplay logic
+  beyond the fields it serializes; the game decides what is durable and provides
   read/write callbacks per field set. Same code on native and web
   (web stores the file in its filesystem/persistent storage shim).
 
 BANNED
-  - Dumping the whole geometry/static world or full pools to YAML.
-  - A hand-rolled YAML writer/parser (use libfyaml).
+  - Dumping the whole geometry/static world or full pools to TOML.
+  - A hand-rolled TOML parser (vendor the single-file one; the
+    writer MAY be hand-rolled - emitting TOML is trivial).
   - Storing pointers or engine handles in a save (save only durable
     ids/names/indices that are stable across a rebuild).
   - A save that depends on game logic state it cannot re-init from.
@@ -63,6 +68,6 @@ CHECK
   Save after unlocking a few abilities and collecting flags, then
   load in a fresh run: unlocks, flags, fuel/hp and current
   checkpoint are restored; the level rebuilds correctly.
-  The save file is readable YAML (open it in an editor).
+  The save file is readable TOML (open it in an editor).
   Corrupt/truncated save is handled cleanly (defaults + a clear log),
   never a crash. Same behavior native and web.

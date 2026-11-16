@@ -9,9 +9,9 @@ portraits, inline effects). Content is authored as YAML.
 YAML PARSING (libfyaml)
   - Dialogue .yaml files are parsed with LIBFYAML (MIT, YAML 1.2, C),
     vendored in third_party (or vcpkg/system where available). It is
-    used by the dialogue module, by save/load (save.txt), and by
-    settings definitions (settings.txt); levels/content keep their
-    own pipeline (levels.txt).
+    used by the DIALOGUE MODULE ONLY (format decision 2026-11-14:
+    save/load and settings moved to TOML - save.txt, settings.txt);
+    levels/content keep their own pipeline (levels.txt).
   - DEFAULT: runtime. Load .yaml from the content folder with
     libfyaml at load/startup and build the runtime scene in memory.
     Editable without a rebuild. Use the document API
