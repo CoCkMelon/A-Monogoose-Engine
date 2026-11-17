@@ -1462,3 +1462,33 @@ OPEN SPEC GAP, still open: the drift gate proves "some doc changed", not
 "each new public header has a spec" (see the note above). time.h still has
 no docs/time.txt, and env.txt/state-audit.txt are the only new files with a
 README index entry - docs/README.txt lists them, which is the weaker check.
+
+=== 2026-11-17 (last): spec gate + the final audit items ===================
+  ae0e465 setup: calls that cannot take effect now fail loudly. Audit #5
+          CLOSED. Enforced where a late call is harmful (rp_set_gl_loader
+          after rp_init, in_set_backend under a live sensor, audio_attach_sdl
+          before audio_init); deliberately NOT enforced where it is fine
+          (ame_fs_set_ops is per-call, ame_prefab_reset has no phase) - those
+          two now say why in their headers.
+  2f93da4 docs: time.txt + gates. The drift gate could be satisfied by ANY
+          docs edit, which is how include/ame/time.h shipped with no spec.
+          Two new mechanical gates, both reading docs/ AT $head (so a local
+          run cannot pass on uncommitted docs):
+            - a header ADDED in the range needs docs/<stem>.txt;
+            - every getenv("AME_...") in src/ must be in docs/env.txt.
+          Both were tested against the pre-fix commit and DO fail there.
+
+AUDIT STATUS: #1..#5 all fixed. What remains in docs/state-audit.txt is the
+SEV3 list of accepted singletons, kept deliberately.
+
+NEXT CAMPAIGNS (unchanged order): pool/handle cases, tomlc99 + settings,
+bench_data, net + memnet. Nothing from branch B.
+
+PROCESS NOTE for whoever picks this up: the sandbox wiped the working copy
+five times during these sessions (uncommitted work survived as a dirty tree,
+committed objects sometimes did not). Recovery that always worked:
+  git stash push -u ; git fetch <remote> ame-next-trunk ;
+  git diff --stat stash@{0} FETCH_HEAD   (expect only formatting/whitespace)
+  git reset --hard FETCH_HEAD ; git stash drop
+so the REMOTE is the source of truth, and the patches in /home/user/patches
+are regenerated with: git format-patch 110810f..HEAD -o ... --start-number 1
