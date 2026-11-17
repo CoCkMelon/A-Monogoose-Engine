@@ -96,6 +96,22 @@ THE INVENTORY
    bootstrap's single-slot report (as the loop now does for its own state)
    instead of relying on the TLS read from the wrong thread.
 
+4. [SEV 2] FIXED - 14 ENVIRONMENT VARIABLES, 3 DOCUMENTED
+   STATUS: fixed in "env: one table for every variable, and overrides say so".
+   docs/env.txt is now the complete table of the 12 variables src/ reads,
+   each with its effect and a VALUE vs MODEL column (MODEL = it changes how
+   the program runs, e.g. threading or capture path). Overrides are logged
+   as they are applied: AME_WINDOW_W/H and AME_WINDOW_TITLE print what they
+   replaced, and AME_FIXED_FRAME_DT prints a WARN naming the declared policy
+   it REPLACES and the fact that the logic thread is gone. It is read AFTER
+   the policy line so the log reads cause-then-effect.
+   ENFORCED, not trusted: tools/ci_drift_check.sh greps src/ for
+   getenv("AME_...") and fails if a name is not in docs/env.txt (verified by
+   deleting a name: exit 1 with the name printed). App-level knobs in
+   examples/ are listed in env.txt under their own heading so "AME_*" no
+   longer implies "engine contract".
+   Original finding follows.
+
 4. [SEV 2] 14 ENVIRONMENT VARIABLES, 3 DOCUMENTED
    Measured: AME_FIXED_FRAME_DT, AME_LOG_FILE, AME_LOOP_HZ,
    AME_LOOP_MAX_STEPS, AME_LOOP_VARIABLE, AME_PREF_PATH, AME_SHOT_FRAMES,

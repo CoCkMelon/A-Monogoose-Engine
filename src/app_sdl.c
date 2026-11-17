@@ -338,11 +338,19 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char **argv) {
     const char *eh = SDL_getenv("AME_WINDOW_H");
     if (ew && eh) {
         int w = atoi(ew), h = atoi(eh);
-        if (w > 0 && h > 0) { win_w = w; win_h = h; }
+        if (w > 0 && h > 0) {
+            win_w = w; win_h = h;
+            /* an override that is not logged is hidden state (docs/env.txt):
+             * say what replaced the default, every time */
+            ame_log(AME_LOG_INFO, "window: AME_WINDOW_W/H=%dx%d replaces the "
+                    "app default 1280x720", w, h);
+        }
     }
     const char *title = SDL_getenv("AME_WINDOW_TITLE");
     if (!title || !title[0])
         title = "ame app";
+    else
+        ame_log(AME_LOG_INFO, "window: AME_WINDOW_TITLE=\"%s\"", title);
     g_window = SDL_CreateWindow(title, win_w, win_h,
                                 SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE);
     if (!g_window) {
@@ -403,12 +411,25 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char **argv) {
         g_expose_redraw = false;
     atomic_store(&g_run, 1);
     atomic_store(&g_exit_code, 0);
-    {
-        const char *ffd = SDL_getenv("AME_FIXED_FRAME_DT");
-        if (ffd)
-            g_fixed_dt = SDL_strtod(ffd, NULL);
-    }
     resolve_loop(); /* app_loop() -> state + hook + one log line */
+    {
+        /* Read AFTER the policy line so the log reads cause-then-effect: the
+         * variable below does not tweak the declared policy, it REPLACES it
+         * and removes the logic thread (docs/env.txt, MODEL column). That
+         * was the audit's worst case of silent state - a capture run and a
+         * normal run differed in threading with nothing in the log. */
+        const char *ffd = SDL_getenv("AME_FIXED_FRAME_DT");
+        if (ffd && ffd[0]) {
+            g_fixed_dt = SDL_strtod(ffd, NULL);
+            if (g_fixed_dt > 0.0)
+                ame_log(AME_LOG_WARN, "loop: AME_FIXED_FRAME_DT=%.6f REPLACES "
+                        "the declared %s policy: logic runs INLINE, %.3f s of "
+                        "sim per rendered frame, NO logic thread (capture "
+                        "mode)",
+                        g_fixed_dt, g_time.variable ? "VARIABLE" : "FIXED",
+                        g_fixed_dt);
+        }
+    }
 
     /* a VARIABLE app has no logic thread: its frame IS the step, so the
      * measured frame dt is the dt the app sees (time.h) */

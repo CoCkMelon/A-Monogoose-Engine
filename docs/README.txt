@@ -242,6 +242,8 @@ FILES IN THIS FOLDER
   coords.txt       the coordinate spaces, and where the one flip lives
   coords-analysis.txtcoords-analysis.txt
   errors.txt       errors.txt
+  env.txt          every env var the engine reads (VALUE vs MODEL), and
+                   the CI gate that keeps this table complete
   state-audit.txt  module-level hidden state, measured 2026-11-17
   texture-files.txtfiles.txt
   plan-3d-puzzle.txt campaign F: 3D third-person puzzle game (glTF
