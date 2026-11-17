@@ -70,6 +70,15 @@ STATIC GEOMETRY - TWO PATHS, ONE MESH TYPE
   Assimp in the game binary. For 3D prefer gltf/glb as the SOURCE
   format (materials/transforms in the file).
 
+  DECISION (2026-11-18): for the 3D third-person puzzle game the glTF
+  path is BAKE-ONLY - no runtime glTF parser in the engine or the game
+  binary. The baker (tools/assimp2c, extended) emits scene nodes,
+  meshes, materials, skeleton, skin weights and animation clips as
+  checked-in C, and CI re-bakes a fixture and diffs it against the
+  committed bytes. Static geometry may still iterate through the DEV
+  path above (runtime OBJ); a skinned animated character cannot, and is
+  re-baked. Plan, work packages and turn budget: plan-3d-puzzle.txt.
+
   Live .blend is NOT a runtime format on either path. The DCC is the
   scene editor; it participates by exporting, never by being linked or
   read live.

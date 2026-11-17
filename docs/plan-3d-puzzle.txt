@@ -1,0 +1,237 @@
+ame-next ENGINE SPEC
+File: plan-3d-puzzle.txt - campaign F: 3D third-person puzzle game
+
+WHY THIS FILE EXISTS
+The engine has a proven 3D render path but no way to get an AUTHORED
+3D scene or an ANIMATED CHARACTER into it. This file records the
+decisions, the measured gap, the work packages and the turn budget for
+closing it, so the work is not re-decided per session and so no agent
+starts a second scene pipeline beside this one.
+
+GOAL
+A third-person 3D puzzle game on trunk: one animated human character,
+levels authored in Blender, playable as an example game, proven on
+desktop first and then on the other three targets.
+
+=====================================================================
+DECISIONS LOCKED (2026-11-18, with grounds)
+=====================================================================
+
+1. glTF/glb IS THE SOURCE FORMAT, AND THE PATH IS BAKE-ONLY.
+   Grounds, in order of weight:
+   - OBJ cannot carry a skeleton, skin weights, animation clips or a
+     node hierarchy. levels.txt already names this as the cue to move
+     to glTF or the bake path, and already forbids Assimp in the game
+     binary ("CI, web/WASM and release builds ship cooked data only").
+     Bake-only is therefore the RECORDED spec, not a new deviation.
+   - No runtime glTF parser means no parser code in the APK/web
+     binary, no startup parse cost, and one less vendored dependency
+     in the pure-C engine. The 2026-11-11 deprioritization of glTF
+     import is lifted for this campaign on that new ground: a skinned
+     animated character is not reachable any other way.
+   - Iteration cost is the trade, and it is bounded: one command
+     re-bakes (tools/), ninja rebuilds only the generated TU, and
+     STATIC geometry may still iterate through the existing runtime
+     OBJ path (levels.txt DEV path, unaffected by this decision).
+     Measure bake+rebuild; if it exceeds ~30 s per change, record the
+     number here and revisit.
+
+2. CHARACTER MOTION IS KINEMATIC, ON THE EXISTING GEOMETRY MODULE.
+   Grounds: physics.txt settles v0 as geometry-only - intersections,
+   raycasts, mesh->primitive proxies, broad-phase - with actors moving
+   themselves in the fixed step and NO solver. Trunk's geometry module
+   already implements that spec (789 lines: AABB, sphere, segment,
+   capsule, OBB, ame_geo_raycast, ame_geo_ray_shape,
+   ame_geo_overlap_world, ame_geo_add_mesh_proxies, uniform-grid
+   broadphase 16^3 in 3D). A capsule character controller (sweep,
+   move-and-slide, ground probe, step-up, slope limit, gravity) is
+   assembly on top of it, not a new dependency and not a spec change.
+   Measured donor fact: the B-rewrite's phys module (497 lines) is 2D
+   biscuit VEHICLE code (ame_phys_plat, ame_phys_seg, circle_segs,
+   wheel, strut_forces) - it is NOT a donor for 3D character motion.
+   Rigid-body props (stacking crates, joints) stay OUT of scope; they
+   would reverse the settled no-solver spec and need their own case.
+
+3. SKINNING IS CPU-SIDE FIRST.
+   Grounds: one character, so the per-frame cost is a few thousand
+   transformed vertices - measurable, and cheap next to the batch
+   renderer's own work. CPU skinning writes plain ame_mesh_vert into a
+   scratch buffer that rp_push_mesh already accepts, so render.c,
+   mesh.h and the shader set stay UNTOUCHED. That also de-conflicts
+   this campaign from the frame-independence work currently editing
+   render.c and text.c. GPU skinning (bone-palette UBO + a shader
+   variant + batcher changes) is deferred until a measurement says the
+   CPU path misses the frame budget; budget for it separately.
+
+4. BAKED OUTPUT IS CHECKED IN, AND BAKING IS CI-VERIFIED.
+   The generated scene/skeleton/clip C files live in generated/ (the
+   pattern font_atlas*.c already sets), so a normal build needs no
+   libassimp. libassimp-dev (5.4.3) is already installed by CI
+   (.github/workflows/ci.yml), so CI can re-bake a checked-in fixture
+   and diff it against the committed output - a reproducibility gate
+   that catches a stale or hand-edited generated file.
+
+5. SKIN DATA IS A PARALLEL STREAM, NOT A NEW VERTEX FORMAT.
+   ame_mesh_vert stays float[8] (pos/nrm/uv) - it is shared by the OBJ
+   loader, assimp2c and rp_push_mesh, and changing it would ripple
+   through every consumer. The baker emits joints and weights as
+   separate const arrays indexed by vertex; the skinner reads both and
+   writes ame_mesh_vert.
+
+=====================================================================
+WHAT ALREADY EXISTS (measured 2026-11-18 on trunk 71c4633)
+=====================================================================
+Render: perspective camera (camera_persp3d); pass system with LIT
+  (directional + point + ambient, shadow receive), SHADOW (depth-only
+  caster pre-pass over a source pass), POST/CUSTOM/DSDF; rp_push_mesh
+  with a per-draw column-major 4x4 xform, tint and layer; directional
+  shadow-map module. AME_3D is a per-target compile switch.
+Geometry: the physics.txt v0 query layer, 789 lines, dimension-generic
+  via AME_DIM (see decision 2).
+Scene authoring spec: levels.txt already fixes the conventions this
+  campaign must REUSE, not reinvent - collider kinds inferred from
+  object names (BoxCollider, CircleCollider, EdgeCollider,
+  ChainCollider, MeshCollider), markers as kind-prefix + stable id
+  (P_, E_, T_, S_, G_, C_, K_col_), the 63-byte Blender name cap, rich
+  tunables in a sidecar and/or a generated header (scene_ids.h,
+  scene_vars.h), integer ids at runtime (no per-frame string lookups),
+  one tuning config header, per-level deterministic seeds. Sidecars
+  are TOML per the 2026-11-14 format decision.
+Also available: events (overlap-edge + deferred queue, test_events 72),
+  prefab (name -> spawn -> handle, test_prefab), dialogue (runtime
+  libfyaml + dlg2c bake, test_dialogue), particles, positional audio
+  (audio_pan, audio_ray), time (ame_time_*), declared loop policy
+  (app_fixed/app_step + ame_loop_desc), input with gamepad/touch/
+  sensors, text/HUD, and native/Android/web/Windows CI.
+
+WHAT IS NEW (nothing exists on any of the three attempts)
+  glTF import (host-side) - scene graph, skeleton, skin weights,
+    animation clips, materials. tools/assimp2c is 95 lines today and
+    emits one mesh's pos/nrm/uv + indices only.
+  Runtime scene module - baked tables into pools, node hierarchy,
+    world matrices, name -> prefab spawn.
+  Skeleton + animation runtime - bone palette from clips, sampling,
+    blending, state machine, CPU skinning.
+  Character controller, third-person camera (spring arm + occlusion).
+  Measured donor fact: the B-rewrite contains ZERO files matching
+  skeleton/anim/gltf/skin/scene - there is no donor for any of this.
+
+=====================================================================
+WORK PACKAGES AND TURN BUDGET
+=====================================================================
+One "turn" = one focused work package ending in build + ctest + commit
++ push + API-verified remote sha.
+
+WP0  Decisions + specs. This file, docs/skeleton.txt, docs/animation
+     .txt, docs/scene.txt; the controller paragraph in physics.txt;
+     README/levels dated notes.                              1 turn
+WP1  BAKER (the critical package). Extend tools/assimp2c into the
+     scene baker: node hierarchy + transforms, meshes, materials and
+     texture refs, skeleton (bones, parents, inverse bind matrices),
+     per-vertex joints+weights as parallel arrays, clips (T/R/S
+     channels, quantized, redundant keys stripped), colliders from
+     name prefixes, markers/spawns/triggers -> scene_ids.h +
+     scene_vars.h. Fails loudly on: unapplied transforms, missing
+     armature modifier, >4 influences per vertex, zero-weight
+     vertices, unknown name prefix, non-Y-up export, bad scale.
+     Checked-in Blender-exported fixture + a host-side test that bakes
+     it and compares to the committed output; CI reproducibility gate
+     (decision 4). FIRST TASK IN THIS PACKAGE IS THE FIDELITY SPIKE
+     (see RISKS).                                            3-5 turns
+WP2  Runtime scene module: baked tables -> fixed pools, hierarchy
+     traversal, per-frame world matrices, name -> prefab spawn,
+     integer marker ids. Tests on the baked fixture.       1-2 turns
+WP3  Skeleton + animation runtime: bone palette from clips, sampling
+     with correct quaternion interpolation, 2-way blending, a small
+     state machine (idle/walk/run/turn), CPU skinning into a scratch
+     ame_mesh_vert buffer. Tests on a synthetic 2-bone fixture with
+     hand-computed expected poses (deterministic, no GL).    3-4 turns
+WP4  CONDITIONAL - GPU skinning, only if WP3's measured frame cost
+     misses budget. Bone-palette UBO + shader variant + batcher
+     changes; touches render.c, so it must be sequenced AFTER the
+     frame-independence commits land.                    (2-3 turns)
+WP5  Character controller on the geometry module: capsule sweep,
+     move-and-slide, ground probe, step-up, slope limit, gravity,
+     driven from app_fixed. Tests: slope, step, wall slide, fall,
+     ceiling.                                                 2 turns
+WP6  Colliders + triggers wired: baked colliders ->
+     ame_geo_add_mesh_proxies / primitive shapes, trigger volumes ->
+     events, marker spawns -> prefab.                       1-2 turns
+WP7  Third-person camera: spring arm, occlusion via ame_geo_raycast
+     (pull in on hit, smooth return), mouse/gamepad/touch look,
+     deadzone. Tests on the raycast/collision maths.          1 turn
+WP8  Blender side: export conventions doc (one file, matching
+     levels.txt naming), plus the validation that lives in the baker
+     (WP1). A separate tools/check_scene.py only if the baker cannot
+     see the problem. No addon - levels.txt keeps it LATER.    1 turn
+WP9  THE GAME: puzzle vertical-slice example - character, one authored
+     Blender level, triggers, puzzle logic on events, dialogue,
+     objective and win state, HUD. Gameplay iteration is the least
+     bounded package here.                                  3-5 turns
+WP10 Platform proof: native + Android (4 ABIs, portrait) + web build
+     of the new example; shots per policy; skinning and controller
+     frame-time numbers in BENCH_REPORT.md; ASan/UBSan and TSan trees
+     green; CI green.                                       2-3 turns
+WP11 Feel: animation state tuning, root motion vs in-place, foot
+     sliding, turn-in-place, camera weight.                 2-3 turns
+
+TOTAL 20-29 turns; plan around 24. With WP4: 22-32.
+CRITICAL PATH to "animated character walks a Blender-authored 3D level
+with a third-person camera": WP0 -> WP1 -> WP3 -> WP5 -> WP7 = 10-13
+turns; 12-15 to the first playable slice of WP9.
+SEQUENCING: WP1/WP3 do not touch render.c or text.c, so they can run
+concurrently with the frame-independence campaign. WP4 cannot.
+
+=====================================================================
+RISKS, AND THE SPIKE THAT RETIRES THE BIGGEST ONE
+=====================================================================
+R1 Assimp glTF skin/animation fidelity (highest risk, earliest test).
+   Bone naming, inverse bind matrices, extra exporter nodes, Blender's
+   Y-up conversion and quaternion key interpolation are all places a
+   baker silently produces wrong poses. SPIKE, as the first task of
+   WP1: export a minimal Blender character (2-3 bones, one 10-frame
+   clip) to glb, bake it, and print bone count, parent indices,
+   inverse bind matrices and key counts; compare against Blender's own
+   values. One turn, and it either validates the whole approach or
+   moves the problem into the open before any runtime code exists.
+R2 Iteration latency from bake-only. Mitigations in decision 1; the
+   measured bake+rebuild time is recorded here when known.
+R3 Generated-code volume: clips can emit large arrays. Quantize
+   (16-bit positions/quaternions), strip redundant keys, keep output in
+   generated/ (font_atlas_dsdf.c already sets the precedent at ~125k
+   lines). Watch compile time of that TU.
+R4 Sandbox rollbacks (~0.5-1 turn each, 18+ so far). Everything lands
+   pushed and API-verified; the baker fixture and generated output are
+   in the repo, so a rollback costs a rebuild, not the work.
+R5 Contention with the frame-independence campaign in render.c/text.c.
+   Avoided by decisions 3 and 5; WP4 is the only package that must
+   wait.
+
+=====================================================================
+OUT OF SCOPE (this campaign)
+=====================================================================
+Rigid-body solver / physics engine (reverses physics.txt v0).
+Runtime glTF parsing (decision 1). Live .blend loading. A Blender
+addon. GPU skinning before it is measured. Level streaming/chunking.
+Facial animation, IK, cloth, ragdoll. Multiple characters on screen as
+a performance target (one animated character is the requirement; more
+is a later measurement). glTF materials beyond what the LIT pass
+already supports (dir + point + ambient, shadow receive) - no PBR
+until the puzzle game needs it and says so with a number.
+
+CHECKLIST (this phase)
+  [ ] WP1 fidelity spike passed: bone/clip data matches Blender's
+  [ ] Baker emits scene + skeleton + clips + colliders + markers, and
+      CI re-bakes the fixture to the committed bytes
+  [ ] A checked-in Blender-authored level loads and renders lit with
+      shadows on desktop
+  [ ] Character plays an animation, skinned, at a measured frame cost
+      recorded in BENCH_REPORT.md
+  [ ] Character walks, turns, steps up, slides on slopes, third-person
+      camera occludes correctly
+  [ ] One puzzle is playable end to end: trigger -> event -> objective
+      -> win state, with dialogue and HUD
+  [ ] ctest green (32 + new suites), ASan/UBSan and TSan green
+  [ ] Android (4 ABIs) and web builds of the game exist and run
+  [ ] docs/: skeleton.txt, animation.txt, scene.txt written; README
+      index and choices current; every new public header has a spec

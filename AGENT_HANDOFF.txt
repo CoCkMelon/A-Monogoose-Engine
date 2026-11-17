@@ -148,9 +148,16 @@ NOT DONE / NEXT ACTIONS (in order)
 5. libfyaml vendoring + dialogue/save/settings modules (specs in docs/;
    NOT part of the first game slice).
 6. tools/assimp importer -> cooked model loader (levels.txt).
-   OWNER-DEPRIORITIZED 2026-11-11 (with glTF + remote branch GC):
-   "irrelevant on the way of making game engine compared to other
-   tasks" - do NOT pick these up before the engine-core items above.
+   DEPRIORITIZED 2026-11-11 (recorded, together with glTF import and
+   remote branch GC) on the ground that it was irrelevant to the
+   engine-core items above. REVIVED 2026-11-18 for campaign F on a new
+   measured ground: a skinned animated character authored in Blender
+   cannot come through OBJ (no skeleton, skin weights or clips), and
+   the B-rewrite has ZERO skeleton/anim/gltf/scene files to donate.
+   Path: BAKE-ONLY (no runtime parser), kinematic character motion on
+   the existing geometry module, CPU skinning first. Plan, work
+   packages and budget (20-29 turns, critical path 10-13):
+   docs/plan-3d-puzzle.txt.
 7. audio occlusion raytracer port from A-Mongoose (audio.txt, later stage).
 8. DONE 2026-11-12: CI job `drift` + tools/ci_drift_check.sh enforce the
    agents.txt convention (include/ame/*.h touched -> docs/ must be
@@ -1376,3 +1383,52 @@ SESSION 2026-11-17: coordinate spaces + app-declared step policy
      wall Y s" - the cheapest way to see the gate working.
    Tests: tests/test_time.c (77 checks: due steps, gate, pause, scale,
    variable, drift, determinism). ctest 32/32 (normal, ASan/UBSan, TSan).
+
+=====================================================================
+CAMPAIGN F (2026-11-18): 3D third-person puzzle game - plan recorded
+=====================================================================
+Requirement: a 3D engine for a third-person puzzle game with an
+animated human character and scenes authored in Blender.
+Decisions locked, with grounds, in docs/plan-3d-puzzle.txt:
+- glTF/glb SOURCE, BAKE-ONLY path. levels.txt already forbids Assimp
+  in the game binary and already names glTF/bake as the cue when a
+  level needs materials, animation or a scene graph, so bake-only is
+  the recorded spec rather than a new deviation. Cost is iteration
+  latency; bounded by a one-command re-bake plus the existing runtime
+  OBJ path for STATIC geometry.
+- KINEMATIC character motion on trunk's 789-line geometry module
+  (capsule sweep, move-and-slide, ground probe, step-up, slope limit).
+  physics.txt v0 is geometry-only with actors moving themselves; the
+  B-rewrite's phys (497 lines) is 2D biscuit VEHICLE code and is not a
+  donor for this.
+- CPU SKINNING first, writing plain ame_mesh_vert into a scratch
+  buffer that rp_push_mesh already takes: render.c, mesh.h and the
+  shaders stay untouched, which also de-conflicts this campaign from
+  the frame-independence work currently editing render.c and text.c.
+  GPU skinning is deferred until a measurement demands it (+2-3 turns).
+- Baked output checked into generated/ (the font_atlas pattern) so a
+  normal build needs no libassimp; CI already installs libassimp-dev
+  5.4.3, so CI can re-bake a fixture and diff it (reproducibility gate).
+- Skin joints/weights as PARALLEL const arrays; ame_mesh_vert stays
+  float[8] (shared by obj, assimp2c and rp_push_mesh).
+Measured gap: no gltf/scene/node/skeleton/anim/skin module exists on
+trunk or on any of the three attempts; tools/assimp2c is 95 lines and
+emits one mesh's pos/nrm/uv + indices.
+Budget: 20-29 turns, plan around 24 (22-32 if GPU skinning is needed).
+Critical path WP0 specs -> WP1 baker -> WP3 skeleton/anim -> WP5
+controller -> WP7 camera = 10-13 turns; 12-15 to the first playable
+slice. WP1's FIRST TASK is the Assimp glTF skin/anim fidelity spike
+(2-3 bone Blender fixture; compare bone count, parents, inverse bind
+matrices and key counts against Blender's own values) - it retires the
+largest risk in about one turn.
+Also corrected in the same commit: docs/README.txt still described
+saves and settings as YAML after the 2026-11-14 TOML decision, still
+claimed "NO runtime scene graph", and its file index was missing
+coords.txt, coords-analysis.txt, errors.txt, state-audit.txt and
+texture-files.txt.
+OPEN SPEC GAP found while measuring: include/ame/time.h (ame_time_init
+/ configure / set_scale / plan / commit, unscaled clocks) has NO
+docs/time.txt - loop.txt only name-drops ame_time_seconds(). The drift
+gate passed because SOME docs path changed, not because each new public
+header has a spec file; extending tools/ci_drift_check.sh to require a
+spec per added header would catch this class mechanically.

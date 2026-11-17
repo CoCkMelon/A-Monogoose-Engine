@@ -41,13 +41,20 @@ CHOICES MADE (fixed - change here only if you must)
              tile_row_down for Tiled ingest; ONE conversion header,
              spaces named in every function (coords.txt).
   Levels:    static geometry + markers + code that spawns actors.
-             NO runtime scene graph, NO fancy scene YAML.
+             NO fancy scene YAML at runtime. For 3D content authored
+             in Blender there IS a scene graph, but a BAKED one:
+             glTF/glb is the source, the host baker cooks nodes,
+             meshes, skeleton, skin weights and clips to checked-in
+             C, and the game binary carries no parser
+             (plan-3d-puzzle.txt).
   Dialogue:  tight YAML, parsed at runtime with libfyaml (a vendored
              C YAML 1.2 parser). Optional bake-to-C for embedded/web.
-  Save/load: game progress saved/loaded as YAML via libfyaml.
-  Settings:  full settings screen is DATA (YAML) authored by an AI
-             agent and rendered procedurally; libfyaml at runtime.
-             See settings.txt.
+  Save/load: game progress saved/loaded as TOML (2026-11-14 format
+             decision): emit is a plain fprintf writer, parse is a
+             vendored single-file TOML reader. See save.txt.
+  Settings:  full settings screen is DATA (TOML, per the 2026-11-14
+             format decision) authored by an agent and rendered
+             procedurally. See settings.txt.
   Content:   things you edit a lot are either loaded via libfyaml
              (dialogue, saves, settings definitions) or turned into C
              at build time.
@@ -121,9 +128,10 @@ IMPLEMENTATION STAGES (roadmap; later stages add advanced features)
     that rotate), text via a font-to-texture GLYPH ATLAS baked at
     build time (DSDF optional), in-scene single-pass UI + billboards,
     audio basics, assets folder or #embed, deterministic per-binary
-    turn/game logic. NOTE: dialogue / save-load / settings-YAML and
-    libfyaml are NOT part of the first game slice (deferred; the game
-    needs none of them). Networking is NOT in this stage's exit.
+    turn/game logic. NOTE: dialogue (YAML/libfyaml), save-load and
+    settings (both TOML) are NOT part of the first game slice
+    (deferred; the game needs none of them). Networking is NOT in this
+    stage's exit.
     EXIT: local Memory game playable (two alternating players, open
     two cards each with 3D flip, matched pairs counted, most matches
     wins, replay with a fixed seed is deterministic); the single-pass
@@ -223,13 +231,21 @@ FILES IN THIS FOLDER
   events.txt       discrete gameplay events (overlap-edge + deferred
                    queue)
   ui.txt           UI scope (in-scene mesh, single-pass)
-  settings.txt     data-driven Settings (procedural, AI-authored YAML)
+  settings.txt     data-driven Settings (procedural, TOML definitions)
   dialogue.txt     dialogue (tight YAML, libfyaml runtime)
-  save.txt         save/load games (YAML via libfyaml)
+  save.txt         save/load games (TOML; fprintf writer + vendored
+                   single-file reader)
   deploy.txt       distribution per target (POSIX/Windows/Android/web;
                    assets folder or embed; static libs)
   build.txt        build + tests (GitHub Actions cross-platform CI)
   agents.txt       rules for whoever edits this
+  coords.txt       the coordinate spaces, and where the one flip lives
+  coords-analysis.txtcoords-analysis.txt
+  errors.txt       errors.txt
+  state-audit.txt  module-level hidden state, measured 2026-11-17
+  texture-files.txtfiles.txt
+  plan-3d-puzzle.txt campaign F: 3D third-person puzzle game (glTF
+                   bake-only, kinematic controller, CPU skinning)
   reference/       source documents the specs derive from + CI notes:
                    settings-taxonomy-2d3d.txt,
                    sdl3-fast-build-recipe.txt (headless SDL3 for CI)
