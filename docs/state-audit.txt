@@ -148,6 +148,37 @@ THE INVENTORY
    override that is active at startup, the way the loop line already does
    for "[QA override]".
 
+5. [SEV 2] FIXED - ORDER-DEPENDENT SETUP CALLS
+   STATUS: fixed in "setup: calls that cannot take effect now fail loudly".
+   Enforced where a late call is actually harmful, and documented with the
+   reason where it is not - a blanket phase check would refuse sequences that
+   work.
+     ENFORCED
+       rp_set_gl_loader after rp_init -> AME_ERR_GL_LOADER + a WARN, and the
+         installed loader is kept. The loader is consumed by rp_init, so the
+         late call could only ever have been a silent no-op. Clearing happens
+         in rp_shutdown, which is the supported restart path.
+       in_set_backend replacing or clearing while ANY sensor is enabled ->
+         AME_ERR_INPUT, old backend kept. The enabled sensor holds function
+         pointers into that struct; letting the app swap it is how a disable
+         ends up calling into freed memory.
+       audio_attach_sdl before audio_init -> AME_ERR_NOT_INITIALIZED. The
+         request would have been a 0 Hz stream that SDL refuses, i.e. silence
+         with no diagnostic anywhere.
+     DELIBERATELY NOT ENFORCED (with the reason in the header)
+       ame_fs_set_ops - consulted PER CALL (fs.c rebuilds the search list), so
+         a late install legitimately changes the next lookup. A phase check
+         would break a working sequence.
+       ame_prefab_reset - there is no phase to violate; keys are borrowed, so
+         resetting between levels IS the contract. Staleness is a lifetime
+         rule, which the header now states.
+   Tests: test_render "late rp_set_gl_loader is refused, rendering
+   unaffected" (and the frame still draws), test_input "backend cannot be
+   swapped while a sensor is enabled" (refused while live, allowed after
+   disable, both for swap and clear), test_audio "attach before init is
+   refused with a diagnostic".
+   Original finding follows.
+
 5. [SEV 2] ORDER-DEPENDENT SETUP CALLS
    rp_set_gl_loader "call before rp_init" (render.h:58);
    in_set_backend / ame_fs_set_ops / audio_attach_sdl are install-once

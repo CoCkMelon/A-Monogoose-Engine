@@ -1327,6 +1327,26 @@ int main(void) {
         UT_OK();
     }
 
+    UT_CASE("late rp_set_gl_loader is refused, rendering unaffected");
+    {
+        /* state-audit.txt #5: the loader is consumed by rp_init, so a call
+         * afterwards could only be a no-op - it was accepted silently. */
+        ame_clear_error();
+        rp_set_gl_loader(egl_proc);
+        UT_ASSERTF(ame_last_error_code() == AME_ERR_GL_LOADER,
+                   "late loader install was accepted (err=%s)",
+                   ame_error_name(ame_last_error_code()));
+        /* and the renderer still has its resolved entry points: a frame
+         * draws normally after the refused install */
+        rp_begin_frame();
+        push_test_quad();
+        rp_end_frame();
+        UT_ASSERTF(rp_quads_last_frame() == 1, "quad not drawn (%d)",
+                   rp_quads_last_frame());
+        UT_ASSERT(rp_draw_calls_last_frame() >= 1);
+        ame_clear_error();
+    }
+
     /* --- frame independence (docs/state-audit.txt #1) --------------------
      * A frame's look must depend on the calls THAT frame makes. Each case
      * leaves render mode state dirty in frame N, then draws frame N+1 with

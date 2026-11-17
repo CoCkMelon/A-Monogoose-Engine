@@ -36,6 +36,11 @@ typedef struct ame_fs_ops {
     int (*asset_to_file)(const char *rel, const char *dst);
 } ame_fs_ops;
 
+/* NULL restores builtin. Legitimately re-callable at ANY time: the ops are
+ * consulted per call (fs.c rebuilds the search list), so installing them late
+ * changes the next lookup, not a cached one. Listed in state-audit.txt #5 as
+ * an install-once hook and left unenforced for that reason - a phase check
+ * here would refuse a sequence that works. */
 void ame_fs_set_ops(const ame_fs_ops *ops); /* NULL restores builtin */
 
 /* Builtin-aware pref dir (ops pref_path, else $AME_PREF_PATH, else "./"). */

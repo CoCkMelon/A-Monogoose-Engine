@@ -6,6 +6,14 @@ Sound that is deterministic, low-latency, and consistent across
 desktop and web. Two source kinds: synthesized (no files needed) and
 decoded samples (opus/wav). One C API for both.
 
+SETUP ORDER
+audio_init(rate, channels) FIRST, then audio_attach_sdl(). Attaching before
+init is refused with AME_ERR_NOT_INITIALIZED: the mixer has no rate or channel
+count yet, so the device request would be a 0 Hz stream that SDL rejects - the
+app would run silent with no diagnostic (state-audit.txt #5). A failed OPEN
+after init is different and stays a silent no-op (CI has no device): mixing
+state remains usable and deterministic.
+
 RULES
 1. ONE implementation in C. Web gets the same C via Emscripten.
    NO TypeScript or Web Audio re-implementation. (A past attempt had

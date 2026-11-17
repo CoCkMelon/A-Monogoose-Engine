@@ -128,6 +128,10 @@ static void g_fake_disable(int sensor) { (void)sensor; }
 static const ame_input_backend g_fake_backend = {
     .enable = g_fake_enable, .disable = g_fake_disable,
 };
+/* a second identity: the swap cases must be refused whatever it points at */
+static const ame_input_backend g_other_backend = {
+    .enable = g_fake_enable, .disable = g_fake_disable,
+};
 
 static int utest_devices_tail(void) {
     UT_CASE("registry: keyboard+mouse always present, add/remove pad");
@@ -208,9 +212,27 @@ static int utest_devices_tail(void) {
     UT_ASSERT(in_sensor_get(AME_SENSOR_ACCEL, out, &ts));
     UT_ASSERT(out[1] < -9.7f && out[1] > -9.9f && ts == 1234567ull);
     UT_ASSERT(!in_sensor_get(AME_SENSOR_GYRO, out, &ts)); /* not enabled */
+    /* swapping the backend out from under a live sensor is the crash the
+     * audit's "install-once" note was about: the enabled sensor would call
+     * into a struct the app may already have freed */
+    UT_CASE("backend cannot be swapped while a sensor is enabled");
+    ame_clear_error();
+    in_set_backend(&g_other_backend);
+    UT_ASSERTF(ame_last_error_code() == AME_ERR_INPUT,
+               "swap under a live sensor was accepted (err=%s)",
+               ame_error_name(ame_last_error_code()));
+    UT_ASSERT(g_fake_enable_called); /* the old backend is still in place */
+    in_set_backend(NULL);            /* same rule for clearing it */
+    UT_ASSERT(ame_last_error_code() == AME_ERR_INPUT);
+
     in_sensor_disable(AME_SENSOR_ACCEL);
     UT_ASSERT(!in_sensor_enabled(AME_SENSOR_ACCEL));
     UT_ASSERT(!in_sensor_get(AME_SENSOR_ACCEL, out, &ts));
+    /* with nothing enabled the backend may be replaced or cleared */
+    ame_clear_error();
+    in_set_backend(&g_other_backend);
+    UT_ASSERT(ame_last_error_code() == AME_ERR_OK);
+    in_set_backend(&g_fake_backend);
     UT_CASE("dpad buttons bind like face buttons");
     in_reset();
     UT_ASSERT(in_bind_gamepad(AME_ACT_LEFT, 0, AME_GP_DPAD_LEFT));

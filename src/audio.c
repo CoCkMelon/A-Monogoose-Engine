@@ -103,6 +103,16 @@ static void au_sdl_callback(void *userdata, SDL_AudioStream *stream,
 void audio_attach_sdl(void) {
     if (S.attached)
         return;
+    if (S.rate <= 0 || S.channels <= 0) {
+        /* before audio_init the mixer has no rate/channels, so the stream
+         * request below is 0 Hz and SDL refuses it - the app would run
+         * silent with no diagnostic (state-audit.txt #5). Say which call is
+         * missing instead of failing quietly in the platform layer. */
+        ame_set_error(AME_ERR_NOT_INITIALIZED,
+                      "audio_attach_sdl before audio_init: the mixer has no "
+                      "rate or channel count yet");
+        return;
+    }
     SDL_AudioSpec spec = { .format = SDL_AUDIO_F32, .channels = (int)S.channels,
                            .freq = S.rate };
     S.stream = SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK,

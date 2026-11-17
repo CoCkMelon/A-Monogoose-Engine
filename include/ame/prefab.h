@@ -31,6 +31,11 @@ extern "C" {
 typedef ame_handle (*ame_prefab_fn)(void *user, const char *instance_name,
                                     const float pos[3], float angle);
 
+/* Drops every registered key. Safe at any time by design: the registry holds
+ * borrowed (non-owned) keys, so resetting between levels is the CONTRACT, not
+ * a phase violation - a loader that owns its strings must keep them alive
+ * until the reset. Listed in state-audit.txt #5 and left unenforced because
+ * there is no phase to violate: only staleness, which the docs cover. */
 void ame_prefab_reset(void);
 
 /* 0 on success, -1 on bad args / duplicate key / full registry.

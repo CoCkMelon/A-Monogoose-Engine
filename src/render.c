@@ -90,7 +90,24 @@ AME_GL_FUNCS(AME_GL_DECL)
 #undef AME_GL_DECL
 static ame_gl_getproc_fn g_getproc;
 
+/* Set ONCE, before rp_init: rp_init resolves every GL entry point through
+ * this loader, so a call afterwards changes nothing that is already resolved
+ * - previously it was accepted silently and the app kept whatever it had
+ * (state-audit.txt #5, "documented but unenforced"). Late installs are now
+ * refused loudly; a real context restart installs the loader for the next
+ * init, between rp_shutdown and rp_init. */
+static bool g_loader_consumed;
+
 void rp_set_gl_loader(ame_gl_getproc_fn get_proc) {
+    if (g_loader_consumed) {
+        ame_set_error(AME_ERR_GL_LOADER,
+                      "rp_set_gl_loader after rp_init: the loader is consumed "
+                      "by rp_init - install it before init (or between "
+                      "rp_shutdown and the next rp_init)");
+        ame_log(AME_LOG_WARN,
+                "ame rp: ignored rp_set_gl_loader() after rp_init");
+        return;
+    }
     g_getproc = get_proc;
 }
 
@@ -700,6 +717,8 @@ int rp_init(const ame_rp_desc *desc) {
     }
     if (!load_gl())
         return -2;
+    g_loader_consumed = true; /* the loader has done its job: late calls are
+                               * no longer meaningful until a shutdown */
 
     S.desc = *desc;
     S.desc.gles = desc->gles || gl_is_es();
@@ -853,6 +872,8 @@ void rp_shutdown(void) {
     if (S.post_vao) glDeleteVertexArrays(1, &S.post_vao);
     rp_free_batch();
     memset(&S, 0, sizeof S);
+    g_loader_consumed = false; /* a new loader may be installed for the next
+                                * init: this is the supported restart path */
 }
 
 void rp_viewport(int w, int h) {

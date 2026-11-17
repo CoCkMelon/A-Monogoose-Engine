@@ -44,6 +44,20 @@ static uint32_t render_schedule_hash(void) {
 int main(void) {
     printf("=== test_audio ===\n");
 
+    UT_CASE("attach before init is refused with a diagnostic");
+    {
+        /* state-audit.txt #5: before this, audio_attach_sdl() before
+         * audio_init() built a 0 Hz stream request, SDL refused it, and the
+         * app ran silent with no error anywhere - a "documented setup order"
+         * that failed quietly. */
+        audio_shutdown(); /* known state: nothing initialised */
+        ame_clear_error();
+        audio_attach_sdl();
+        UT_ASSERTF(ame_last_error_code() == AME_ERR_NOT_INITIALIZED,
+                   "attach before init was accepted (err=%s)",
+                   ame_error_name(ame_last_error_code()));
+    }
+
     UT_CASE("deterministic mix (golden hash)");
     uint32_t h1 = render_schedule_hash();
     printf("    hash = 0x%08x\n", h1);

@@ -43,6 +43,13 @@ ARCHITECTURE - PASSES (v1: multipass, decided - see note after rule 5)
   from its own code (state-audit.txt #1: before this, a frame's look
   depended on the frames before it).
 
+SETUP ORDER IS ENFORCED, NOT JUST DOCUMENTED
+  rp_set_gl_loader() must come before rp_init(): init resolves every GL
+  entry point through the loader, so a later call cannot take effect and
+  is REFUSED (AME_ERR_GL_LOADER) instead of being silently ignored. The
+  supported restart path is rp_shutdown -> rp_set_gl_loader -> rp_init
+  (shutdown clears the mark). state-audit.txt #5.
+
 SHADERS - SEPARATE MODULAR FILES
   GLSL lives in shaders/*.glsl - one small module per file
   (textured.vert/frag, lit.vert/frag, dsdf.vert/frag,

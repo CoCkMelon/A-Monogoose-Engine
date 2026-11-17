@@ -179,6 +179,10 @@ typedef struct {
     void (*disable)(int sensor);
     bool (*rumble)(int slot, float low, float high, int duration_ms);
 } ame_input_backend;
+/* NULL clears. The backend is called INTO by enabled sensors, so it may not
+ * be replaced or cleared while any sensor is enabled: that call fails with
+ * AME_ERR_INPUT and the old backend stays installed (disable sensors first).
+ * Replacing it with nothing enabled is always fine (state-audit.txt #5). */
 void in_set_backend(const ame_input_backend *ops); /* NULL clears */
 bool in_sensor_enable(int sensor);  /* false: no backend or no hardware */
 void in_sensor_disable(int sensor);

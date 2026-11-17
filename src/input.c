@@ -670,7 +670,24 @@ bool in_bind_gamepad_axis(int action, int slot, int axis, float threshold) {
 
 /* --- motion sensors --------------------------------------------------------- */
 
+/* Install-once semantics in the only place it matters: the sensor hooks call
+ * INTO this struct's function pointers, so replacing (or clearing) it while a
+ * sensor is enabled leaves that sensor pointing at a backend the app may
+ * already have freed - the crash arrives in in_sensor_disable(), far from the
+ * call that caused it. Replacing with nothing enabled, or clearing after
+ * disabling, stays legal (state-audit.txt #5). */
 void in_set_backend(const ame_input_backend *ops) {
+    if (ops != g_backend) {
+        for (int s = 0; s < AME_SENSOR_COUNT; s++) {
+            if (atomic_load_explicit(&S.sens_on[s], memory_order_acquire)) {
+                ame_set_errorf(AME_ERR_INPUT,
+                               "in_set_backend while sensor %d is enabled: "
+                               "disable sensors before replacing the backend",
+                               s);
+                return;
+            }
+        }
+    }
     g_backend = ops;
 }
 

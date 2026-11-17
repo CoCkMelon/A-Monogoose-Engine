@@ -186,7 +186,10 @@ DEVICES (2026-11-13: device abstraction)
 
   Motion sensors: in_sensor_enable(AME_SENSOR_ACCEL|AME_SENSOR_GYRO)
   asks the registered backend (in_set_backend) to open the hardware;
-  false when absent. in_sensor_get(sensor, out[3], &ts_us) returns the
+  false when absent. An ENABLED sensor holds function pointers into the
+  backend struct, so in_set_backend() refuses (AME_ERR_INPUT) to replace
+  or clear the backend while any sensor is enabled - disable first
+  (state-audit.txt #5). in_sensor_get(sensor, out[3], &ts_us) returns the
   latest sample in SDL units (accel m/s^2, gyro rad/s) + timestamp us.
   in_on_sensor() is the backend write surface. Compass/magnetometer
   and proximity are NOT in SDL3 - a platform shim would add kinds later.

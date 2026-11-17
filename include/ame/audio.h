@@ -74,7 +74,10 @@ void audio_init(int sample_rate, int channels);
 void audio_shutdown(void);
 
 /* Attach to a real SDL audio device (engine app calls this on desktop).
- * Safe no-op when audio can't open (CI) — mixing state still usable. */
+ * Safe no-op when audio can't open (CI) — mixing state still usable.
+ * Requires audio_init() FIRST: without a rate/channels the device request is
+ * meaningless, so the call is refused with AME_ERR_NOT_INITIALIZED instead of
+ * failing silently in SDL (state-audit.txt #5). */
 void audio_attach_sdl(void);
 void audio_detach_sdl(void);
 

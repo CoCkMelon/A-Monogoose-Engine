@@ -55,7 +55,11 @@ ame_rp_desc *rp_desc_size(ame_rp_desc *d, int w, int h);
 ame_rp_desc *rp_desc_camera(ame_rp_desc *d, const ame_camera *cam);
 
 typedef void *(*ame_gl_getproc_fn)(const char *name);
-void rp_set_gl_loader(ame_gl_getproc_fn get_proc); /* call before rp_init */
+/* call before rp_init. rp_init resolves every GL entry point through this
+ * loader, so installing it later cannot take effect: that call is REFUSED
+ * with AME_ERR_GL_LOADER and the installed loader is kept (a context restart
+ * installs the new one between rp_shutdown and the next rp_init). */
+void rp_set_gl_loader(ame_gl_getproc_fn get_proc);
 
 /* returns 0 on success. Creates the default textured pass (handle 0). */
 int  rp_init(const ame_rp_desc *desc);
