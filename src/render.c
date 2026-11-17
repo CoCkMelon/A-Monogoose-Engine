@@ -1226,6 +1226,23 @@ void rp_shadow_off(void) { S.shadow_on = false; }
 /* --- frame ------------------------------------------------------------------- */
 
 void rp_begin_frame(void) {
+    /* FRAME-INDEPENDENT MODE STATE (docs/state-audit.txt #1).
+     * The pass selection and the per-push stamps are frame state, not
+     * process state: rp_init sets them once, but a frame must not inherit
+     * what the PREVIOUS frame happened to leave behind. Before this reset,
+     * a frame that ended inside a custom pass started the next one there,
+     * and a frame that ended with rp_set_lit(1) made every push in the next
+     * frame lit - so what a frame looked like depended on the frames before
+     * it, and no capture was reproducible from that frame's own code.
+     * Five stores per frame; the documented defaults are now enforced
+     * rather than merely described. Tests: test_render, "frame
+     * independence" cases. */
+    S.cur_pass = 0;
+    S.stamp_lit = 0.0f;
+    S.stamp_nrm[0] = 0.0f;
+    S.stamp_nrm[1] = 0.0f;
+    S.stamp_nrm[2] = 1.0f;
+
     S.batch.quad_count = 0;
     S.draws = 0;
     S.quads = 0;

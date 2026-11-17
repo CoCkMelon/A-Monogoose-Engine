@@ -16,7 +16,22 @@ HOW TO READ IT
 
 THE INVENTORY
 
-1. [SEV 1] RENDER MODE STICKS ACROSS FRAMES
+1. [SEV 1] FIXED - RENDER MODE STICKS ACROSS FRAMES
+   STATUS: fixed in "render: pass selection and lighting stamps are frame
+   state". rp_begin_frame now resets cur_pass = 0, stamp_lit = 0,
+   stamp_nrm = (0,0,1) (5 stores). Two regression cases in test_render
+   ("frame independence: ...") each leave the state dirty in frame N and
+   assert frame N+1 is byte-identical to a clean reference - both failed
+   before the reset and pass after. Golden proof: 5 example captures
+   (memory_game, tilemap_render, text_editor, audio_pan, raymarch_arcade)
+   are PIXEL-IDENTICAL before and after the change, because every app in
+   the tree already paired its calls; the reset turned that coincidence
+   into a guarantee. Files that relied on the old persistence were
+   corrected to select their pass inside the frame (test_render's DSDF
+   case). See also docs/render.txt "rp_pass_begin".
+   Original finding follows.
+
+
    src/render.c: `S.stamp_lit` (1593), `S.stamp_nrm` (1613), `S.cur_pass`
    (685). All are reset ONCE in rp_init (711-721) and NEVER in
    rp_begin_frame, which only clears batch counters and draws.

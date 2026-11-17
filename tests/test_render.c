@@ -138,6 +138,27 @@ static uint32_t hash_frame(void) {
     return ame_fnv1a(2166136261u, px, sizeof px);
 }
 
+/* first differing byte of two readbacks (-1 = identical). Byte equality is
+ * the right comparison here: the frame-independence cases ask "is the SAME
+ * frame drawn", not "is it close", and a one-store reset must be exact. */
+static int first_diff(const uint8_t *a, const uint8_t *b, size_t n) {
+    for (size_t i = 0; i < n; i++)
+        if (a[i] != b[i])
+            return (int)i;
+    return -1;
+}
+
+/* one opaque white quad in screen px (ortho camera space), 40..120 x
+ * 40..100: big enough that a shading change moves thousands of pixels */
+static void push_test_quad(void) {
+    rp_push_quad(&(ame_rp_quad){
+        .tex = rp_white_texture(),
+        .p0 = { 40, 40, 0 }, .p1 = { 120, 40, 0 },
+        .p2 = { 120, 100, 0 }, .p3 = { 40, 100, 0 },
+        .u0 = 0, .v0 = 0, .u1 = 1, .v1 = 1,
+        .tint = { 1, 1, 1, 1 }, .layer = 0 });
+}
+
 /* PNG writer via stb_image_write (external, this one test TU) */
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include <stb_image_write.h>
@@ -618,13 +639,17 @@ int main(void) {
             text_set_font(AME_FONT_DSDF);
             UT_ASSERT(text_font_mode() == AME_FONT_DSDF);
             ame_rp_pass_frame dsdf = { dsdf_pass };
-            rp_pass_begin(&dsdf);
             rp_set_camera(&cam3); /* world pose needs the 3D camera */
+            /* pass selection is FRAME state (state-audit.txt #1): selecting
+             * it before rp_begin_frame would be silently discarded, and the
+             * case would then prove nothing about the DSDF program */
             rp_begin_frame();
+            rp_pass_begin(&dsdf);
             rp_end_frame();
             rp_read_pixels(px, W, H);
             long bg3_r = px[0];
             rp_begin_frame();
+            rp_pass_begin(&dsdf);
             text_draw_world(&lg, pose2, white, 20);
             rp_end_frame();
             uint32_t hd3 = hash_frame();
@@ -654,6 +679,7 @@ int main(void) {
             UT_ASSERTF(aa3 > 40, "dsdf pass: no AA band (%d px)", aa3);
             UT_ASSERTF(ink3 > 300, "dsdf pass: too little ink (%d)", ink3);
             rp_begin_frame();
+            rp_pass_begin(&dsdf);
             text_draw_world(&lg, pose2, white, 20);
             rp_end_frame();
             UT_ASSERT(hash_frame() == hd3);
@@ -1304,6 +1330,144 @@ int main(void) {
         ame_debug_watch_clear();
         UT_OK();
     }
+
+    /* --- frame independence (docs/state-audit.txt #1) --------------------
+     * A frame's look must depend on the calls THAT frame makes. Each case
+     * leaves render mode state dirty in frame N, then draws frame N+1 with
+     * only the calls it actually makes; N+1 must be byte-identical to the
+     * reference frame that never had the dirty state. Before rp_begin_frame
+     * reset the stamps and the pass selection, all three leaked - the frame
+     * a user photographed depended on the frames before it. */
+    UT_CASE("frame independence: lit + normal stamps do not survive a frame");
+    {
+        ame_camera c2;
+        camera_viewport(camera_ortho2d(camera_desc(&c2)), W, H);
+        camera_pos(&c2, (float)W * 0.5f, (float)H * 0.5f, 0);
+        camera_build(&c2);
+        rp_set_camera(&c2);
+        /* a HALF-intensity light that lights ONLY +z faces: travels -z, no
+         * ambient. The documented default normal (0,0,1) then renders at
+         * half tint, a leaked (0,-1,0) renders BLACK, and unlit renders
+         * full tint - the three outcomes are 30k+ pixels apart, so an
+         * equality test cannot pass by rounding */
+        rp_lighting(&(ame_rp_light){ .dir = { 0, 0, -1 },
+                                     .col = { 0.5f, 0.5f, 0.5f },
+                                     .amb = { 0, 0, 0 } });
+        ame_rp_pass_frame lit = { g_lit };
+        static uint8_t ref[W * H * 4], got[W * H * 4];
+
+        /* reference: the unlit look inside the LIT pass (a_lit = 0) */
+        rp_begin_frame();
+        rp_pass_begin(&lit);
+        rp_set_lit(0);
+        push_test_quad();
+        rp_end_frame();
+        rp_read_pixels(ref, W, H);
+
+        /* frame N: leave the lit stamp ON at end of frame */
+        rp_begin_frame();
+        rp_pass_begin(&lit);
+        rp_set_lit(1);
+        push_test_quad();
+        rp_end_frame();
+
+        /* frame N+1: same quad, NO rp_set_lit call in this frame */
+        rp_begin_frame();
+        rp_pass_begin(&lit);
+        push_test_quad();
+        rp_end_frame();
+        rp_read_pixels(got, W, H);
+        int d = first_diff(ref, got, sizeof ref);
+        UT_ASSERTF(d < 0, "lit stamp leaked into the next frame (byte %d)", d);
+
+        /* the case can only fail if lit changes pixels: same quad with the
+         * lit stamp ON must differ from the reference */
+        rp_begin_frame();
+        rp_pass_begin(&lit);
+        rp_set_lit(1);
+        push_test_quad();
+        rp_end_frame();
+        rp_read_pixels(got, W, H);
+        UT_ASSERTF(first_diff(ref, got, sizeof ref) >= 0,
+                   "lit pass ignores the lit stamp - case cannot fail");
+
+        /* --- normal stamp: frame N stamps a side normal, frame N+1 lights
+         * the quad without stamping and must use the default (0,0,1) --- */
+        rp_begin_frame();
+        rp_pass_begin(&lit);
+        rp_set_lit(1);
+        rp_set_normal((float[3]){ 0, -1, 0 });
+        push_test_quad();
+        rp_end_frame();
+
+        rp_begin_frame();
+        rp_pass_begin(&lit);
+        rp_set_lit(1);
+        rp_set_normal((float[3]){ 0, 0, 1 }); /* the default, spelled out */
+        push_test_quad();
+        rp_end_frame();
+        rp_read_pixels(ref, W, H);
+
+        rp_begin_frame();
+        rp_pass_begin(&lit);
+        rp_set_lit(1);
+        push_test_quad(); /* no rp_set_normal in this frame */
+        rp_end_frame();
+        rp_read_pixels(got, W, H);
+        d = first_diff(ref, got, sizeof ref);
+        UT_ASSERTF(d < 0, "normal stamp leaked into the next frame (byte %d)",
+                   d);
+        rp_lighting_off();
+        rp_set_camera(&cam3); /* the cases above expect the 3D camera back */
+        UT_OK();
+    }
+
+    UT_CASE("frame independence: pass selection does not survive a frame");
+    {
+        /* An app that ended its frame inside a DSDF pass used to start the
+         * next frame pushing there: its text rendered through the DSDF
+         * program. Text quads carry the DSDF marker, so a leaked selection
+         * reconstructs glyphs through the wrong shader - a visible change,
+         * not just a mis-bucketing. */
+        ame_rp_pass_desc dsdfd = { .kind = AME_RP_PASS_DSDF };
+        int dsdf_pass = rp_pass_create(&dsdfd);
+        UT_ASSERTF(dsdf_pass >= 0, "DSDF pass creation failed");
+        UT_ASSERT(text_init_dsdf() >= 0);
+
+        ame_camera c2;
+        camera_viewport(camera_ortho2d(camera_desc(&c2)), W, H);
+        camera_pos(&c2, (float)W * 0.5f, (float)H * 0.5f, 0);
+        camera_build(&c2);
+        rp_set_camera(&c2);
+
+        static uint8_t ref[W * H * 4], got[W * H * 4];
+        ame_rp_pass_frame dsel = { dsdf_pass };
+        static const float wt[4] = { 1, 1, 1, 1 };
+
+        /* reference: text in the default pass, selected explicitly */
+        rp_begin_frame();
+        rp_pass_begin(&(ame_rp_pass_frame){ 0 });
+        text_draw_screen(&hello, 20, 20, wt, 0);
+        rp_end_frame();
+        rp_read_pixels(ref, W, H);
+
+        /* frame N: end the frame inside the DSDF pass, drawing nothing */
+        rp_begin_frame();
+        rp_pass_begin(&dsel);
+        rp_end_frame();
+
+        /* frame N+1: text, with NO rp_pass_begin call of its own */
+        rp_begin_frame();
+        text_draw_screen(&hello, 20, 20, wt, 0);
+        rp_end_frame();
+        rp_read_pixels(got, W, H);
+        int d = first_diff(ref, got, sizeof ref);
+        UT_ASSERTF(d < 0,
+                   "pass selection leaked into the next frame (byte %d)", d);
+        rp_set_camera(&cam3);
+        UT_OK();
+    }
+
     rp_shutdown();
     eglMakeCurrent(dpy, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
     eglDestroyContext(dpy, ctx);

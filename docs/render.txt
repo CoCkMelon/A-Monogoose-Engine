@@ -27,9 +27,21 @@ ARCHITECTURE - PASSES (v1: multipass, decided - see note after rule 5)
       while a DSDF pass is current decode the DSDF atlas per pixel.
   rp_pass_create(&desc) creates a pass and returns its id;
   rp_pass_begin(&frame) makes a pass current; every push targets the
-  current pass. The current pass persists across frames (no implicit
-  reset). Passes are a setup-layer choice (principles): the app
-  creates the passes it needs at init, then draws.
+  current pass. The current pass is FRAME state: rp_begin_frame resets
+  it to pass 0, so a frame that ends inside a custom pass does not make
+  the next frame draw there. Select the pass INSIDE the frame, after
+  rp_begin_frame - that is the only ordering that means anything.
+  Passes are a setup-layer choice (principles): the app creates the
+  passes it needs at init, then selects per frame and draws.
+
+  The same rule covers the per-push stamps: rp_begin_frame resets the
+  lit flag to 0 and the stamped normal to (0,0,1). Lit and normal are
+  therefore scoped to a frame BY THE ENGINE, not by the caller's
+  discipline: "geometry is lit only when pushed between rp_set_lit(1)
+  and rp_set_lit(0)" is now enforced rather than described. Cost is
+  five stores per frame; the benefit is that a frame is reproducible
+  from its own code (state-audit.txt #1: before this, a frame's look
+  depended on the frames before it).
 
 SHADERS - SEPARATE MODULAR FILES
   GLSL lives in shaders/*.glsl - one small module per file

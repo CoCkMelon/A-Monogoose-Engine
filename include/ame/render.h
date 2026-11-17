@@ -111,7 +111,11 @@ typedef struct {
 void rp_pass_begin(const ame_rp_pass_frame *sel);
 
 /* --- hot: one frame --------------------------------------------------------
- * rp_begin_frame: clear, reset the batch.
+ * rp_begin_frame: clear, reset the batch, and RESET THE FRAME MODE STATE:
+ * the current pass goes back to pass 0, the lit stamp to 0, the stamped
+ * normal to (0,0,1). Those are per-frame, so a frame is reproducible from
+ * its own calls - select passes and set lit/normal INSIDE the frame, after
+ * rp_begin_frame (state-audit.txt #1).
  * push sprites/quads into the current pass (z/layer order stable within
  * a texture page, per pass).
  * rp_end_frame: upload once, draw every pass in draw order (ranges grouped
