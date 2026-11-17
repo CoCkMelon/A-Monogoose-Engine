@@ -90,8 +90,14 @@ static int byte_at_glyph(const ed_geom *g, int line, int col) {
  * x~0: the caret at any non-final line's end jumped to the left
  * margin (the "too left" bug), and hit-tests past a line's end read
  * garbage positions. */
+/* THE EDITOR'S FACE, chosen once at startup and passed to every layout and
+ * draw by name (text.h: the face is an argument, not a mode). One variable
+ * the app owns, read at each call site - not engine state that a draw
+ * elsewhere can change. */
+static int g_face = AME_FONT_PIXEL;
+
 static void geom_rebuild(ed_geom *g, char *text, int len) {
-    g->line_h = text_line_h();
+    g->line_h = text_line_h(g_face);
     g->line_count = 0;
     int start = 0;
     for (int i = 0; i <= len && g->line_count < MAX_LINES; i++) {
@@ -100,7 +106,7 @@ static void geom_rebuild(ed_geom *g, char *text, int len) {
             text[i] = '\0';
             g->line_of[g->line_count] = start;
             text_layout_plain(text + start, 0.0f, AME_TEXT_ALIGN_L,
-                               1.0f, &g->lay[g->line_count]);
+                               1.0f, g_face, &g->lay[g->line_count]);
             text[i] = saved;
             g->line_count++;
             start = i + 1;
@@ -267,10 +273,15 @@ int app_init(void) {
         printf("text_editor: font atlas unavailable\n");
         return 1;
     }
-    /* AME_ED_SMOOTH=1: the DSDF smooth face (DejaVu) - anti-aliased at
-     * any scale, same grid contract, carets still land on the pen grid */
-    if (getenv("AME_ED_SMOOTH") && text_init_dsdf() >= 0)
-        text_set_font(AME_FONT_SMOOTH);
+    /* AME_ED_SMOOTH=1: the SMOOTH face (DejaVu hires coverage) -
+     * anti-aliased at any scale, same grid contract, carets still land on
+     * the pen grid. This used to call text_init_dsdf() and then request
+     * AME_FONT_SMOOTH: the hires atlas was never uploaded, so the request
+     * fell back to PIXEL and the knob did nothing at all. The face is now
+     * named at every call, and the atlas that face needs is the one
+     * uploaded - the knob actually switches the render. */
+    if (getenv("AME_ED_SMOOTH") && text_init_hires() >= 0)
+        g_face = text_face_resolve(AME_FONT_SMOOTH);
     strcpy(buf,
            "ame-next text editor\n"
            "port of A-Monogoose text_editor\n"
@@ -495,7 +506,7 @@ int app_render(void) {
     float white[4] = { 0.9f, 0.9f, 0.92f, 1 };
     for (int l = 0; l < draw_geom.line_count; l++)
         text_draw_screen(&draw_geom.lay[l], PAD,
-                         PAD + l * draw_geom.line_h, white, 10);
+                         PAD + l * draw_geom.line_h, white, 10, g_face);
 
     /* caret (blink 1 Hz - presentation-only clock; solid for QA) */
     static double t0;

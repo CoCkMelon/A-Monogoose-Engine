@@ -9,13 +9,13 @@ static void draw(const char *txt, float x, float y, float scale,
                  const float tint[4], float layer, int align, int vw)
 {
     ame_text_layout l;
-    if (text_layout(txt, 0, align, scale, &l) < 0)
+    if (text_layout(txt, 0, align, scale, AME_FONT_PIXEL , &l) < 0)
         return;
     if (align == AME_TEXT_ALIGN_C)
         x -= l.w * 0.5f;
     else if (align == AME_TEXT_ALIGN_R)
         x = vw - x - l.w;
-    text_draw_screen(&l, x, y, tint, layer);
+    text_draw_screen(&l, x, y, tint, layer, AME_FONT_PIXEL);
 }
 
 void ui_render_hud(const BfSnap *s, int vw, int vh)
@@ -25,8 +25,6 @@ void ui_render_hud(const BfSnap *s, int vw, int vh)
     const float dim[4] = { 0.85f, 0.88f, 0.9f, 1.0f };
     const float red[4] = { 0.95f, 0.35f, 0.28f, 1.0f };
     char hud[96];
-
-    text_set_font(AME_FONT_PIXEL);
 
     if (s->mode == BF_MODE_CAR)
         snprintf(hud, sizeof hud, "CAR  HP %.0f/%.0f  FUEL %.0f/%.0f", s->hp,

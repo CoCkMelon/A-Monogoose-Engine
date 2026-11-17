@@ -79,9 +79,13 @@ int  text_init(bool nearest_sampling);
  * distance fields (Acta Cybernetica 25, 2021). EXPERIMENTAL (known
  * artifacts; improving it is another agent's task): needs an app-created
  * DSDF render pass (pushes target the current pass).
- * Layout metrics switch with the face (advances/line_h come from the
- * ACTIVE table); the snapped-pen GRID CONTRACT itself is face-independent
- * and holds for all faces. */
+ * THE FACE IS A PARAMETER, NOT A MODE (state-audit.txt #2): layout,
+ * measure and both draw calls take an `int face`. Nothing is stored, so one
+ * call can never restyle another - the face a draw uses is visible at that
+ * call site and nowhere else. Layout metrics follow the SAME face the draw
+ * is given, so metrics and quads cannot disagree even in one frame. The
+ * snapped-pen GRID CONTRACT itself is face-independent and holds for all
+ * faces. */
 enum { AME_FONT_PIXEL = 0, AME_FONT_SMOOTH = 1, AME_FONT_DSDF = 2 };
 
 /* upload the baked DSDF atlas (RGBA8, linear sampling) + bind its
@@ -94,11 +98,11 @@ int  text_init_dsdf(void);
  * a no-op and text stays on the pixel face. */
 int  text_init_hires(void);
 
-/* select the active face. A face whose atlas was not uploaded
- * (text_init_hires / text_init_dsdf) is a no-op - never a
- * missing-glyph surprise. */
-void text_set_font(int face);
-int  text_font_mode(void);
+/* the face a request will actually draw with RIGHT NOW: the face you ask
+ * for when its atlas is registered (text_init_hires / text_init_dsdf),
+ * AME_FONT_PIXEL otherwise. Pure query - the fallback is decided per call,
+ * so it is never a missing-glyph surprise and never a sticky mode. */
+int  text_face_resolve(int face);
 
 /* layout/measure are pure CPU — no GL needed (headless-testable).
  * box_w <= 0 disables wrapping. scale multiplies glyph metrics.
@@ -111,34 +115,34 @@ int  text_font_mode(void);
  * fractional advances): caret_i.x = origin + el[i].x, EOL caret =
  * origin + w. Then caret and ink share one grid BY CONSTRUCTION. */
 int  text_layout(const char *utf8, float box_w, int align, float scale,
-                 ame_text_layout *out);
+                 int face, ame_text_layout *out);
 /* no-markup layout: '{'/'}' are LITERAL glyphs, no tags are consumed -
  * the entry point for plain-text consumers (the editor). Element
  * src_byte anchors are 1:1 with visible codepoints. */
 int  text_layout_plain(const char *utf8, float box_w, int align, float scale,
-                       ame_text_layout *out);
+                       int face, ame_text_layout *out);
 void text_measure(const char *utf8, float box_w, int align, float scale,
-                  float *w, float *h);
+                  int face, float *w, float *h);
 
 /* drawing submits glyph quads to the render batch (render.txt single pass).
  * tint is rgba floats multiplied with per-run colors. */
 void text_draw_screen(const ame_text_layout *l, float x, float y,
-                      const float tint[4], float layer);
+                      const float tint[4], float layer, int face);
 /* world pose: 4x4 column-major transform applied to each glyph quad
  * (planar mode); billboard helpers live in the game/camera layer */
 void text_draw_world(const ame_text_layout *l, const float pose[16],
-                     const float tint[4], float layer);
+                     const float tint[4], float layer, int face);
 
 /* baked atlas info (for tests and draw math) */
 int   text_font_px(void);
-float text_line_h(void);
+float text_line_h(int face);
 /* cap height of the current face in FACE px (max ink height over the
  * digit/upper-case range): world-space text that must FIT a surface
  * sizes by ink, not by the line box (line_h includes leading). */
-float text_cap_h(void);
+float text_cap_h(int face);
 /* baseline ascent of the current face in FACE px (line origin -> ink top
  * for cap glyphs); pairs with text_cap_h for ink-box centering. */
-float text_ascent_h(void);
+float text_ascent_h(int face);
 
 #ifdef __cplusplus
 }

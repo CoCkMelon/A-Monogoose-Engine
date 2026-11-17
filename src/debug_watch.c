@@ -115,9 +115,9 @@ static int watch_layout(float scale, ame_text_layout *ln, ame_text_layout *lv)
     int n = watch_compose(names, sizeof names, vals, sizeof vals);
     if (n == 0)
         return 0;
-    if (text_layout_plain(names, 0.0f, AME_TEXT_ALIGN_L, scale, ln) <= 0)
+    if (text_layout_plain(names, 0.0f, AME_TEXT_ALIGN_L, scale, AME_FONT_PIXEL , ln) <= 0)
         return 0;
-    if (text_layout_plain(vals, 0.0f, AME_TEXT_ALIGN_L, scale, lv) <= 0)
+    if (text_layout_plain(vals, 0.0f, AME_TEXT_ALIGN_L, scale, AME_FONT_PIXEL , lv) <= 0)
         return 0;
     return n;
 }
@@ -175,8 +175,8 @@ int ame_debug_watch_draw(float x, float y, const ame_debug_watch_style *st)
         };
         rp_push_sprite_screen(&sc);
     }
-text_draw_screen(&ln, x, y, st->tint, st->layer);
+text_draw_screen(&ln, x, y, st->tint, st->layer, AME_FONT_PIXEL);
     text_draw_screen(&lv, x + ln.w + WATCH_COL_GAP * st->scale, y, vt,
-                     st->layer);
+                     st->layer, AME_FONT_PIXEL);
     return n;
 }

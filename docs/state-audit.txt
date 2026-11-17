@@ -49,6 +49,27 @@ THE INVENTORY
    every set_lit(1)/set_lit(0) (mem_app.c:583-597, 692-700, 812-824), so the
    reset should be a no-op for them - a diff of zero frames is the proof.
 
+2. [SEV 1] FIXED - TEXT FACE IS PROCESS-GLOBAL
+   STATUS: fixed in "text: the face is an argument, never a mode".
+   text_set_font / text_font_mode / g_font_mode are GONE. Every entry point
+   (text_layout, text_layout_plain, text_measure, text_draw_screen,
+   text_draw_world) takes `int face`, and the metric accessors take it too
+   (text_line_h/cap_h/ascent_h). Each entry point resolves the face ONCE
+   through face_resolve() and threads the resolved value to both layout
+   metrics and quads, so they cannot disagree. text_face_resolve(face) is
+   the public query: the requested face if its atlas is uploaded, PIXEL
+   otherwise - the same no-missing-glyph guarantee as before, now decided
+   per call instead of latched.
+   Regression test: test_text "face is per call: neither layout nor face
+   choice leaks" lays out SMOOTH / PIXEL / SMOOTH in sequence and asserts
+   the two SMOOTH layouts are identical while both differ from PIXEL, plus
+   test_line_h follows its argument. mem_app.c:865 - the mid-frame
+   text_set_font(PIXEL) that restyled every later draw - is deleted.
+   Golden proof: memory_game and text_editor captures are pixel-identical
+   before/after (the faces each call used were already the ones it named
+   after the conversion).
+   Original finding follows.
+
 2. [SEV 1] TEXT FACE IS PROCESS-GLOBAL
    src/text.c: `g_font_mode` (18), set by text_set_font (187), reset only at
    init (247). One call changes EVERY later text draw in the app until

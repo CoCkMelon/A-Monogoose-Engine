@@ -61,14 +61,26 @@ DECISIONS (from the requirements)
      in the baker. Ink-less glyphs (space) bake NO atlas cell and an
      all-zero cell rect, so the layout ink box stays tight.
 
-FACES (text_set_font; layout AND draw both run under the face)
+FACES (an ARGUMENT on layout, measure and draw - never a mode)
+  The face is passed at every call: text_layout(..., face, out),
+  text_layout_plain(..., face, out), text_measure(..., face, w, h),
+  text_draw_screen(..., face), text_draw_world(..., face), and the
+  metric accessors text_line_h(face) / text_cap_h(face) /
+  text_ascent_h(face). One call can therefore never restyle another:
+  two draws in one frame with different faces each get their own, and
+  a draw in a library cannot change what the caller draws next.
+  (Before this, a process-global g_font_mode set by text_set_font did
+  exactly that - state-audit.txt #2. The setter is GONE; see git log
+  "text: the face is an argument".)
+  Layout and draw take the SAME face, so metrics and quads cannot
+  disagree even inside a single frame.
   - PIXEL (default): GNU Unifont (unambiguous bitmap digits; replaced
     Pixelify Sans whose quirky digit shapes read as mirrored ink),
     nearest sampling, integer glyph
-    sizes. The pixel-art face; also the FALLBACK: requesting a
+    sizes. The pixel-art face; also the FALLBACK: a request for a
     face whose atlas was never uploaded (text_init_hires /
-    text_init_dsdf not called) is a no-op and the mode stays PIXEL,
-    so layout metrics and draw can never disagree.
+    text_init_dsdf not called) RESOLVES to PIXEL for that call, so
+    layout metrics and draw still agree - decided once per call.
   - SMOOTH (default smooth face): DejaVu baked at 2x into a 2048
     coverage atlas, layout metrics divided back to 1x units. Draws
     as PLAIN quads through the default textured pass (bilinear, no
@@ -133,7 +145,8 @@ API SHAPE (text.h, extern "C")
     text_init()                 load baked PIXEL atlas + metrics
     text_init_hires()           upload the SMOOTH (hires) atlas
     text_init_dsdf()            upload the DSDF atlas
-    text_set_font(face)         PIXEL / SMOOTH / DSDF (no-op fallback)
+    text_face_resolve(face)     which face a request will draw with
+                                (PIXEL when that atlas is not uploaded)
     glyph info lookup per codepoint
 
     measure(text, box_w) -> width, height, glyph count   (no draw)

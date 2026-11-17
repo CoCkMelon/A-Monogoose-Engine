@@ -15,24 +15,38 @@
 static int g_atlas_tex = -1;
 static int g_dsdf_tex = -1;   /* -1: DSDF face unavailable */
 static int g_hires_tex = -1;  /* -1: smooth (hires) face unavailable */
-static int g_font_mode = AME_FONT_PIXEL;
+/* THE FACE IS AN ARGUMENT, NOT A MODE (state-audit.txt #2). A draw used to
+ * depend on the last text_set_font call anywhere in the process - including
+ * one made mid-frame by another subsystem - so the same call site produced
+ * different pixels depending on history. Every entry point below resolves
+ * the face it is GIVEN once, and the resolved value (never a global) is
+ * threaded down to layout metrics and quads, so the two can never disagree.
+ * A face whose atlas was not uploaded resolves to PIXEL: still never a
+ * missing-glyph surprise, now decided per call instead of latched. */
+static int face_resolve(int face) {
+    if (face == AME_FONT_SMOOTH && g_hires_tex >= 0)
+        return AME_FONT_SMOOTH;
+    if (face == AME_FONT_DSDF && g_dsdf_tex >= 0)
+        return AME_FONT_DSDF;
+    return AME_FONT_PIXEL;
+}
 
 /* hires cells are baked 2x (64px) over 32px layout metrics: quads span
  * layout px while UVs span the full-res cell (text.txt smooth face) */
 #define HIRES_CELL_K (AME_HIRES_LAYOUT_PX / (float)AME_HIRES_PX)
 
 /* face-aware vertical metrics (all faces share 32px layout units) */
-static float cur_line_h(void) {
-    if (g_font_mode == AME_FONT_DSDF)
+static float cur_line_h(int face) {
+    if (face == AME_FONT_DSDF)
         return AME_DSDF_LINE_H;
-    if (g_font_mode == AME_FONT_SMOOTH)
+    if (face == AME_FONT_SMOOTH)
         return AME_HIRES_LINE_H;
     return (float)AME_FONT_LINE_H;
 }
-static float cur_ascent(void) {
-    if (g_font_mode == AME_FONT_DSDF)
+static float cur_ascent(int face) {
+    if (face == AME_FONT_DSDF)
         return AME_DSDF_ASCENT;
-    if (g_font_mode == AME_FONT_SMOOTH)
+    if (face == AME_FONT_SMOOTH)
         return AME_HIRES_ASCENT;
     return (float)AME_FONT_ASCENT;
 }
@@ -184,18 +198,10 @@ int text_init_hires(void) {
     return g_hires_tex;
 }
 
-void text_set_font(int face) {
-    if (face != AME_FONT_PIXEL && face != AME_FONT_SMOOTH
-        && face != AME_FONT_DSDF)
-        return;
-    if (face == AME_FONT_SMOOTH && g_hires_tex < 0)
-        return; /* not inited: stay pixel, never half-smooth */
-    if (face == AME_FONT_DSDF && g_dsdf_tex < 0)
-        return;
-    g_font_mode = face;
-}
-
-int text_font_mode(void) { return g_font_mode; }
+/* which face a request draws with right now: the requested face when its
+ * atlas is registered, PIXEL otherwise. Public so callers (and tests) can
+ * predict the outcome of a call without asking a mode variable. */
+int text_face_resolve(int face) { return face_resolve(face); }
 
 
 
@@ -216,9 +222,40 @@ int text_test_force_hires(void) {
 
 static float g_cap_px;
 
-float text_cap_h(void) { return g_cap_px > 0.0f ? g_cap_px : 1.0f; }
+/* tallest ink cell over digits + upper case for a face: the range card
+ * faces and scoreboards actually print. PIXEL reuses the value computed at
+ * init; the other faces read their own baked tables (cheap: 36 lookups). */
+static float cap_h_for(int face) {
+    if (face == AME_FONT_SMOOTH) {
+        float cap = 0.0f;
+        for (uint32_t c = '0'; c <= '9'; c++)
+            { int g = hires_glyph_find(c);
+              if (g >= 0 && (float)ame_hires_glyphs[g].ah > cap)
+                  cap = (float)ame_hires_glyphs[g].ah; }
+        for (uint32_t c = 'A'; c <= 'Z'; c++)
+            { int g = hires_glyph_find(c);
+              if (g >= 0 && (float)ame_hires_glyphs[g].ah > cap)
+                  cap = (float)ame_hires_glyphs[g].ah; }
+        return cap > 0.0f ? cap : 1.0f;
+    }
+    if (face == AME_FONT_DSDF) {
+        float cap = 0.0f;
+        for (uint32_t c = '0'; c <= '9'; c++)
+            { int g = dsdf_glyph_find(c);
+              if (g >= 0 && (float)ame_dsdf_glyphs[g].ah > cap)
+                  cap = (float)ame_dsdf_glyphs[g].ah; }
+        for (uint32_t c = 'A'; c <= 'Z'; c++)
+            { int g = dsdf_glyph_find(c);
+              if (g >= 0 && (float)ame_dsdf_glyphs[g].ah > cap)
+                  cap = (float)ame_dsdf_glyphs[g].ah; }
+        return cap > 0.0f ? cap : 1.0f;
+    }
+    return g_cap_px > 0.0f ? g_cap_px : 1.0f;
+}
 
-float text_ascent_h(void) { return cur_ascent(); }
+float text_cap_h(int face) { return cap_h_for(face_resolve(face)); }
+
+float text_ascent_h(int face) { return cur_ascent(face_resolve(face)); }
 
 /* cap height: tallest ink cell over digits + upper case (the range card
  * faces and scoreboards actually print). Computed once per init. */
@@ -244,7 +281,6 @@ int text_init(bool nearest_sampling) {
      * smooth/DSDF faces need an explicit text_init_* again) */
     g_dsdf_tex = -1;
     g_hires_tex = -1;
-    g_font_mode = AME_FONT_PIXEL;
 
     /* expand A8 to RGBA (white, alpha = coverage) once, upload, free */
     size_t n = (size_t)AME_FONT_ATLAS_WIDTH * (size_t)AME_FONT_ATLAS_HEIGHT;
@@ -269,7 +305,7 @@ int text_init(bool nearest_sampling) {
 }
 
 int text_font_px(void)    { return AME_FONT_PX; }
-float text_line_h(void)   { return AME_FONT_LINE_H; }
+float text_line_h(int face) { return cur_line_h(face_resolve(face)); }
 
 /* Snap a coordinate to the pixel grid: floor(x + 0.5). THE text-grid
  * contract (mirrored in lean/Ame/Text.lean): layout stores el
@@ -348,25 +384,25 @@ static int parse_tag(const char *s, uint32_t *out_color, float *out_sec,
     return 0;
 }
 
-static float tab_advance(float scale); /* 4 spaces of the active face */
+static float tab_advance(float scale, int face); /* 4 spaces of the face */
 
 /* advance of one visible codepoint at scale - through the ACTIVE face
  * (glyph indexes the pixel table; the smooth face resolves by codepoint) */
-static float glyph_advance(int glyph, float scale) {
+static float glyph_advance(int glyph, float scale, int face) {
     if (glyph == AME_TXT_TAB)
-        return tab_advance(scale);
+        return tab_advance(scale, face);
     if (glyph < 0) {
         float w, h;
         fallback_box(&w, &h);
         return w * scale + 2.0f * scale;
     }
-    if (g_font_mode == AME_FONT_SMOOTH) {
+    if (face == AME_FONT_SMOOTH) {
         /* hires advances are baked pre-divided to 32px layout units */
         int d = hires_glyph_find(ame_font_glyphs[glyph].cp);
         if (d >= 0)
             return ame_hires_glyphs[d].advance * scale;
     }
-    if (g_font_mode == AME_FONT_DSDF) {
+    if (face == AME_FONT_DSDF) {
         int d = dsdf_glyph_find(ame_font_glyphs[glyph].cp);
         if (d >= 0)
             return ame_dsdf_glyphs[d].advance * scale;
@@ -376,8 +412,8 @@ static float glyph_advance(int glyph, float scale) {
 
 /* TAB advance: 4 spaces of the ACTIVE face - a modelled constant, not
  * a fallback box (the caret/hit-test math owns it like any glyph) */
-static float tab_advance(float scale) {
-    return 4.0f * glyph_advance(glyph_find(' '), scale);
+static float tab_advance(float scale, int face) {
+    return 4.0f * glyph_advance(glyph_find(' '), scale, face);
 }
 
 /* ------------------------------------------------------------------ */
@@ -395,7 +431,9 @@ static float tab_advance(float scale) {
  *  - '\r' is consumed silently (CRLF paste = one break);
  *  - '\t' = invisible AME_TXT_TAB element, 4-space advance. */
 static int text_layout_core(const char *utf8, float box_w, int align,
-                            float scale, ame_text_layout *out, bool tags) {
+                            float scale, int face, ame_text_layout *out,
+                            bool tags) {
+    face = face_resolve(face); /* ONE decision, used by metrics AND ink box */
     if (out) {
         out->count = 0;
         out->npause = 0;
@@ -460,12 +498,12 @@ static int text_layout_core(const char *utf8, float box_w, int align,
             pen_x = 0;
             stored_line_end = -1;
             wrapped = false; /* indentation after '\n' is content */
-            pen_y += (double)cur_line_h() * scale;
+            pen_y += (double)cur_line_h(face) * scale;
             continue;
         }
 
         int glyph = cp == '\t' ? AME_TXT_TAB : glyph_find(cp);
-        float adv = glyph_advance(glyph, scale);
+        float adv = glyph_advance(glyph, scale, face);
 
         /* greedy word wrap */
         if (box_w > 0 && pen_x + adv > box_w && cp != ' ') {
@@ -480,7 +518,7 @@ static int text_layout_core(const char *utf8, float box_w, int align,
                 pen_x = 0;
                 stored_line_end = -1;
                 wrapped = true; /* only NOW may a leading space drop */
-                pen_y += (double)cur_line_h() * scale;
+                pen_y += (double)cur_line_h(face) * scale;
             }
         }
         if (cp == ' ' && pen_x == 0 && total > 0 && wrapped)
@@ -516,7 +554,7 @@ static int text_layout_core(const char *utf8, float box_w, int align,
         double line_w = 0;
         for (int i = first; i < last; i++) {
             int g = out->el[i].glyph;
-            float a = glyph_advance(g, scale);
+            float a = glyph_advance(g, scale, face);
             if ((double)out->el[i].x + a > line_w)
                 line_w = (double)out->el[i].x + a;
         }
@@ -531,7 +569,7 @@ static int text_layout_core(const char *utf8, float box_w, int align,
     }
 
     out->w = pen_snap(max_line_w); /* EOL caret sits here exactly */
-    out->h = (float)(pen_y + (double)cur_line_h() * scale);
+    out->h = (float)(pen_y + (double)cur_line_h(face) * scale);
 
     /* tight ink box: same per-face cell math the draw paths use, so a
      * caller fitting text to a surface centres/sizes by real ink. */
@@ -541,7 +579,7 @@ static int text_layout_core(const char *utf8, float box_w, int align,
         if (e->glyph == AME_TXT_TAB || e->glyph < 0)
             continue;
         float x0, y0, w, h;
-        if (g_font_mode == AME_FONT_SMOOTH && g_hires_tex >= 0
+        if (face == AME_FONT_SMOOTH
             && hires_glyph_find(ame_font_glyphs[e->glyph].cp) >= 0) {
             const ame_hires_glyph *d =
                 &ame_hires_glyphs[hires_glyph_find(ame_font_glyphs[e->glyph].cp)];
@@ -549,7 +587,7 @@ static int text_layout_core(const char *utf8, float box_w, int align,
             y0 = e->y + (AME_HIRES_ASCENT + (float)d->yoff) * scale;
             w = (float)d->aw * HIRES_CELL_K * scale;
             h = (float)d->ah * HIRES_CELL_K * scale;
-        } else if (g_font_mode == AME_FONT_DSDF && g_dsdf_tex >= 0
+        } else if (face == AME_FONT_DSDF
                    && dsdf_glyph_find(ame_font_glyphs[e->glyph].cp) >= 0) {
             const ame_dsdf_glyph *d =
                 &ame_dsdf_glyphs[dsdf_glyph_find(ame_font_glyphs[e->glyph].cp)];
@@ -560,7 +598,7 @@ static int text_layout_core(const char *utf8, float box_w, int align,
         } else {
             const ame_font_glyph *g = &ame_font_glyphs[e->glyph];
             x0 = e->x + (float)g->xoff * scale;
-            y0 = e->y + (cur_ascent() + (float)g->yoff) * scale;
+            y0 = e->y + (cur_ascent(face) + (float)g->yoff) * scale;
             w = (float)g->aw * scale;
             h = (float)g->ah * scale;
         }
@@ -579,19 +617,19 @@ static int text_layout_core(const char *utf8, float box_w, int align,
 }
 
 int text_layout(const char *utf8, float box_w, int align, float scale,
-                ame_text_layout *out) {
-    return text_layout_core(utf8, box_w, align, scale, out, true);
+                int face, ame_text_layout *out) {
+    return text_layout_core(utf8, box_w, align, scale, face, out, true);
 }
 
 int text_layout_plain(const char *utf8, float box_w, int align, float scale,
-                      ame_text_layout *out) {
-    return text_layout_core(utf8, box_w, align, scale, out, false);
+                      int face, ame_text_layout *out) {
+    return text_layout_core(utf8, box_w, align, scale, face, out, false);
 }
 
 void text_measure(const char *utf8, float box_w, int align, float scale,
-                  float *w, float *h) {
+                  int face, float *w, float *h) {
     ame_text_layout tmp;
-    int n = text_layout(utf8, box_w, align, scale, &tmp);
+    int n = text_layout(utf8, box_w, align, scale, face, &tmp);
     (void)n;
     if (w) *w = tmp.w;
     if (h) *h = tmp.h;
@@ -625,7 +663,7 @@ static void push_sprite(int tex, float x, float y, float w, float h,
 }
 
 static void draw_glyph(const ame_txt_el *e, float x, float y, float scale,
-                       const float tint[4], float layer) {
+                       const float tint[4], float layer, int face) {
     if (e->glyph == AME_TXT_TAB)
         return; /* invisible: owns a pen cell, draws nothing */
     float col[4];
@@ -636,13 +674,13 @@ static void draw_glyph(const ame_txt_el *e, float x, float y, float scale,
         w *= scale;
         h *= scale;
         push_sprite(g_atlas_tex >= 0 ? g_atlas_tex : rp_white_texture(),
-                    x + e->x, y - e->y - cur_ascent() * scale + h, w, h,
+                    x + e->x, y - e->y - cur_ascent(face) * scale + h, w, h,
                     0.5f, 0.5f, 0.504f, 0.504f, col, layer);
         return;
     }
     const ame_font_glyph *g = &ame_font_glyphs[e->glyph];
 
-    if (g_font_mode == AME_FONT_SMOOTH && g_hires_tex >= 0) {
+    if (face == AME_FONT_SMOOTH) {
         int hi = hires_glyph_find(g->cp);
         if (hi >= 0) {
             const ame_hires_glyph *d = &ame_hires_glyphs[hi];
@@ -664,7 +702,7 @@ static void draw_glyph(const ame_txt_el *e, float x, float y, float scale,
         /* missing in the smooth table: fall through to the pixel glyph */
     }
 
-    if (g_font_mode == AME_FONT_DSDF && g_dsdf_tex >= 0) {
+    if (face == AME_FONT_DSDF) {
         int di = dsdf_glyph_find(g->cp);
         if (di >= 0) {
             const ame_dsdf_glyph *d = &ame_dsdf_glyphs[di];
@@ -703,15 +741,16 @@ static void draw_glyph(const ame_txt_el *e, float x, float y, float scale,
     float v1 = (float)(g->ay + g->ah) / (float)AME_FONT_ATLAS_HEIGHT;
     push_sprite(g_atlas_tex,
                 x + e->x + g->xoff * scale,
-                y - e->y - cur_ascent() * scale - g->yoff * scale,
+                y - e->y - cur_ascent(face) * scale - g->yoff * scale,
                 (float)g->aw * scale, (float)g->ah * scale,
                 u0, v0, u1, v1, col, layer);
 }
 
 void text_draw_screen(const ame_text_layout *l, float x, float y,
-                      const float tint[4], float layer) {
+                      const float tint[4], float layer, int face) {
     if (!l)
         return;
+    face = face_resolve(face); /* one decision for metrics and texture */
     /* x,y are px_y_down WINDOW px (that is what _screen means): translate to
      * world_y_up by the view's TOP-LEFT corner, and step DOWN in y for every
      * layout row, which is why oy subtracts. The ortho camera centers on
@@ -724,13 +763,14 @@ void text_draw_screen(const ame_text_layout *l, float x, float y,
     oy = pen_snap(oy - y);
     float sc = l->scale > 0.0f ? l->scale : 1.0f;
     for (int i = 0; i < l->count; i++)
-        draw_glyph(&l->el[i], ox, oy, sc, tint, layer);
+        draw_glyph(&l->el[i], ox, oy, sc, tint, layer, face);
 }
 
 void text_draw_world(const ame_text_layout *l, const float pose[16],
-                     const float tint[4], float layer) {
+                     const float tint[4], float layer, int face) {
     if (!l || !pose)
         return;
+    face = face_resolve(face); /* one decision for metrics and texture */
     ame_m4 m;
     memcpy(m.m, pose, sizeof m.m);
     /* layout scale: el[] pens are already scaled at layout time, but the
@@ -754,8 +794,8 @@ void text_draw_world(const ame_text_layout *l, const float pose[16],
             u0 = v0 = 0.5f;
             u1 = v1 = 0.504f;
             x0 = e->x;
-            y0 = e->y + cur_ascent() * sc - h;
-        } else if (g_font_mode == AME_FONT_SMOOTH && g_hires_tex >= 0
+            y0 = e->y + cur_ascent(face) * sc - h;
+        } else if (face == AME_FONT_SMOOTH
                    && hires_glyph_find(ame_font_glyphs[e->glyph].cp) >= 0) {
             /* smooth face in WORLD space: pose-transformed hires cell
              * (quad spans layout px, UVs the full-res 2x cell) */
@@ -770,7 +810,7 @@ void text_draw_world(const ame_text_layout *l, const float pose[16],
             x0 = e->x + (float)d->xoff * sc;
             y0 = e->y + (AME_HIRES_ASCENT + (float)d->yoff) * sc;
             tex = g_hires_tex;
-        } else if (g_font_mode == AME_FONT_DSDF && g_dsdf_tex >= 0
+        } else if (face == AME_FONT_DSDF
                    && dsdf_glyph_find(ame_font_glyphs[e->glyph].cp) >= 0) {
             /* DSDF face in WORLD space: pose-transformed DSDF cell
              * (margins included; bearings already carry them) */
@@ -795,7 +835,7 @@ void text_draw_world(const ame_text_layout *l, const float pose[16],
             u1 = (float)(g->ax + g->aw) / (float)AME_FONT_ATLAS_WIDTH;
             v1 = (float)(g->ay + g->ah) / (float)AME_FONT_ATLAS_HEIGHT;
             x0 = e->x + (float)g->xoff * sc;
-            y0 = e->y + (cur_ascent() + (float)g->yoff) * sc;
+            y0 = e->y + (cur_ascent(face) + (float)g->yoff) * sc;
         }
         /* glyph quad corners in layout space -> world pose. The layout is
          * y-DOWN from the pose origin while pose space is world_y_up, so the

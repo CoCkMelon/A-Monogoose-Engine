@@ -201,7 +201,7 @@ static long lum_case(bool face_up, const float t0[3], const float t1[3],
         .p3 = { c1[3][0], c1[3][1], c1[3][2] },
         .u0 = 0, .v0 = 0, .u1 = 1, .v1 = 1,
         .tint = { blue[0], blue[1], blue[2], blue[3] }, .layer = 10 });
-    text_draw_world(hello, pose, tint_w, 20);
+    text_draw_world(hello, pose, tint_w, 20, AME_FONT_PIXEL);
     rp_end_frame();
     static uint8_t px[W * H * 4];
     rp_read_pixels(px, W, H);
@@ -264,7 +264,7 @@ int main(void) {
     UT_CASE("single pass: 3D quad + world text draws");
     ame_text_layout hello;
     UT_ASSERT(text_init(true) >= 0);
-    int ng = text_layout("Hello ame-next", 0, AME_TEXT_ALIGN_C, 1.0f, &hello);
+    int ng = text_layout("Hello ame-next", 0, AME_TEXT_ALIGN_C, 1.0f, AME_FONT_PIXEL , &hello);
     UT_ASSERT(ng > 0);
 
     /* world text LYING ON THE TABLE (like card faces): layout px -> units */
@@ -305,7 +305,7 @@ int main(void) {
         .p3 = { c1[3][0], c1[3][1], c1[3][2] },
         .u0 = 0, .v0 = 0, .u1 = 1, .v1 = 1,
         .tint = { blue[0], blue[1], blue[2], blue[3] }, .layer = 10 });
-    text_draw_world(&hello, pose, tint_w, 20);
+    text_draw_world(&hello, pose, tint_w, 20, AME_FONT_PIXEL);
     rp_end_frame();
     uint32_t h1 = hash_frame();
     printf("    frame1 hash=0x%08x draws=%d quads=%d\n", h1,
@@ -334,7 +334,7 @@ int main(void) {
         .p3 = { c1[3][0], c1[3][1], c1[3][2] },
         .u0 = 0, .v0 = 0, .u1 = 1, .v1 = 1,
         .tint = { blue[0], blue[1], blue[2], blue[3] }, .layer = 10 });
-    text_draw_world(&hello, pose, tint_w, 20);
+    text_draw_world(&hello, pose, tint_w, 20, AME_FONT_PIXEL);
     rp_end_frame();
     uint32_t h2 = hash_frame();
     UT_ASSERT(h1 == h2);
@@ -368,7 +368,7 @@ int main(void) {
             .u0 = 0, .v0 = 0, .u1 = 1, .v1 = 1,
             .tint = { blue[0], blue[1], blue[2], blue[3] },
             .layer = 10 });
-        text_draw_world(&hello, pose, tint_w, 20);
+        text_draw_world(&hello, pose, tint_w, 20, AME_FONT_PIXEL);
         rp_end_frame();
         UT_ASSERT(hash_frame() == h1); /* unlit: byte-identical */
 
@@ -497,7 +497,7 @@ int main(void) {
     {
         UT_ASSERT(text_init_hires() >= 0);
         ame_text_layout lg;
-        text_layout("Ag", 0, 0, 2.0f, &lg); /* active-face metrics */
+        text_layout("Ag", 0, 0, 2.0f, AME_FONT_PIXEL , &lg); /* active-face metrics */
         const float white[4] = { 1, 1, 1, 1 };
         /* lay the string on the table plane like the card faces do */
         const float ts2 = 2.0f / (float)text_font_px();
@@ -516,10 +516,10 @@ int main(void) {
         memcpy(bg, px, sizeof bg);
         long bg_r = bg[0];
 
-        /* pixel reference (crisp path stays the default) */
-        UT_ASSERT(text_font_mode() == AME_FONT_PIXEL);
+        /* pixel reference (crisp path is the face named at the call) */
+        UT_ASSERT(text_face_resolve(AME_FONT_PIXEL) == AME_FONT_PIXEL);
         rp_begin_frame();
-        text_draw_world(&lg, pose2, white, 20);
+        text_draw_world(&lg, pose2, white, 20, AME_FONT_PIXEL);
         rp_end_frame();
         uint32_t hp = hash_frame();
         rp_read_pixels(px, W, H);
@@ -530,10 +530,9 @@ int main(void) {
         }
 
         /* smooth face: same string/origin/scale (plain textured pass) */
-        text_set_font(AME_FONT_SMOOTH);
-        UT_ASSERT(text_font_mode() == AME_FONT_SMOOTH);
+        UT_ASSERT(text_face_resolve(AME_FONT_SMOOTH) == AME_FONT_SMOOTH);
         rp_begin_frame();
-        text_draw_world(&lg, pose2, white, 20);
+        text_draw_world(&lg, pose2, white, 20, AME_FONT_SMOOTH);
         rp_end_frame();
         uint32_t hd = hash_frame();
         rp_read_pixels(px, W, H);
@@ -573,14 +572,14 @@ int main(void) {
         UT_ASSERTF(ink > 300, "too little ink (%d)", ink);
         /* deterministic */
         rp_begin_frame();
-        text_draw_world(&lg, pose2, white, 20);
+        text_draw_world(&lg, pose2, white, 20, AME_FONT_SMOOTH);
         rp_end_frame();
         UT_ASSERT(hash_frame() == hd);
 
-        /* switching back to the pixel face is byte-identical to hp */
-        text_set_font(AME_FONT_PIXEL);
+        /* asking for the pixel face is byte-identical to hp - no call in
+         * between can have moved it, because nothing is stored */
         rp_begin_frame();
-        text_draw_world(&lg, pose2, white, 20);
+        text_draw_world(&lg, pose2, white, 20, AME_FONT_PIXEL);
         rp_end_frame();
         UT_ASSERT(hash_frame() == hp);
 
@@ -592,7 +591,6 @@ int main(void) {
          * after it (caret oracle). */
         ame_camera c2;
         {
-            text_set_font(AME_FONT_SMOOTH);
             camera_viewport(camera_ortho2d(camera_desc(&c2)), W, H);
             camera_pos(&c2, (float)W * 0.5f, (float)H * 0.5f, 0);
             camera_build(&c2);
@@ -604,7 +602,7 @@ int main(void) {
             memcpy(bg2, px, sizeof bg2);
             long bg2_r = bg2[0];
             rp_begin_frame();
-            text_draw_screen(&lg, 20, 20, white, 0);
+            text_draw_screen(&lg, 20, 20, white, 0, AME_FONT_SMOOTH);
             rp_end_frame();
             rp_read_pixels(px, W, H);
             long mass2 = 0;
@@ -623,7 +621,6 @@ int main(void) {
                    mass2, ink2, aa2);
             UT_ASSERTF(ink2 > 100, "2d smooth text invisible (%d px)", ink2);
             UT_ASSERTF(aa2 > 20, "2d smooth text not anti-aliased (%d)", aa2);
-            text_set_font(AME_FONT_PIXEL);
         }
 
         /* ---- DSDF face: an app-created DSDF pass (experimental) ----
@@ -636,8 +633,7 @@ int main(void) {
             int dsdf_pass = rp_pass_create(&dsdfd);
             UT_ASSERTF(dsdf_pass >= 0, "DSDF pass creation failed");
             UT_ASSERT(text_init_dsdf() >= 0);
-            text_set_font(AME_FONT_DSDF);
-            UT_ASSERT(text_font_mode() == AME_FONT_DSDF);
+            UT_ASSERT(text_face_resolve(AME_FONT_DSDF) == AME_FONT_DSDF);
             ame_rp_pass_frame dsdf = { dsdf_pass };
             rp_set_camera(&cam3); /* world pose needs the 3D camera */
             /* pass selection is FRAME state (state-audit.txt #1): selecting
@@ -650,7 +646,7 @@ int main(void) {
             long bg3_r = px[0];
             rp_begin_frame();
             rp_pass_begin(&dsdf);
-            text_draw_world(&lg, pose2, white, 20);
+            text_draw_world(&lg, pose2, white, 20, AME_FONT_DSDF);
             rp_end_frame();
             uint32_t hd3 = hash_frame();
             rp_read_pixels(px, W, H);
@@ -680,12 +676,12 @@ int main(void) {
             UT_ASSERTF(ink3 > 300, "dsdf pass: too little ink (%d)", ink3);
             rp_begin_frame();
             rp_pass_begin(&dsdf);
-            text_draw_world(&lg, pose2, white, 20);
+            text_draw_world(&lg, pose2, white, 20, AME_FONT_DSDF);
             rp_end_frame();
             UT_ASSERT(hash_frame() == hd3);
-            /* back to the UI pass + pixel face + 2D camera for the
-             * screen-space cases below (caret oracle) */
-            text_set_font(AME_FONT_PIXEL);
+            /* back to the UI pass + 2D camera for the screen-space cases
+             * below (caret oracle); the face needs no restoring - every
+             * draw there names the face it wants */
             ame_rp_pass_frame ui = { 0 };
             rp_pass_begin(&ui);
             rp_set_camera(&c2);
@@ -699,12 +695,12 @@ int main(void) {
          * regression the algebraic two-ways test is blind to. */
         {
             ame_text_layout lpc;
-            text_layout("Aj", 0, AME_TEXT_ALIGN_L, 1.0f, &lpc);
+            text_layout("Aj", 0, AME_TEXT_ALIGN_L, 1.0f, AME_FONT_PIXEL , &lpc);
             const float OX = 40, OY = 40;
             for (int k = 0; k <= lpc.count; k++) {
                 float penx = k < lpc.count ? lpc.el[k].x : lpc.w;
                 rp_begin_frame();
-                text_draw_screen(&lpc, OX, OY, white, 0);
+                text_draw_screen(&lpc, OX, OY, white, 0, AME_FONT_PIXEL);
                 /* solid 2px caret bar at the element's snapped pen */
                 rp_push_sprite(&(ame_rp_sprite){
                     .tex = rp_white_texture(), .x = OX + penx, .y = OY,
@@ -782,8 +778,9 @@ int main(void) {
         rp_desc_camera(&d, &cam3);
         UT_ASSERT(rp_init(&d) == 0);
         text_init(true);
-        text_set_font(AME_FONT_SMOOTH);
-        UT_ASSERT(text_font_mode() == AME_FONT_PIXEL);
+        /* the atlases went stale with the old GL context: a SMOOTH request
+         * resolves to PIXEL again, per call, with no mode to repair */
+        UT_ASSERT(text_face_resolve(AME_FONT_SMOOTH) == AME_FONT_PIXEL);
     }
 
     UT_CASE("Stage 2 post: offscreen round trip is pixel-exact");
@@ -821,7 +818,7 @@ int main(void) {
             .u0 = 0, .v0 = 0, .u1 = 1, .v1 = 1,
             .tint = { blue[0], blue[1], blue[2], blue[3] },
             .layer = 10 });
-        text_draw_world(&hello, pose, tint_w, 20);
+        text_draw_world(&hello, pose, tint_w, 20, AME_FONT_PIXEL);
         rp_end_frame();
         UT_ASSERTF(hash_frame() == h1,
                    "identity post (tint=1,vig=0) must equal the direct path");
@@ -854,7 +851,7 @@ int main(void) {
             .u0 = 0, .v0 = 0, .u1 = 1, .v1 = 1,
             .tint = { blue[0], blue[1], blue[2], blue[3] },
             .layer = 10 });
-        text_draw_world(&hello, pose, tint_w, 20);
+        text_draw_world(&hello, pose, tint_w, 20, AME_FONT_PIXEL);
         rp_end_frame();
         UT_ASSERTF(hash_frame() == h1, "resize cycle must not change pixels");
 
@@ -883,7 +880,7 @@ int main(void) {
             .u0 = 0, .v0 = 0, .u1 = 1, .v1 = 1,
             .tint = { blue[0], blue[1], blue[2], blue[3] },
             .layer = 10 });
-        text_draw_world(&hello, pose, tint_w, 20);
+        text_draw_world(&hello, pose, tint_w, 20, AME_FONT_PIXEL);
         rp_end_frame();
         rp_read_pixels(px, W, H);
         int cc = ((H / 2) * W + W / 2) * 4;          /* center */
@@ -1084,9 +1081,9 @@ int main(void) {
         camera_build(&cam2);
         rp_set_camera(&cam2);
         ame_text_layout f;
-        text_layout("F", 0, AME_TEXT_ALIGN_L, 4.0f, &f);
+        text_layout("F", 0, AME_TEXT_ALIGN_L, 4.0f, AME_FONT_PIXEL , &f);
         rp_begin_frame();
-        text_draw_screen(&f, 40, 40, (float[4]){ 1, 1, 1, 1 }, 10);
+        text_draw_screen(&f, 40, 40, (float[4]){ 1, 1, 1, 1 }, 10, AME_FONT_PIXEL);
         rp_end_frame();
         rp_read_pixels(px, W, H);
         const ame_font_glyph *fg = find_glyph('F');
@@ -1105,7 +1102,7 @@ int main(void) {
         camera_build(&cam2);
         rp_set_camera(&cam2);
         ame_text_layout f;
-        text_layout("F", 0, AME_TEXT_ALIGN_L, 1.0f, &f);
+        text_layout("F", 0, AME_TEXT_ALIGN_L, 1.0f, AME_FONT_PIXEL , &f);
         /* raw glyph px x4 via the pose; the ortho camera centers world 0,0, so
          * anchor at the view's TOP-left (rp_screen_origin_y_up, world_y_up) and
          * step DOWN from it to land at true screen (40,40) */
@@ -1114,7 +1111,7 @@ int main(void) {
         float pose[16] = { 4,0,0,0,  0,4,0,0,  0,0,4,0,
                            40 + oxx, oyy - 40, 0, 1 };
         rp_begin_frame();
-        text_draw_world(&f, pose, (float[4]){ 1, 1, 1, 1 }, 10);
+        text_draw_world(&f, pose, (float[4]){ 1, 1, 1, 1 }, 10, AME_FONT_PIXEL);
         rp_end_frame();
         rp_read_pixels(px, W, H);
         const ame_font_glyph *fg = find_glyph('F');
@@ -1150,9 +1147,9 @@ int main(void) {
             t.x, t.y, t.z, 1,
         };
         ame_text_layout f;
-        text_layout("F", 0, AME_TEXT_ALIGN_L, 1.0f, &f);
+        text_layout("F", 0, AME_TEXT_ALIGN_L, 1.0f, AME_FONT_PIXEL , &f);
         rp_begin_frame();
-        text_draw_world(&f, pose, (float[4]){ 1, 1, 1, 1 }, 10);
+        text_draw_world(&f, pose, (float[4]){ 1, 1, 1, 1 }, 10, AME_FONT_PIXEL);
         rp_end_frame();
         rp_read_pixels(px, W, H);
         const ame_font_glyph *fg = find_glyph('F');
@@ -1259,7 +1256,6 @@ int main(void) {
         UT_ASSERTF(fabsf(w2 - 2 * w1) < 1.5f && fabsf(h2 - 2 * h1) < 1.5f,
                    "watch block not scale-linear (%.1f->%.1f)",
                    (double)w1, (double)w2);
-        text_set_font(AME_FONT_PIXEL); /* overlay is a PIXEL-face consumer */
         ame_rp_pass_frame p0 = { 0 };
         rp_pass_begin(&p0);
         ame_camera cw;
@@ -1447,7 +1443,7 @@ int main(void) {
         /* reference: text in the default pass, selected explicitly */
         rp_begin_frame();
         rp_pass_begin(&(ame_rp_pass_frame){ 0 });
-        text_draw_screen(&hello, 20, 20, wt, 0);
+        text_draw_screen(&hello, 20, 20, wt, 0, AME_FONT_PIXEL);
         rp_end_frame();
         rp_read_pixels(ref, W, H);
 
@@ -1458,7 +1454,7 @@ int main(void) {
 
         /* frame N+1: text, with NO rp_pass_begin call of its own */
         rp_begin_frame();
-        text_draw_screen(&hello, 20, 20, wt, 0);
+        text_draw_screen(&hello, 20, 20, wt, 0, AME_FONT_PIXEL);
         rp_end_frame();
         rp_read_pixels(got, W, H);
         int d = first_diff(ref, got, sizeof ref);

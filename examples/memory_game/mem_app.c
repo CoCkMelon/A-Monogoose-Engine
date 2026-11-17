@@ -222,7 +222,7 @@ int app_init(void) {
             pair_layout_count = 32;
         for (int p = 0; p < pair_layout_count; p++) {
             snprintf(buf, sizeof buf, "%d", p + 1);
-            text_layout(buf, 0, AME_TEXT_ALIGN_C, 2.0f, &pair_layout[p]);
+            text_layout(buf, 0, AME_TEXT_ALIGN_C, 2.0f, AME_FONT_PIXEL , &pair_layout[p]);
         }
     }
 
@@ -854,15 +854,16 @@ int app_render(void) {
             float pose[16];
             card_label_pose(s, i, l, pose);
             float tint[4] = { 0.12f, 0.12f, 0.16f, 1.0f };
-            text_draw_world(l, pose, tint, 20);
+            text_draw_world(l, pose, tint, 20, AME_FONT_PIXEL);
         }
     }
 
     /* scoreboard: in-scene billboard above the far table edge.
      * PIXEL face, same as the card labels: the settled memory contract
-     * is crisp PIXEL ink printed on the face (no SMOOTH/hires on
-     * tilted quads); the default face is PIXEL, this call keeps it. */
-    text_set_font(AME_FONT_PIXEL);
+     * is crisp PIXEL ink printed on the face (no SMOOTH/hires on tilted
+     * quads). The face is passed at each draw below - this used to be a
+     * text_set_font call INSIDE the frame, which restyled every later
+     * draw in the process (state-audit.txt #2). */
     char line[96];
     const char *left = "P1", *right = "P2";
     const char *phase_txt;
@@ -889,20 +890,20 @@ int app_render(void) {
     snprintf(line, sizeof line, "%s %d   %s   %s %d", left, s->score[0],
              phase_txt, right, s->score[1]);
     ame_text_layout l;
-    text_layout(line, 0, AME_TEXT_ALIGN_C, 0.9f, &l);
+    text_layout(line, 0, AME_TEXT_ALIGN_C, 0.9f, AME_FONT_PIXEL , &l);
     float pose[16];
     billboard_pose(pose, 0, 0.55f, -td * 0.5f - 0.6f, 0.011f);
     float white[4] = { 1, 1, 1, 1 };
-    text_draw_world(&l, pose, white, 30);
+    text_draw_world(&l, pose, white, 30, AME_FONT_PIXEL);
 
     if (s->winner != -2) {
         ame_text_layout l2;
         text_layout(s->online ? "click for rematch" : "click to play again",
-                    0, AME_TEXT_ALIGN_C, 0.6f, &l2);
+                    0, AME_TEXT_ALIGN_C, 0.6f, AME_FONT_PIXEL , &l2);
         float pose2[16];
         billboard_pose(pose2, 0, 0.38f, -td * 0.5f - 1.15f, 0.008f);
         float gray[4] = { 0.7f, 0.7f, 0.75f, 1 };
-        text_draw_world(&l2, pose2, gray, 31);
+        text_draw_world(&l2, pose2, gray, 31, AME_FONT_PIXEL);
     }
 
     /* match bursts + win confetti (unlit single-pass billboards) */

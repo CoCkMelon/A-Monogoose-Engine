@@ -306,15 +306,15 @@ static void bench_text(void) {
         }
     }
     BENCH("text_layout_short", 5000, {
-        int n = text_layout(short_s, 0, AME_TEXT_ALIGN_L, 1.0f, &L);
+        int n = text_layout(short_s, 0, AME_TEXT_ALIGN_L, 1.0f, AME_FONT_PIXEL , &L);
         g_sink += n + L.w;
     });
     BENCH("text_layout_long_tags", 500, {
-        int n = text_layout(long_s, 400, AME_TEXT_ALIGN_L, 1.0f, &L);
+        int n = text_layout(long_s, 400, AME_TEXT_ALIGN_L, 1.0f, AME_FONT_PIXEL , &L);
         g_sink += n + L.w;
     });
     BENCH("text_layout_plain_editor", 2000, {
-        int n = text_layout_plain(long_s, 80 * 8.0f, AME_TEXT_ALIGN_L, 1.0f, &L);
+        int n = text_layout_plain(long_s, 80 * 8.0f, AME_TEXT_ALIGN_L, 1.0f, AME_FONT_PIXEL , &L);
         g_sink += n + L.w;
     });
 }
