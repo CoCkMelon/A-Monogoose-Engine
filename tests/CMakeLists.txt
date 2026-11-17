@@ -96,6 +96,19 @@ add_executable(test_prefab test_prefab.c)
 target_link_libraries(test_prefab PRIVATE ame::3d)
 add_test(NAME prefab COMMAND test_prefab)
 
+# module coverage that was MISSING until now (measured 2026-11-17: both
+# src/tilemap.c and src/events.c shipped with zero tests). Both are pure
+# CPU/logic-thread suites: the tilemap DRAW half stays in test_render_2d.
+add_executable(test_tilemap test_tilemap.c)
+target_link_libraries(test_tilemap PRIVATE ame::2d)
+target_compile_definitions(test_tilemap PRIVATE AME_2D=1)
+add_test(NAME tilemap COMMAND test_tilemap)
+
+add_executable(test_events test_events.c)
+target_link_libraries(test_events PRIVATE ame::2d Threads::Threads)
+target_compile_definitions(test_events PRIVATE AME_2D=1)
+add_test(NAME events COMMAND test_events)
+
 # v1 debug overlay registry (watch list -> trunk text at draw time)
 add_executable(test_debug_watch test_debug_watch.c)
 target_link_libraries(test_debug_watch PRIVATE ame::3d)
