@@ -1,0 +1,141 @@
+# Coordinate space: what it would actually cost to go Y-up
+
+Answering the question directly: **you are right about gameplay, and the engine
+can give you Y-up gameplay for free — but the flip has to go in the projection,
+not in the world data.** Below is the measured situation, then three options with
+their real costs.
+
+---
+
+## 1. What trunk does today (measured)
+
+Trunk runs **two spaces already** — it is not one contract, it is one contract
+plus an undocumented second one:
+
+| Space | Convention | Where | Evidence |
+|---|---|---|---|
+| **Pixel/screen 2D** | x right, **y DOWN**, origin top-left, 1 unit = 1 px at zoom 1 | `ame_camera` kind `AME_CAM_ORTHO2D`, text, tilemap, UI, mouse | `math.h:221` `ame_m4_ortho_px` (`m[5] = -2/h`, `m[13] = +1`); `camera.c:85` *"world y grows DOWN like screen px"* |
+| **Model 3D** | Y up, right-handed, camera looks down −Z | `AME_CAM_PERSP3D`, meshes, OBJ, biscuit | `examples/biscuit/gameplay.h:10` *"Side view in XY (Y up, gravity −Y). Camera looks down −Z"* |
+
+So a Y-up 2D world is **already expressible** — biscuit does exactly that, by
+using the 3D camera for a 2D-looking game. Nothing in the engine forbids Y-up
+gameplay. What is missing is a *named, tested contract* for the flip between the
+two, which is what `coords.h` should be.
+
+### The important structural fact
+
+`camera_screen_to_world2d` is pure algebra with **no flip at all**:
+
+```c
+out[0] = sx / zoom - tx;
+out[1] = sy / zoom - ty;      /* src/camera.c:108 — works BECAUSE world is y-down */
+```
+
+That single line is the reason trunk's 2D path is consistent: mouse px, window px,
+Tiled rows, PNG rows and the baked font atlas are *all* y-down, so no conversion
+appears anywhere. A y-up world means this line, and every caller, needs
+`h - (sy/zoom - ty)`.
+
+---
+
+## 2. Who is affected if the 2D world flips to Y-up (counted)
+
+| Surface | Sites | What breaks |
+|---|---|---|
+| `ame_m4_ortho_px` | `math.h:224`, used by `camera.c:95`, `test_math.c:54` | 5 sign assertions in `test_math` (`tl.y = +1`) |
+| `camera_screen_to_world2d` | 1 impl + 3 test sites (`test_camera.c:90,93,125`) | sign of returned y |
+| Mouse → world in examples | **9 call sites** (`text_editor` 1, `audio_pan` 2, `memory_game` 2, `audio_opus` 1, `audio_ray` 2, `line_draw` 1) | each needs a flip, or `in_mouse_pos` gains a space parameter |
+| Tiled ingest | `tilemap.c` draw places row `y` at `oy + y*tile_height` | map draws upside down until flipped at load — **3 lines** |
+| Text in world space | `text.h` layout is face-space y-down (`text_ascent_h`, baseline) | every world-space label needs a flip or a y-up layout mode |
+| Golden renders | `test_render_2d`: 5 cases, 5 FNV pixel hashes | all 5 hashes re-baseline — the historical regression net loses its reference values |
+| Editor caret contract | `test_editor_geom` (built from the real `ed_app.c`) | caret/pen geometry assertions re-derived |
+
+**Total real work: ~20 edit sites + 5 re-baselined golden hashes.** That is a
+one-commit change, not a rewrite — but re-baselining goldens is exactly the kind of
+change that silently hides a real regression, so it must be its own reviewed
+commit with the mirrored-image check as proof (a correct flip produces a vertical
+mirror of the previous frame for symmetric content; that is verifiable, not
+arbitrary).
+
+---
+
+## 3. Performance: the honest number is "free, if done in the matrix"
+
+- **Flip in the projection matrix** (`m[5] = +2/h` instead of `-2/h`): one sign in
+  a matrix built **once per frame per camera** (`camera_build`). Cost: 0. Zero
+  per-vertex cost, because the vertex shader multiplies by it anyway.
+- **Flip per position in game code**: one float negate per entity per step. At the
+  engine's 1000 Hz fixed step with, say, 500 moving actors that is 500 negates per
+  millisecond — still nothing (sub-microsecond), but it is *repeated work*, and
+  more importantly it is 500 places to get the sign wrong.
+- **Flip at ingest** (Tiled/PNG/OBJ load): once per asset, irrelevant, and it is
+  the only place where the operation is provably correct once and forever.
+- The genuine risk is **not cycles, it is sign bugs**: y-down world + y-up gameplay
+  math means gravity, jump arcs and "is A above B" all read inverted, which is
+  precisely the class of error `coords.h` exists to prevent. biscuit dodged it by
+  going 3D; a future 2D game would not have that escape hatch.
+
+So: **no compatibility or performance problem, provided the flip lives at exactly
+two boundaries** — ingest (data) and projection (view) — and never in game code.
+
+---
+
+## 4. The three options
+
+### Option 1 — keep y-down everywhere (status quo, formalised)
+Cheapest: `coords.h` documents/nails the existing convention, +82-ish lines of
+tested helpers, zero behaviour change, zero re-baselining. Gameplay code writes
+`y -= vy` for gravity and thinks in "screen shows the level upside down relative
+to physics".
+**Verdict:** correct for the 2D pixel-art path, wrong as the only option; every
+Y-up game has to re-derive it (biscuit's workaround proves the demand exists).
+
+### Option 2 — flip the 2D world default to Y-up in one commit
+Gives gameplay what it wants everywhere, matches Unity/Godot 2D. Cost: the ~20
+sites + 5 golden re-baselines above, plus an audit of every world-space text draw
+(the atlas is y-down internally, so text needs either a flip or a y-up layout path —
+this is the part I would time carefully).
+**Verdict:** right destination, wrong first move — it re-baselines the render net
+before the flip has any test asserting it.
+
+### Option 3 — space-tagged API + explicit camera flag, flip staged (**recommended**)
+1. **Now (no behaviour change):** `include/ame/coords.h` holds the conversion set
+   with the space in every name — `ame_px_y_down_*`, `ame_world_y_up_*`,
+   `ame_tile_row_down_*` — plus `ame_y_down_to_up(h, y)` / `ame_y_up_to_down(h, y)`
+   and the Tiled↔world tile-center helpers. Trunk signs are the *default*, and the
+   test asserts both directions, including a round-trip identity
+   (`f(f(y)) == y` exactly for integer h, which is the property that makes the flip
+   safe to apply twice by accident).
+2. **Next (one reviewed commit):** `camera_ortho2d` gains an explicit world-Y
+   choice (`camera_world_y(c, AME_Y_UP)`), implemented as the projection sign plus
+   the matching branch in `camera_screen_to_world2d`. Default stays y-down until
+   the examples are ported; the goldens are re-baselined only for the examples that
+   flip, and the flip is proven by the mirror check.
+3. **Then:** whichever games want Y-up ask for it in one line; games that are
+   pixel/screen-driven (editors, UI-heavy, HUD-over-world) keep y-down with no
+   conversions at all.
+
+Cost of step 1: ~2–3 h including the test, no risk. It converts "trunk's coordinate
+contract lives in handoff prose" into the smallest true statement plus a test, and
+it makes step 2's blast radius explicit and reviewable instead of implicit.
+
+---
+
+## 5. What I would write in `docs/coords.txt`
+
+```
+SPACES (four, named; every engine function says which one it takes)
+  px_y_down      window/screen px, origin top-left ......... camera 2D, in_mouse_pos, text atlas
+  tile_row_down  Tiled rows, right-down (as authored) ...... tilemap loader
+  world_y_down   world px in the default 2D camera ......... ortho2d path (today's default)
+  world_y_up     gameplay space, gravity -Y ................ persp3d path, biscuit, opt-in 2D
+
+RULES
+1. Content ingest converts ONCE, at load (tile_row_down -> world).
+2. Screen<->world conversion lives in camera_screen_to_world2d and nowhere else.
+3. Game code never flips: it picks a space via the camera and stays in it.
+4. A function that converts names both spaces in its name.
+5. The 2D world default stays y-down until camera_world_y lands; flipping it is a
+   single reviewed commit with the goldens re-baselined and the mirror check
+   recorded in the commit message.
+```
