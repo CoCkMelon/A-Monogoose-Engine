@@ -13,6 +13,25 @@ PUBLIC API
   /* or let the logger format the current code + detail: */
   ame_log_last_error();
 
+CROSS-THREAD REPORTING (audit #3)
+  The diagnostic slot is per thread - right for "what failed here", and it
+  stays the fast path. But the loop policy runs app logic on its own thread
+  (loop.txt), so a failure raised while stepping would never reach the thread
+  that logs and reports: the app would keep running a broken simulation with
+  the error slot reading OK.
+  Every error is therefore also published into a small process-wide ring
+  (16 entries, oldest dropped), tagged with the thread that raised it, and:
+
+    int n = ame_error_drain();   /* reporting thread, once per frame */
+
+  logs the entries that came from OTHER threads and returns how many it
+  reported. The caller's own errors are never re-reported - they are already
+  in its slot - and draining twice reports nothing the second time: this is
+  an inbox, not a log. The SDL bootstrap drains once per frame, so a
+  step-thread failure appears in the log with its origin even though no one
+  asked. Publishing costs a few stores on the ERROR path only; success paths
+  are unchanged.
+
 The list in include/ame/error.h is the single source for the enum, symbolic
 name, default severity, and base string. Do not compare or parse diagnostic
 text to branch program logic. Use the code for control flow and the detail for

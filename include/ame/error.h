@@ -76,6 +76,17 @@ ame_error_code ame_last_error_code(void);
 const char *ame_last_error(void);
 const char *ame_last_error_detail(void);
 
+/* THE CROSS-THREAD INBOX (state-audit.txt #3). The slot above is per thread,
+ * which is right for "what failed here" - but logic runs on its own thread
+ * (loop.txt), so a failure raised there would never reach the thread that
+ * reports. Every error raised anywhere is therefore also published into a
+ * small process-wide ring; this drains it, LOGS the entries that came from
+ * OTHER threads, and returns how many it reported. Call it from the
+ * reporting thread (once per frame, or before showing an error). Errors
+ * raised by the CALLING thread are not re-reported - they are already in its
+ * own slot - and a full ring drops its oldest entry, never blocking. */
+int ame_error_drain(void);
+
 /* Small process-wide logger.  It always writes stderr; ame_log_open also
  * mirrors records to an append-only file.  Logging is serialized so engine
  * and logic-thread diagnostics cannot interleave. */

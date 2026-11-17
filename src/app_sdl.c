@@ -640,6 +640,12 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
                 return SDL_APP_SUCCESS;
         }
     }
+    /* the logic thread cannot log its own failures into the reporting
+     * thread's slot, so the inbox is drained once per frame: a step-thread
+     * error surfaces in the log with its origin, instead of the app running
+     * a broken simulation with an empty error slot (error.h, audit #3).
+     * Returns immediately when nothing is pending - the common case. */
+    (void)ame_error_drain();
     if (app_render() != 0)
         return SDL_APP_SUCCESS;
     if (g_shot_left > 0 && --g_shot_left == 0 && g_shot_path[0]) {

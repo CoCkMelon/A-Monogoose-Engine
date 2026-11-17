@@ -4,6 +4,7 @@
 
 #include <stdarg.h>
 #include <stdatomic.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -28,6 +29,59 @@ typedef struct {
 } ame_error_state;
 
 static _Thread_local ame_error_state g_last = { AME_ERR_OK, { 0 }, { 0 } };
+
+/* THE CROSS-THREAD CHANNEL (state-audit.txt #3). A _Thread_local slot is
+ * right for "what failed HERE", but the loop policy puts game logic on its
+ * own thread (loop.txt), so a failure raised while stepping is invisible to
+ * the thread that logs and reports it: the app keeps running a broken
+ * simulation and the error slot reads empty. Every error is therefore ALSO
+ * published into a small process-wide ring, tagged with its origin thread,
+ * which the reporting thread drains with ame_error_drain(). Publishing costs
+ * a few stores on the error path only - never on success - and the
+ * thread-local slot stays both the fast path and each thread's own truth. */
+static bool valid_code(ame_error_code code);
+
+#define AME_ERR_RING 16
+
+typedef struct {
+    ame_error_code code;
+    unsigned long thread_id;
+    char detail[128];
+} ame_err_record;
+
+static ame_err_record g_ring[AME_ERR_RING];
+static unsigned g_ring_head;  /* next slot to write */
+static unsigned g_ring_count; /* published, not yet drained */
+static atomic_flag g_ring_lock = ATOMIC_FLAG_INIT;
+
+/* a thread's own address of a thread-local object: unique per thread with
+ * no platform thread API, which keeps this file dependency-free (the web and
+ * Android builds get the same id semantics) */
+static unsigned long thread_tag(void) {
+    return (unsigned long)(uintptr_t)&g_last;
+}
+
+static void ring_push(ame_error_code code, const char *detail) {
+    if (code == AME_ERR_OK || !valid_code(code))
+        return;
+    while (atomic_flag_test_and_set_explicit(&g_ring_lock,
+                                             memory_order_acquire)) {
+        /* error path only: contention here means two threads failing at
+         * the same instant, which is exactly when serializing is right */
+    }
+    ame_err_record *r = &g_ring[g_ring_head];
+    r->code = code;
+    r->thread_id = thread_tag();
+    if (detail && detail[0])
+        snprintf(r->detail, sizeof r->detail, "%s", detail);
+    else
+        r->detail[0] = '\0';
+    g_ring_head = (g_ring_head + 1u) % AME_ERR_RING;
+    if (g_ring_count < AME_ERR_RING)
+        g_ring_count++;
+    atomic_flag_clear_explicit(&g_ring_lock, memory_order_release);
+}
+
 static FILE *g_log_file;
 static ame_log_level g_log_level = AME_LOG_DEBUG;
 static atomic_flag g_log_lock = ATOMIC_FLAG_INIT;
@@ -82,6 +136,7 @@ void ame_set_error(ame_error_code code, const char *detail) {
     else
         g_last.detail[0] = '\0';
     g_last.rendered[0] = '\0';
+    ring_push(code, NULL); /* publish: another thread may be the reporter */
 }
 
 void ame_set_errorf(ame_error_code code, const char *fmt, ...) {
@@ -97,6 +152,7 @@ void ame_set_errorf(ame_error_code code, const char *fmt, ...) {
     vsnprintf(g_last.detail, sizeof g_last.detail, fmt, ap);
     va_end(ap);
     g_last.rendered[0] = '\0';
+    ring_push(code, g_last.detail);
 }
 
 ame_error_code ame_last_error_code(void) {
@@ -116,6 +172,37 @@ const char *ame_last_error(void) {
                  info->message, g_last.detail);
     }
     return g_last.rendered;
+}
+
+int ame_error_drain(void) {
+    const unsigned long me = thread_tag();
+    ame_err_record batch[AME_ERR_RING];
+    unsigned n = 0;
+    while (atomic_flag_test_and_set_explicit(&g_ring_lock,
+                                             memory_order_acquire)) {
+    }
+    for (unsigned i = 0; i < g_ring_count; i++) {
+        unsigned idx = (g_ring_head + AME_ERR_RING - g_ring_count + i)
+                       % AME_ERR_RING;
+        batch[n++] = g_ring[idx];
+    }
+    g_ring_count = 0; /* drained, whether or not the caller prints them */
+    atomic_flag_clear_explicit(&g_ring_lock, memory_order_release);
+
+    int reported = 0;
+    for (unsigned i = 0; i < n; i++) {
+        if (batch[i].thread_id == me)
+            continue; /* this thread's own errors are already in its slot */
+        const ame_error_info *info = ame_error_info_get(batch[i].code);
+        if (batch[i].detail[0])
+            ame_log(info->level, "%s: %s: %s (thread %lu)", info->name,
+                    info->message, batch[i].detail, batch[i].thread_id);
+        else
+            ame_log(info->level, "%s: %s (thread %lu)", info->name,
+                    info->message, batch[i].thread_id);
+        reported++;
+    }
+    return reported;
 }
 
 static void log_unlock(void) {

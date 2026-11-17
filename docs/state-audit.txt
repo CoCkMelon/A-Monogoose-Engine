@@ -85,6 +85,26 @@ THE INVENTORY
    text_layout must record which face produced it - otherwise the layout and
    the draw can disagree after a face switch (an existing hazard).
 
+3. [SEV 2] FIXED - LAST ERROR IS THREAD-LOCAL
+   STATUS: fixed in "error: a failure on the step thread reaches the
+   reporter". The thread-local slot stays (it is the correct answer to "what
+   failed HERE"), and every error is ALSO published into a 16-entry
+   process-wide ring tagged with its origin thread. ame_error_drain() logs
+   the entries raised by OTHER threads and returns how many: an inbox, not a
+   log, so draining twice reports nothing. The SDL bootstrap drains once per
+   frame, which is what closes the loop - nobody has to remember.
+   Cost is confined to the error path (a spinlock + a 128-byte copy on
+   failure; zero on success), and the ring never blocks: a full ring drops
+   its oldest entry. The origin thread is identified by the address of its
+   own thread-local slot, so the file keeps zero platform-thread deps and
+   web/Android get the same semantics.
+   Tests: test_error "a failure on another thread reaches the reporting
+   thread" (pthread raises, main drains, asserts count, detail, error name
+   and origin all cross, and that a second drain reports 0) and "the calling
+   thread's own errors are not re-reported" (main's slot untouched, nothing
+   logged).
+   Original finding follows.
+
 3. [SEV 2] LAST ERROR IS THREAD-LOCAL
    src/error.c:30 `static _Thread_local ame_error_state g_last`. An error
    raised on the step thread is invisible to the main thread that logs it,
