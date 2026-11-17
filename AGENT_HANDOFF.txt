@@ -1432,3 +1432,33 @@ docs/time.txt - loop.txt only name-drops ame_time_seconds(). The drift
 gate passed because SOME docs path changed, not because each new public
 header has a spec file; extending tools/ci_drift_check.sh to require a
 spec per added header would catch this class mechanically.
+
+=== 2026-11-17 (later): the state-audit fixes, four commits ==============
+Landed on ame-next-trunk, each one verified (build -Werror, ctest 32/32,
+asan; the error commit also tsan):
+  81ef8cd render: pass selection + lighting stamps are frame state.
+          rp_begin_frame resets cur_pass/lit/normal. Proof: two new
+          frame-independence cases (failed before: byte 61600) and five
+          example captures PIXEL-IDENTICAL before/after.
+  91bc5ec text: the face is an argument, never a mode. text_set_font,
+          text_font_mode and g_font_mode are GONE; layout/measure/draw and
+          the metric accessors take `int face`; text_face_resolve() is the
+          only query. Found an app bug while converting: text_editor's
+          AME_ED_SMOOTH paired text_init_dsdf() with a SMOOTH request, so
+          the knob had never done anything - now 26198 px differ (was 0).
+  908ba6e env: docs/env.txt tables all 12 engine variables with a VALUE vs
+          MODEL column; overrides log what they replaced, and
+          AME_FIXED_FRAME_DT warns that it REPLACES the policy and removes
+          the logic thread. ci_drift_check.sh now fails when src/ reads an
+          undocumented AME_* variable (verified by deleting one).
+  b28bee5 error: a failure on the step thread reaches the reporter. The
+          thread-local slot stays; every error is also published to a
+          16-entry ring tagged with its origin, drained once per frame by
+          the SDL bootstrap (ame_error_drain()).
+
+REMAINING from the audit: #5, order-dependent setup (rp_set_gl_loader before
+rp_init, install-once backends, ame_prefab_reset) - not started.
+OPEN SPEC GAP, still open: the drift gate proves "some doc changed", not
+"each new public header has a spec" (see the note above). time.h still has
+no docs/time.txt, and env.txt/state-audit.txt are the only new files with a
+README index entry - docs/README.txt lists them, which is the weaker check.
