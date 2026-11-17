@@ -166,3 +166,14 @@ SOURCES (research background; plain links)
     (github.event.before..after) or the PR range (base..head); a
     new-branch push with an all-zero before passes there and gets
     caught by the PR range instead.
+
+    Two narrower gates came from holes this one could not see:
+      - NEW PUBLIC HEADER NEEDS A SPEC: a header ADDED in the range needs
+        docs/<stem>.txt (include/ame/time.h -> docs/time.txt). The
+        docs/-changed rule alone let time.h ship with no spec, because
+        any docs edit satisfied it. A header specified as a section of
+        another doc still gets the one-line docs/<stem>.txt pointing at
+        it - the check is mechanical on purpose.
+      - ENV VARS ARE DOCUMENTED: every getenv("AME_...") in src/ must
+        appear in docs/env.txt (audit #4; undocumented env vars are
+        hidden state).

@@ -244,6 +244,8 @@ FILES IN THIS FOLDER
   errors.txt       errors.txt
   env.txt          every env var the engine reads (VALUE vs MODEL), and
                    the CI gate that keeps this table complete
+  time.txt         the step policy + sim clock API (time.h): plan/commit,
+                   exact-step FIXED, gated overload, worked arithmetic
   state-audit.txt  module-level hidden state, measured 2026-11-17
   texture-files.txtfiles.txt
   plan-3d-puzzle.txt campaign F: 3D third-person puzzle game (glTF

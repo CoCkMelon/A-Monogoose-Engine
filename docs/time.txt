@@ -1,0 +1,148 @@
+ame-next ENGINE SPEC
+File: time.txt - the step policy and the simulation clock (time.h)
+
+WHY THIS FILE
+loop.txt states the POLICY (which mode, and why gating beats burst catch-up).
+This file is the API spec for the module that implements the arithmetic:
+include/ame/time.h and src/time.c. It exists because the drift gate used to
+be satisfied by ANY docs change, so a public header could ship without a spec
+- time.h did, and the next reader had to reverse-engineer plan()/commit()
+from the code. docs/agents.txt: a public header has a spec under docs/.
+
+WHAT THIS MODULE IS, AND IS NOT
+  IS: pure state + arithmetic. No SDL, no threads, no sleeping, no globals,
+  no allocation. One ame_time per app, driven by whichever bootstrap owns
+  the loop.
+  IS NOT: the loop itself. The bootstrap decides who calls plan() and when,
+  whether a logic thread exists, and how long to sleep; app_sdl.c and
+  app_web.c do that. That split is why this is testable headless with
+  synthetic wall-clock deltas (tests/test_time.c: 19 cases, 81 checks).
+  NAMING: `ame_time` (this struct) is the SIM clock. app.h's
+  `ame_time_seconds()` is the platform's monotonic WALL clock. They advance
+  at different rates whenever scale != 1.
+
+THE POLICY DESCRIPTOR (what the app declares)
+    typedef struct {
+        ame_loop_mode mode;   /* AME_LOOP_FIXED (0) or AME_LOOP_VARIABLE */
+        double hz;            /* FIXED: steps per second (<=0 = 1000) */
+        int    max_steps;     /* FIXED: per-wake gate   (<=0 = 4)     */
+        double hitch_max;     /* both: clamp one real dt (<=0 = 0.25 s) */
+    } ame_loop_desc;
+    ame_loop_desc ame_loop_defaults(void);   /* 1000 Hz, 4, 0.25 s */
+
+  A zero field means "engine default" and ame_loop_defaults() spells the
+  defaults out, so an app can copy the struct and change one number. The
+  values are no longer laws: 1000 Hz is the DEFAULT because sub-millisecond
+  input latency is free on a modern CPU, not because the engine requires it.
+  Deciding the policy is the app's job (app_loop()), and it is declared by
+  RETURNING this struct - never set through an engine setter, which would be
+  hidden state (state-audit.txt).
+
+RESOLVED CONFIG vs STATE
+  ame_time_configure() resolves a descriptor into the live struct:
+    - hz <= 0              -> AME_TIME_DEFAULT_HZ (1000)
+    - hz <  1              -> floored to 1 Hz (a 0 s step would step forever)
+    - max_steps <= 0       -> AME_TIME_DEFAULT_MAX_STEPS (4)
+    - hitch_max <= 0       -> AME_TIME_DEFAULT_HITCH_MAX (0.25)
+    - step = 1/hz exactly, in double
+  configure() keeps the CLOCKS AND COUNTERS (scale, time, unscaled_time,
+  frame, dropped, wakes) and only replaces the policy - so a mode switch
+  mid-run does not rewind the sim clock. It does reset nothing else.
+
+THE CALLING CONTRACT
+    ame_time_plan(&t, real_dt)  -> int n   /* how many steps to run NOW */
+    for (i = 0; i < n; i++) { run_one_step(t->delta); ame_time_commit(&t); }
+  plan() TAKES wall-clock time since the previous call - the MEASURED value,
+  which is why the SDL logic thread feeds it measured elapsed time instead of
+  assuming one step per wake. commit() is called once per step ACTUALLY run:
+  it advances t->time by t->delta and increments t->frame.
+  plan() charges the accumulator for all n steps up front (acc -= n * step in
+  FIXED), so the contract is "run everything plan() asked for". An app that
+  aborts mid-batch loses the unrun steps rather than seeing them replayed on
+  the next wake; the built-in loop either runs the whole batch or stops the
+  app, so this is a rule for custom drivers, not a situation the engine
+  creates. Unrun steps are NOT counted in `dropped` - that counter means "the
+  gate discarded them", and conflating the two would hide real overload.
+
+  AME_TIME is a value struct. Copy it to snapshot, assign to restore; there
+  is no hidden registry.
+
+FIXED MODE - EXACT STEPS, GATED
+    t->acc += real_dt_clamped * scale
+    n = (int)(t->acc / step)
+    if (n > max_steps) { dropped += n - max_steps; n = max_steps; acc = 0 }
+    else                 acc -= n * step
+    t->delta = step          /* ALWAYS exactly 1/hz */
+  Two properties follow, and both are asserted in test_time:
+    - every step's dt is EXACTLY 1/hz, so the same wall-clock sequence yields
+      the same sim state (case "same wall-clock sequence gives the same sim
+      state");
+    - OVERLOAD DROPS instead of bursting. The gated wake discards the WHOLE
+      backlog it cannot afford, so the sim runs slower than wall clock and
+      never falls further behind. Burst catch-up is the failure mode: it
+      lengthens the frame, which drops the next wake too.
+  Scale multiplies time INTO THE MODE (how many steps are due), never a
+  step's dt: 0.5 runs every other step, 2.0 runs two, paused runs none. A
+  slowed replay therefore still reproduces bit-identically.
+
+VARIABLE MODE - ONE STEP PER WAKE
+    one step per plan() call, t->delta = real_dt_clamped * scale
+    (returns 0 when that is 0, i.e. a paused app runs no step at all)
+  No accumulator, no gate, no catch-up: a frame IS a step. Used by
+  calculators, settings screens, menu apps, text tools - anything with no
+  simulation clock to preserve. No logic thread exists in this mode
+  (app_sdl.c), so dt is the frame dt and nothing else.
+
+PAUSE AND SCALE
+  ame_time_set_scale(t, s): s < 0 clamps to 0. scale == 0 clears the
+  accumulator, sets delta to 0 and returns 0 steps - sim time stops while the
+  UNSCALED clock keeps advancing, which is what a pause menu needs (its own
+  UI animation can still run off wall time). ame_time_paused(t) is the
+  predicate; there is no separate paused flag to fall out of sync.
+
+CLAMPS THAT PREVENT NONSENSE
+  - real_dt < 0 clamps to 0 (a clock that stepped backwards must not rewind
+    the sim);
+  - real_dt > hitch_max clamps to hitch_max in BOTH modes, so a stalled or
+    hidden window cannot teleport the sim forward by the whole stall;
+  - a NULL ame_time is a no-op returning 0 for every entry point, so a
+    failed init cannot crash a frame.
+  All three are cases in test_time ("NULLs and negative deltas are harmless",
+  "a hitch longer than hitch_max is clamped before planning", "variable mode
+  clamps a stall to hitch_max").
+
+COUNTERS - WHAT TO LOG WHEN SOMETHING FEELS WRONG
+    frame     steps committed            (sim progress)
+    dropped   steps the gate discarded   (the overload signal)
+    wakes     plan() calls               (how often the bootstrap asked)
+  A rising `dropped` with a flat `frame` is the signature of a machine that
+  cannot keep up: either lower hz, raise max_steps, or reduce step cost. For
+  online play the same counter is the "this client is slipping" signal that
+  should trigger a resync or an input-rate change rather than a bigger gate.
+  ame_loop_dropped_steps() (app.h) exposes the live loop's count.
+
+WORKED ARITHMETIC (defaults: step 1 ms, gate 4, hitch 0.25 s)
+    wall dt       steps   dropped   sim advanced   note
+    1 ms          1       0         1 ms           steady state at 1 kHz
+    4 ms          4       0         4 ms           exactly at the gate
+    10 ms         4       6         4 ms           gated: 40% speed
+    100 ms        4       96        4 ms           a stall, not a burst
+    0.25 s        4       246       4 ms           clamped at hitch_max
+    (scale 0)     0       0         0              acc cleared, no step
+  (Each row starts from a fresh state, so `dropped` is what THAT row added;
+  the counter itself is cumulative - the last row of the table above leaves
+  it at 348, which is the number to compare against `frame` in a log.)
+  At 60 Hz (step 16.67 ms) 16.67 ms of wall clock is exactly one step, and a
+  100 ms stall runs 4 steps and drops 2. The 0.5x scale case: 2 ms of wall
+  clock is one step every other wake, each still exactly 1 ms of sim time.
+
+RELATION TO THE REST OF THE ENGINE
+  app.h       app_loop() returns the descriptor; app_fixed()/app_step() are
+              the hooks the resolved mode selects. This module never calls
+              them - the bootstrap does.
+  loop.txt    the policy narrative, the recommended rates, why gating wins.
+  docs/env.txt AME_LOOP_HZ / AME_LOOP_VARIABLE / AME_LOOP_MAX_STEPS (force a
+              mode, logged as "[QA override]") and AME_FIXED_FRAME_DT
+              (replaces the policy AND removes the logic thread).
+  audit #3    a step-thread failure reaches the reporting thread through
+              ame_error_drain(); the loop drains it once per frame.
