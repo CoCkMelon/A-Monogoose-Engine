@@ -6,7 +6,8 @@
  * every frame. AME_2D builds the pixel-perfect ortho camera; AME_3D the
  * perspective camera. There are no camera2d/camera3d files.
  *
- * 2D: integer-snapped position, INTEGER zoom steps only (render.txt rule 4).
+ * 2D: integer-snapped position, INTEGER zoom steps only (render.txt rule 4);
+ * the 2D world is world_y_up, screens are px_y_down (coords.txt).
  * 3D: position + look + fov; provides screen->ray for picking.
  */
 #ifndef AME_CAMERA_H
@@ -56,12 +57,22 @@ void camera_build(ame_camera *c);
 
 /* --- queries (pure) -------------------------------------------------------- */
 
-/* 2D: window px -> world px on the z=0 plane. Returns world coords. */
-/* world px at the window's top-left corner (ortho2d). INTEGRAL whenever
- * the camera snaps - the crisp-text guarantee for any viewport size. */
-void camera_world_origin(const ame_camera *c, float *ox, float *oy);
-void camera_screen_to_world2d(const ame_camera *c, float sx, float sy,
-                              float out[2]);
+/* 2D WORLD SPACE IS world_y_up (coords.txt): +x right, +y UP, gravity is -y.
+ * Screen input is px_y_down (origin = window top-left). These two functions
+ * are THE boundary between them; nothing else in the engine flips y.
+ *
+ * world_y_up px at the view's LOWER-LEFT and TOP-LEFT corners (ortho2d).
+ * INTEGRAL whenever the camera snaps - the crisp-text guarantee for any
+ * viewport size, in either corner convention. */
+void camera_world_origin_y_up(const ame_camera *c, float *ox, float *oy);
+void camera_world_top_left_y_up(const ame_camera *c, float *ox, float *oy);
+
+/* px_y_down window px -> world_y_up on the z=0 plane. */
+void camera_screen_y_down_to_world_y_up(const ame_camera *c, float sx, float sy,
+                                       float out[2]);
+/* inverse: world_y_up -> px_y_down window px. */
+void camera_world_y_up_to_screen_y_down(const ame_camera *c, float wx, float wy,
+                                       float out[2]);
 
 /* 3D: window px -> world-space ray (origin + normalized dir). */
 void camera_screen_ray(const ame_camera *c, float sx, float sy,

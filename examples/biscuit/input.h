@@ -24,7 +24,7 @@ enum {
 void game_input_bindings(void);
 /* clear held state (restart) */
 void game_input_reset(void);
-/* logic thread, start of app_fixed: maps actions onto the bf_hold_* and
+/* logic thread, start of app_step: maps actions onto the bf_hold_* and
  * bf_request_* gameplay entry points */
 void game_input_poll(void);
 

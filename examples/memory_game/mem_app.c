@@ -157,6 +157,13 @@ static void online_pump(void) {
 
 /* --- app hooks (engine calls these; loop.txt) ------------------------------ */
 
+/* loop declaration (app.h, loop.txt): this app is stepped at a fixed rate,
+ * so dt is exactly 1/hz every call and replays stay frame-rate independent.
+ * ame_loop_defaults() = FIXED 1000 Hz, 4-step gate: copy and change hz. */
+ame_loop_desc app_loop(void) {
+    return ame_loop_defaults();
+}
+
 int app_init(void) {
     if (!in_bind_button(AME_ACT_CONFIRM, AME_BTN_LEFT))
         return 1;
@@ -606,7 +613,8 @@ static void card_label_pose(const mem_snap *s, int i,
     float sa = sinf(a), ca = cosf(a);
     float lift = s->lift[i] + card_flip_lift(s->angle[i]);
     ame_v3 right = ame_v3_(1, 0, 0);
-    ame_v3 ydir  = ame_v3_(0, -sa, -ca);
+    ame_v3 ydir  = ame_v3_(0, -sa, -ca);   /* DOWN the card face */
+    ame_v3 up    = ame_v3_(0,  sa,  ca);   /* UP the card face   */
     ame_v3 nrm   = ame_v3_(0, -ca, sa);
     /* px metrics -> card units: size by INK (cap height), not by the
      * line box - line_h carries leading, so fitting l->h left the print
@@ -622,22 +630,26 @@ static void card_label_pose(const mem_snap *s, int i,
      * box: leading/side bearings otherwise shift the print off-centre */
     t = ame_v3_sub(t, ame_v3_scale(right, (l->ink_x0 + ink_w * 0.5f) * gs));
     t = ame_v3_sub(t, ame_v3_scale(ydir, (l->ink_y0 + ink_h * 0.5f) * gs));
-    pose[0] = right.x * gs; pose[4] = ydir.x * gs; pose[8] = nrm.x;  pose[12] = t.x;
-    pose[1] = right.y * gs; pose[5] = ydir.y * gs; pose[9] = nrm.y;  pose[13] = t.y;
-    pose[2] = right.z * gs; pose[6] = ydir.z * gs; pose[10] = nrm.z; pose[14] = t.z;
+    /* col1 is the pose's +y. text_draw_world negates the layout's y-DOWN
+     * offsets itself, so +y here is UP the face while the ink hangs below the
+     * anchor - the centring above still uses ydir (down) for that reason. */
+    pose[0] = right.x * gs; pose[4] = up.x * gs; pose[8] = nrm.x;  pose[12] = t.x;
+    pose[1] = right.y * gs; pose[5] = up.y * gs; pose[9] = nrm.y;  pose[13] = t.y;
+    pose[2] = right.z * gs; pose[6] = up.z * gs; pose[10] = nrm.z; pose[14] = t.z;
     pose[3] = 0; pose[7] = 0; pose[11] = 0; pose[15] = 1;
 }
 
 /* camera-facing pose for a text block whose TOP-LEFT anchor is at (wx,wy,wz).
- * layout +x -> camera right; layout +y (text down) -> SCREEN DOWN. */
+ * layout +x -> camera right; the pose's +y is CAMERA UP (world_y_up), because
+ * text_draw_world turns the layout's y-down offsets into -y itself. */
 static void billboard_pose(float pose[16], float wx, float wy, float wz,
                            float scale) {
     ame_v3 f = ame_v3_norm(ame_v3_sub(CAM.look, CAM.pos));
     ame_v3 r = ame_v3_norm(ame_v3_cross(f, CAM.up));
     ame_v3 u = ame_v3_cross(r, f);
-    pose[0] = r.x * scale; pose[4] = -u.x * scale; pose[8] = 0;  pose[12] = wx;
-    pose[1] = r.y * scale; pose[5] = -u.y * scale; pose[9] = 0;  pose[13] = wy;
-    pose[2] = r.z * scale; pose[6] = -u.z * scale; pose[10] = 0; pose[14] = wz;
+    pose[0] = r.x * scale; pose[4] = u.x * scale; pose[8] = 0;  pose[12] = wx;
+    pose[1] = r.y * scale; pose[5] = u.y * scale; pose[9] = 0;  pose[13] = wy;
+    pose[2] = r.z * scale; pose[6] = u.z * scale; pose[10] = 0; pose[14] = wz;
     pose[3] = 0; pose[7] = 0; pose[11] = 0; pose[15] = 1;
 }
 

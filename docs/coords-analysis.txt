@@ -1,5 +1,11 @@
 # Coordinate space: what it would actually cost to go Y-up
 
+STATUS 2026-11-17: EXECUTED. Option 2 was taken (flip the 2D world default to
+world_y_up) with Option 3's naming discipline folded in. The live spec is
+docs/coords.txt; this file is kept as the measurement and rationale that
+justified the change, and its counts matched the work done (~20 consumer sites,
+5 golden/pixel assertions re-derived). Options 1 and 3 below are historical.
+
 Answering the question directly: **you are right about gameplay, and the engine
 can give you Y-up gameplay for free — but the flip has to go in the projection,
 not in the world data.** Below is the measured situation, then three options with

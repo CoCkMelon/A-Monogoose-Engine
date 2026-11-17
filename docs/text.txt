@@ -187,3 +187,13 @@ CHECK
   The dialogue box types out with a typewriter reveal.
   Layout tests pass headlessly; compile is clean with
   warnings-as-errors; native and web match.
+
+COORDINATE SPACES (coords.txt)
+  LAYOUT is px_y_down: el[].y grows DOWN from the pen origin, matching
+  the baked atlas rows. SCREEN drawing (text_draw_screen) converts the
+  call's window px to the 2D world (world_y_up) once, per call, and
+  negates the layout's y offsets. POSE drawing (text_draw_world) keeps
+  the layout y-down locally and maps local y to -y before the pose, so
+  a pose's +y column is world/camera UP and the ink hangs BELOW the
+  pose origin - billboards stay upright in 2D and 3D. Tests pin both
+  against the atlas by SSD (tests/test_render.c).

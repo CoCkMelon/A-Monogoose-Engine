@@ -161,7 +161,10 @@ int main(void) {
          * bucket; layer sorts within it) */
         for (int i = 0; i < 1000; i++) {
             float x = (float)(i % 40) * 8.0f;
-            float y = (float)(i / 40) * 9.0f;
+            /* world_y_up: the same visible block, mirrored about the origin
+             * (the view is centred on 0,0) - visible either way, which is what
+             * the batch-count and determinism assertions need. */
+            float y = -(float)(i / 40) * 9.0f;
             rp_push_sprite(&(ame_rp_sprite){ .tex = 0, .x = x, .y = y,
                 .w = 6, .h = 6, .u0 = 0, .v0 = 0, .u1 = 1, .v1 = 1,
                 .tint = { 0.9f, 0.8f, 0.3f, 1.0f }, .layer = 10 });
@@ -193,7 +196,7 @@ int main(void) {
             ame_tilemap_draw(&tm, 0, 0, 0, 0);
             for (int i = 0; i < 1000; i++) {
                 float x = (float)(i % 40) * 8.0f;
-                float y = (float)(i / 40) * 9.0f;
+                float y = -(float)(i / 40) * 9.0f; /* world_y_up */
                 rp_push_sprite(&(ame_rp_sprite){ .tex = 0, .x = x, .y = y,
                     .w = 6, .h = 6, .u0 = 0, .v0 = 0, .u1 = 1, .v1 = 1,
                     .tint = { 0.9f, 0.8f, 0.3f, 1.0f }, .layer = 10 });
@@ -210,7 +213,7 @@ int main(void) {
             ame_tilemap_draw(&tm, 0, 0, 0, 0);
             for (int i = 0; i < 1000; i++) {
                 float x = (float)(i % 40) * 8.0f;
-                float y = (float)(i / 40) * 9.0f;
+                float y = -(float)(i / 40) * 9.0f; /* world_y_up */
                 rp_push_sprite(&(ame_rp_sprite){ .tex = 0, .x = x, .y = y,
                     .w = 6, .h = 6, .u0 = 0, .v0 = 0, .u1 = 1, .v1 = 1,
                     .tint = { 0.9f, 0.8f, 0.3f, 1.0f }, .layer = 10 });
@@ -231,7 +234,7 @@ int main(void) {
             ame_tilemap_draw(&tm, 0, 0, 0, 0);
             for (int i = 0; i < 1000; i++) {
                 float x = (float)(i % 40) * 8.0f;
-                float y = (float)(i / 40) * 9.0f;
+                float y = -(float)(i / 40) * 9.0f; /* world_y_up */
                 rp_push_sprite(&(ame_rp_sprite){ .tex = 0, .x = x, .y = y,
                     .w = 6, .h = 6, .u0 = 0, .v0 = 0, .u1 = 1, .v1 = 1,
                     .tint = { 0.9f, 0.8f, 0.3f, 1.0f }, .layer = 10 });

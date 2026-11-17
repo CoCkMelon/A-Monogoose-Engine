@@ -75,7 +75,8 @@ EXAMPLE (SoA projectile pool)
 
 THREAD SAFETY (split threads - see principles.txt)
   The engine uses split threads by default: a logic/sim thread owns
-  the pools and steps at 1000 Hz; the main thread renders; optionally
+  the pools and steps at the declared rate (1000 Hz default); the main
+  thread renders; optionally
   an audio thread. Pools are owned by the LOGIC thread (their sole
   writer). Handoff to render/audio:
     - the logic thread is the ONLY writer of a pool/slot/field;

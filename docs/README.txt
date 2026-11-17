@@ -37,6 +37,9 @@ CHOICES MADE (fixed - change here only if you must)
   Events:    discrete gameplay events (overlap-edge detection over the
              geometry module + a deferred queue). No general event bus
              yet, no physics solver needed. UI: in-scene mesh + C code.
+  Coords:    world_y_up 2D world (gravity -y), px_y_down screens,
+             tile_row_down for Tiled ingest; ONE conversion header,
+             spaces named in every function (coords.txt).
   Levels:    static geometry + markers + code that spawns actors.
              NO runtime scene graph, NO fancy scene YAML.
   Dialogue:  tight YAML, parsed at runtime with libfyaml (a vendored
@@ -49,11 +52,15 @@ CHOICES MADE (fixed - change here only if you must)
              (dialogue, saves, settings definitions) or turned into C
              at build time.
   Loop:      split threads (kept): a logic thread steps the sim (and
-             geometry) at a fixed 1000 Hz; the main thread renders at
-             display rate; cross-thread state via atomics/snapshots.
-             At least 1000 Hz simulation (or update-on-input-callback
-             for real-time actions) is NON-NEGOTIABLE for low latency;
-             see loop.txt.
+             geometry); the main thread renders at display rate;
+             cross-thread state via atomics/snapshots. The STEP POLICY
+             belongs to the app: app_loop() declares FIXED (1 kHz
+             default) or VARIABLE, and the app implements the matching
+             app_fixed()/app_step() hook. Fixed 1000 Hz is the
+             recommended default, any hz is allowed, and VARIABLE
+             per-frame stepping is legitimate for tools that have no
+             sim clock. Replay/netcode require a fixed step; overload
+             GATES (drops steps) instead of burst-catching up. loop.txt.
   Geometry:  model geometry via TWO converging paths - a small runtime
              OBJ reader for dev iteration/hot reload, and Assimp as a
              build-time host tool for cooked ship data. Both produce
@@ -107,7 +114,7 @@ IMPLEMENTATION STAGES (roadmap; later stages add advanced features)
     and 3D from one C core (render.txt first milestone) + enough to
     make the Memory game playable LOCALLY (two sides on one machine /
     a local test driver) with 3D card-flip animation.
-    Builds on: core/build, data pools, 1000 Hz fixed-step loop,
+    Builds on: core/build, data pools, app-declared step policy,
     input, GEOMETRY/collision-query module (present but light use;
     no physics, no solver), events, single-pass textured renderer
     (2D sprites AND 3D unlit meshes - the card grid is real 3D panels

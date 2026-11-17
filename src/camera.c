@@ -54,14 +54,13 @@ ame_camera *camera_viewport(ame_camera *c, int w, int h) {
     return c;
 }
 
-/* ortho2d view translation: world px -> window px is x+tx (times zoom).
+/* ortho2d view translation: world_y_up px -> view px is x+tx, y+ty (times
+ * zoom), where view px is [0,w]x[0,h] with (0,0) at the view's LOWER-LEFT.
  * With snap on, BOTH the position and the translation are integral, so
  * integer world coordinates land on integer window pixels for ANY
  * viewport size - an odd 1281x721 window must not soft-shift the whole
  * scene by half a pixel (the tx below floors the .5 away: the leftover
  * half px falls at the far edge, never under every glyph). */
-void camera_world_origin(const ame_camera *c, float *ox, float *oy);
-
 static void ortho_tx_ty(const ame_camera *c, float *tx, float *ty) {
     float w = (float)(c->vw / c->zoom);
     float h = (float)(c->vh / c->zoom);
@@ -77,22 +76,36 @@ static void ortho_tx_ty(const ame_camera *c, float *tx, float *ty) {
     *ty = tY;
 }
 
-void camera_world_origin(const ame_camera *c, float *ox, float *oy) {
+/* world_y_up px of the view's LOWER-LEFT corner. `_y_up` in the name on
+ * purpose: in px_y_down screen space the window's origin is its TOP-left,
+ * and the two differ by the view height (coords.h). */
+void camera_world_origin_y_up(const ame_camera *c, float *ox, float *oy) {
     float tx, ty;
     ortho_tx_ty(c, &tx, &ty);
     if (ox) *ox = -tx;
-    if (oy) *oy = -ty;
+    if (oy) *oy = -ty;   /* view y=0 is the BOTTOM row in a y-up world */
+}
+
+/* world_y_up px of the view's TOP-LEFT corner (what px_y_down callers mean
+ * by "the window corner"). */
+void camera_world_top_left_y_up(const ame_camera *c, float *ox, float *oy) {
+    float tx, ty;
+    ortho_tx_ty(c, &tx, &ty);
+    float h = (float)(c->vh / c->zoom);
+    if (ox) *ox = -tx;
+    if (oy) *oy = h - ty;
 }
 
 void camera_build(ame_camera *c) {
     if (c->kind == AME_CAM_ORTHO2D) {
         /* pixel-perfect: snap position to whole world px, integer zoom.
-         * pos = CENTER of the view; world y grows DOWN like screen px. */
+         * pos = CENTER of the view; world is world_y_up (coords.txt), so a
+         * larger y is HIGHER on screen and gravity is -y. */
         float tx, ty;
         ortho_tx_ty(c, &tx, &ty);
         float w = (float)(c->vw / c->zoom);
         float h = (float)(c->vh / c->zoom);
-        ame_m4 proj = ame_m4_ortho_px(w, h, c->zn, c->zf);
+        ame_m4 proj = ame_m4_ortho_px_y_up(w, h, c->zn, c->zf);
         ame_m4 view = ame_m4_translate(ame_v3_(tx, ty, 0));
         c->vp = ame_m4_mul(proj, view);
         c->vp_inv = ame_m4_inverse(c->vp);
@@ -105,12 +118,26 @@ void camera_build(ame_camera *c) {
     }
 }
 
-void camera_screen_to_world2d(const ame_camera *c, float sx, float sy,
-                              float out[2]) {
+/* THE screen->world boundary (coords.txt rule 2): sx,sy are px_y_down window
+ * pixels, the result is world_y_up. The y term mirrors about the view box:
+ * a screen y of 0 is the view's TOP, which is world y = h - ty. */
+void camera_screen_y_down_to_world_y_up(const ame_camera *c, float sx, float sy,
+                                       float out[2]) {
     float tx, ty;
     ortho_tx_ty(c, &tx, &ty); /* SAME mapping camera_build bakes */
+    float h = (float)(c->vh / c->zoom);
     out[0] = sx / (float)c->zoom - tx;
-    out[1] = sy / (float)c->zoom - ty;
+    out[1] = (h - sy / (float)c->zoom) - ty;
+}
+
+/* inverse: world_y_up point -> px_y_down window pixels */
+void camera_world_y_up_to_screen_y_down(const ame_camera *c, float wx, float wy,
+                                       float out[2]) {
+    float tx, ty;
+    ortho_tx_ty(c, &tx, &ty);
+    float h = (float)(c->vh / c->zoom);
+    out[0] = (wx + tx) * (float)c->zoom;
+    out[1] = (h - (wy + ty)) * (float)c->zoom;
 }
 
 void camera_screen_ray(const ame_camera *c, float sx, float sy,
@@ -134,12 +161,14 @@ void camera_screen_ray(const ame_camera *c, float sx, float sy,
         out_dir[0] = d.x; out_dir[1] = d.y; out_dir[2] = d.z;
         return;
     }
-    /* ortho2d: ray goes straight into the screen (-z) from the px point */
+    /* ortho2d: ray goes straight into the screen (-z) from the world_y_up
+     * point under the px_y_down screen pixel (same mapping as
+     * camera_screen_y_down_to_world_y_up: screen y grows DOWN, world y UP) */
     float w = (float)(c->vw / c->zoom), h = (float)(c->vh / c->zoom);
     float cx = c->snap ? floorf(c->pos.x) : c->pos.x;
     float cy = c->snap ? floorf(c->pos.y) : c->pos.y;
     out_origin[0] = cx - w * 0.5f + sx / (float)c->zoom;
-    out_origin[1] = cy - h * 0.5f + sy / (float)c->zoom;
+    out_origin[1] = cy + h * 0.5f - sy / (float)c->zoom;
     out_origin[2] = c->zn;
     out_dir[0] = 0; out_dir[1] = 0; out_dir[2] = -1;
 }

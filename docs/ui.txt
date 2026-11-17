@@ -108,7 +108,7 @@ DEV OVERLAY (include/ame/debug.h - the v1 inspector)
     the columns: with depth ON the renderer orders by z = layer*0.001
     under LEQUAL (later push must not raise layer), with depth OFF the
     later push paints on top - layer+1 satisfies both. The scrim maps
-    window px through rp_screen_origin like text_draw_screen, so it
+    window px through rp_push_sprite_screen like text_draw_screen, so it
     stays glued to the text under a moving ortho2d camera.
   - test_render carries the GL proof (anchor margin, two tints, scrim
     on/off, off-centre camera); test_debug_watch covers the registry.

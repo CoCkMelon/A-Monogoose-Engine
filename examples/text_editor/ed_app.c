@@ -238,6 +238,13 @@ static char map_key(int k, bool shift) {
 static uint8_t prev_keys[AME_KEYS_MAX];
 static bool prev_left;
 
+/* loop declaration (app.h, loop.txt): this app is stepped at a fixed rate,
+ * so dt is exactly 1/hz every call and replays stay frame-rate independent.
+ * ame_loop_defaults() = FIXED 1000 Hz, 4-step gate: copy and change hz. */
+ame_loop_desc app_loop(void) {
+    return ame_loop_defaults();
+}
+
 int app_init(void) {
     if (!in_bind_key(AME_ACT_CANCEL, AME_KEY_ESCAPE)
         || !in_bind_button(AME_ACT_CONFIRM, AME_BTN_LEFT))
@@ -454,12 +461,10 @@ int app_render(void) {
     }
 
     rp_begin_frame();
-    /* the text grid: SAME snapped origin text_draw_screen uses, so the
-     * manual caret/selection quads sit exactly on the ink grid */
-    float ox, oy;
-    rp_screen_origin(&ox, &oy);
-    ox = floorf(ox + PAD + 0.5f) - PAD;
-    oy = floorf(oy + PAD + 0.5f) - PAD;
+    /* the text grid: index_to_px is already PAD-relative px_y_down, which is
+     * exactly the space rp_push_sprite_screen takes - so the manual caret and
+     * selection quads go straight through the same conversion text_draw_screen
+     * uses, with no hand-rolled origin (coords.txt rule 2). */
 
     /* selection highlights (behind text) */
     if (cur.sel_start != cur.sel_end) {
@@ -476,8 +481,8 @@ int app_render(void) {
             int i1 = cur.sel_end < le ? cur.sel_end : le;
             index_to_px(&draw_geom, i0, &x0, &y0);
             index_to_px(&draw_geom, i1, &x1, &y1);
-            rp_push_sprite(&(ame_rp_sprite){ .tex = rp_white_texture(),
-                .x = ox + x0, .y = oy + y0 + 3.0f, .w = x1 - x0,
+            rp_push_sprite_screen(&(ame_rp_sprite){ .tex = rp_white_texture(),
+                .x = x0, .y = y0 + 3.0f, .w = x1 - x0,
                 .h = draw_geom.line_h - 6.0f, .u0 = 0, .v0 = 0, .u1 = 1,
                 .v1 = 1,
                 .tint = { sel_tint[0], sel_tint[1], sel_tint[2],
@@ -486,8 +491,7 @@ int app_render(void) {
         }
     }
 
-    /* text, line by line (text_draw_screen adds the screen origin
-     * itself - only the manual sprites above need ox/oy) */
+    /* text, line by line (text_draw_screen applies the same conversion) */
     float white[4] = { 0.9f, 0.9f, 0.92f, 1 };
     for (int l = 0; l < draw_geom.line_count; l++)
         text_draw_screen(&draw_geom.lay[l], PAD,
@@ -512,7 +516,7 @@ int app_render(void) {
         static int frame;
         if ((++frame % 30) == 1) {
             float sox, soy;
-            rp_screen_origin(&sox, &soy);
+            rp_screen_origin_y_up(&sox, &soy);
             printf("[ed trace] screen origin=(%.1f,%.1f) PAD=%.0f\n", sox,
                    soy, (float)PAD);
             float ax, ay;
@@ -534,8 +538,8 @@ int app_render(void) {
     if (solid || (int)((ame_time_seconds() - t0) / 0.5) % 2 == 0) {
         float cx, cy;
         index_to_px(&draw_geom, cur.caret, &cx, &cy);
-        rp_push_sprite(&(ame_rp_sprite){ .tex = rp_white_texture(),
-            .x = ox + cx, .y = oy + cy + 3.0f, .w = 2.0f,
+        rp_push_sprite_screen(&(ame_rp_sprite){ .tex = rp_white_texture(),
+            .x = cx, .y = cy + 3.0f, .w = 2.0f,
             .h = draw_geom.line_h - 6.0f, .u0 = 0, .v0 = 0, .u1 = 1,
             .v1 = 1, .tint = { white[0], white[1], white[2], white[3] },
             .layer = 6 });

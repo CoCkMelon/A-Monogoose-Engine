@@ -1,0 +1,107 @@
+ame-next ENGINE SPEC
+File: state-audit.txt - module-level hidden state, measured 2026-11-17
+
+WHY THIS FILE
+The loop-policy setter was one instance of a class: state that changes what
+code means, or what a frame looks like, without appearing at the call site.
+This file is the inventory of that class in the current tree, so each case
+is either fixed, documented, or consciously accepted. Measured by grepping
+`static` definitions and public setters; every claim below names the file
+and line that carries it.
+
+HOW TO READ IT
+  severity 1 = silent wrong output / unreproducible frame
+  severity 2 = order dependency or cross-module leak a new reader will hit
+  severity 3 = documented, accepted (listed so it is not rediscovered)
+
+THE INVENTORY
+
+1. [SEV 1] RENDER MODE STICKS ACROSS FRAMES
+   src/render.c: `S.stamp_lit` (1593), `S.stamp_nrm` (1613), `S.cur_pass`
+   (685). All are reset ONCE in rp_init (711-721) and NEVER in
+   rp_begin_frame, which only clears batch counters and draws.
+   Consequence: rp_set_lit(1) in frame N leaves every subsequent push lit
+   in frame N+1, and a frame that ends inside a custom/DSDF pass starts the
+   next frame pushing into that pass. What a frame looks like depends on
+   history, not on that frame's code - the exact property that makes a
+   golden capture or a bug report unreproducible.
+   The header reads as if it were scoped: "Geometry is lit only when pushed
+   between rp_set_lit(1) and rp_set_lit(0)".
+   Fix (cheap, no API change): reset stamp_lit = 0, stamp_nrm = (0,0,1),
+   cur_pass = 0 at the top of rp_begin_frame; the pairing discipline then
+   becomes a guarantee instead of a convention. Cost: 4 stores per frame.
+   Verify by re-running the goldens: memory_game and biscuit already pair
+   every set_lit(1)/set_lit(0) (mem_app.c:583-597, 692-700, 812-824), so the
+   reset should be a no-op for them - a diff of zero frames is the proof.
+
+2. [SEV 1] TEXT FACE IS PROCESS-GLOBAL
+   src/text.c: `g_font_mode` (18), set by text_set_font (187), reset only at
+   init (247). One call changes EVERY later text draw in the app until
+   another call - including draws in other subsystems and across frames.
+   Live examples already depend on the leak: biscuit/ui.c:29 sets PIXEL
+   every frame; memory_game sets PIXEL mid-render at mem_app.c:865 before
+   the scoreboard, which silently changes the face of anything drawn after
+   it. A HUD wanting a different face from world text cannot be written
+   without this ordering.
+   Fix: face becomes an argument (text_draw_* already carry a struct-ish
+   payload; add `face` to the layout or to the draw call), keep the global
+   only as the app default. Text layout caches metrics per face, so
+   text_layout must record which face produced it - otherwise the layout and
+   the draw can disagree after a face switch (an existing hazard).
+
+3. [SEV 2] LAST ERROR IS THREAD-LOCAL
+   src/error.c:30 `static _Thread_local ame_error_state g_last`. An error
+   raised on the step thread is invisible to the main thread that logs it,
+   and the "last error" survives until the next clear, so a stale message
+   can be reported for an unrelated failure. The step thread's exit path
+   already reports rc, so the practical hazard is diagnosis, not control
+   flow: "the engine said nothing" when it said it on the other thread.
+   Fix (small): on a step-thread failure, copy the error text into the
+   bootstrap's single-slot report (as the loop now does for its own state)
+   instead of relying on the TLS read from the wrong thread.
+
+4. [SEV 2] 14 ENVIRONMENT VARIABLES, 3 DOCUMENTED
+   Measured: AME_FIXED_FRAME_DT, AME_LOG_FILE, AME_LOOP_HZ,
+   AME_LOOP_MAX_STEPS, AME_LOOP_VARIABLE, AME_PREF_PATH, AME_SHOT_FRAMES,
+   AME_SHOT_NOFLIP, AME_SHOT_PPM, AME_WINDOW_H, AME_WINDOW_TITLE,
+   AME_WINDOW_W (12 in src/, plus two error-name strings that grep catches).
+   Only the three loop knobs are documented (loop.txt).
+   Worst case: AME_FIXED_FRAME_DT silently replaces the declared loop
+   policy - it steps inline in the render iterate and creates NO logic
+   thread, which changes the threading model of the binary being tested. It
+   is a QA tool, but nothing in docs/ says so and nothing logs that it ran
+   differently from app_loop().
+   Fix: one table in docs (env.txt) listing every variable, its default,
+   what it overrides and whether it changes the threading model; log every
+   override that is active at startup, the way the loop line already does
+   for "[QA override]".
+
+5. [SEV 2] ORDER-DEPENDENT SETUP CALLS
+   rp_set_gl_loader "call before rp_init" (render.h:58);
+   in_set_backend / ame_fs_set_ops / audio_attach_sdl are install-once
+   platform hooks; ame_prefab_reset must run between levels because keys are
+   borrowed (prefab.h). Each is documented, none is enforced: calling them
+   late silently does nothing or leaves a half-installed backend.
+   Fix (cheap): record the phase in each module (an `installed` flag) and
+   fail loudly on a late install, the same way the step hooks now do.
+
+6. [SEV 3] DOCUMENTED MODULE STATE (accepted)
+   rp_state, input_state, au_state, events_state: singletons by design
+   (data.txt "fixed static pools", one .c owns state). Fine - they are
+   visible in their module and their lifecycles are documented.
+   fs pref-path cache is _Thread_local and resolved three levels deep
+   (ops -> $AME_PREF_PATH -> "./"); documented in fs.h, listed here because
+   it is per-thread and therefore surprising under the split-thread model.
+   prefab registry table: global, borrowed keys, needs reset - documented.
+
+7. [ALREADY FIXED] LOOP MODE
+   Was: ame_loop_policy() mutated hidden bootstrap state from app_init.
+   Now: ame_loop_desc app_loop(void) is read once, the hook it names is
+   resolved once, and the result is logged. Missing declaration is a link
+   error; a mode/hook mismatch hits a weak stub that says so.
+
+RECOMMENDED ORDER
+  1 (render stamps) and 2 (text face) are output-affecting and cheap; do
+  them together and prove with goldens (expect byte-identical frames for
+  the current examples, since they already pair their calls). Then 4 (env
+  table + startup logging), then 3 and 5.

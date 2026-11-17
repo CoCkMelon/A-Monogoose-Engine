@@ -1080,13 +1080,13 @@ int main(void) {
         rp_set_camera(&cam2);
         ame_text_layout f;
         text_layout("F", 0, AME_TEXT_ALIGN_L, 1.0f, &f);
-        /* raw glyph px x4 via the pose; the ortho camera centers world 0,0,
-         * so anchor at the view's top-left (rp_screen_origin) to land at
-         * true screen (40,40) */
+        /* raw glyph px x4 via the pose; the ortho camera centers world 0,0, so
+         * anchor at the view's TOP-left (rp_screen_origin_y_up, world_y_up) and
+         * step DOWN from it to land at true screen (40,40) */
         float oxx, oyy;
-        rp_screen_origin(&oxx, &oyy);
+        rp_screen_origin_y_up(&oxx, &oyy);
         float pose[16] = { 4,0,0,0,  0,4,0,0,  0,0,4,0,
-                           40 + oxx, 40 + oyy, 0, 1 };
+                           40 + oxx, oyy - 40, 0, 1 };
         rp_begin_frame();
         text_draw_world(&f, pose, (float[4]){ 1, 1, 1, 1 }, 10);
         rp_end_frame();
@@ -1102,7 +1102,8 @@ int main(void) {
     UT_CASE("text orientation matches atlas (BILLBOARD pose, 3D camera)");
     {
         /* the exact pose construction the game's scoreboard uses:
-         * col0 = camera right, col1 = -camera up (layout y-down) */
+         * col0 = camera right, col1 = camera UP: text_draw_world negates the
+         * layout's y-down offsets itself, so the pose's +y is world/up */
         ame_camera camF;
         camera_viewport(camera_pos(camera_persp3d(camera_desc(&camF)),
                                    0, 0, 5), W, H);
@@ -1118,7 +1119,7 @@ int main(void) {
         ame_v3 t = ame_v3_(-1.1f, 0.8f, 0); /* top-left anchor, world */
         float pose[16] = {
             r.x * s,  r.y * s,  r.z * s,  0,
-           -u.x * s, -u.y * s, -u.z * s,  0,
+            u.x * s,  u.y * s,  u.z * s,  0,
             0, 0, 0, 0,
             t.x, t.y, t.z, 1,
         };
@@ -1237,7 +1238,7 @@ int main(void) {
         rp_pass_begin(&p0);
         ame_camera cw;
         /* deliberately OFF-CENTRE: the overlay must map window px to
-         * world px through rp_screen_origin (biscuit's camera follows
+         * world px through rp_screen_origin_y_up (biscuit's camera follows
          * the car); a raw-window-coord push would land off-screen */
         camera_viewport(camera_ortho2d(camera_desc(&cw)), W, H);
         camera_pos(&cw, (float)W * 0.5f + 137.0f, (float)H * 0.5f - 41.0f, 0);

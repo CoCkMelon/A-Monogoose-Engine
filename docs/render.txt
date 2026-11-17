@@ -97,6 +97,13 @@ RULES
    - 2D mode: pixel-perfect camera (integer-snapped position,
      integer zoom steps), sprite/tile batch (rule 2), nearest
      sampling (rule 3). This is the 2D pixel-art path.
+   - 2D WORLD SPACE IS world_y_up (+x right, +y UP, gravity -y):
+     coords.txt. rp_push_sprite takes a rect's LOWER-LEFT corner and
+     extends +y; screen-space drawing (HUD, editors, UI) uses
+     rp_push_sprite_screen, which takes px_y_down window pixels and
+     converts once through the camera. Textures stay authored
+     top-down: the sprite push pairs the quad's top edge with v0, so
+     images are upright without touching UVs at the call site.
    - 3D mode: a 3D camera (position + look + projection), a mesh
      pass with per-object world matrices, depth on, lighting via
      the LIT pass. The engine renders with its OWN GL pipeline (no

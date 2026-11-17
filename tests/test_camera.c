@@ -82,17 +82,33 @@ int main(void) {
 
     UT_CASE("2D: screen<->world corners + straight ray");
     {
+        /* world is world_y_up (coords.txt); screen is px_y_down. A 800x600
+         * view centred at (400,300) covers world x 0..800, y 0..600, so the
+         * screen's TOP-left pixel is world (0, 600), not (0,0). */
         ame_camera c;
         camera_viewport(camera_pos(camera_ortho2d(camera_desc(&c)), 400, 300, 0),
                         800, 600);
         camera_build(&c);
         float w2[2];
-        camera_screen_to_world2d(&c, 0, 0, w2);
-        UT_ASSERT_NEAR(w2[0], 0.0f, 1e-4);   /* top-left = center - half */
-        UT_ASSERT_NEAR(w2[1], 0.0f, 1e-4);
-        camera_screen_to_world2d(&c, 800, 600, w2);
+        camera_screen_y_down_to_world_y_up(&c, 0, 0, w2);
+        UT_ASSERT_NEAR(w2[0], 0.0f, 1e-4);   /* screen x 0 = world x 0 */
+        UT_ASSERT_NEAR(w2[1], 600.0f, 1e-4); /* screen TOP  = world TOP y */
+        camera_screen_y_down_to_world_y_up(&c, 800, 600, w2);
         UT_ASSERT_NEAR(w2[0], 800.0f, 1e-3);
-        UT_ASSERT_NEAR(w2[1], 600.0f, 1e-3);
+        UT_ASSERT_NEAR(w2[1], 0.0f, 1e-3);   /* screen BOTTOM = world y 0 */
+        /* round trip through the inverse */
+        float sx2[2];
+        camera_world_y_up_to_screen_y_down(&c, 250, 100, sx2);
+        UT_ASSERT_NEAR(sx2[0], 250.0f, 1e-3);
+        UT_ASSERT_NEAR(sx2[1], 500.0f, 1e-3); /* 600 - 100 */
+        camera_screen_y_down_to_world_y_up(&c, sx2[0], sx2[1], w2);
+        UT_ASSERT_NEAR(w2[0], 250.0f, 1e-3);
+        UT_ASSERT_NEAR(w2[1], 100.0f, 1e-3);
+        /* higher world y is CLOSER TO THE TOP of the screen: smaller screen y */
+        float lo[2], hi[2];
+        camera_world_y_up_to_screen_y_down(&c, 0, 100, lo);
+        camera_world_y_up_to_screen_y_down(&c, 0, 500, hi);
+        UT_ASSERT(hi[1] < lo[1]);
         float o[3], d[3];
         camera_screen_ray(&c, 400, 300, o, d);
         UT_ASSERT_NEAR(o[0], 400.0f, 1e-3);
@@ -115,17 +131,28 @@ int main(void) {
                 ws[k], hs[k]);
             camera_pos(&c2, (float)ws[k] * 0.5f, (float)hs[k] * 0.5f, 0);
             camera_build(&c2);
-            float ox, oy;
-            camera_world_origin(&c2, &ox, &oy);
+            float ox, oy, tx2, ty2;
+            camera_world_origin_y_up(&c2, &ox, &oy);      /* lower-left */
+            camera_world_top_left_y_up(&c2, &tx2, &ty2);  /* top-left */
             UT_ASSERTF(ox == floorf(ox) && oy == floorf(oy),
-                       "%dx%d origin (%.2f,%.2f) not integral", ws[k],
+                       "%dx%d lower-left (%.2f,%.2f) not integral", ws[k],
                        hs[k], (double)ox, (double)oy);
+            UT_ASSERTF(tx2 == floorf(tx2) && ty2 == floorf(ty2),
+                       "%dx%d top-left (%.2f,%.2f) not integral", ws[k],
+                       hs[k], (double)tx2, (double)ty2);
+            /* the two corners differ by exactly the view height */
+            UT_ASSERTF(ty2 - oy == (float)hs[k],
+                       "%dx%d corners differ by %.1f, not view height", ws[k],
+                       hs[k], (double)(ty2 - oy));
             /* world<->window round trip at the corners stays exact */
             float out2[2];
-            camera_screen_to_world2d(&c2, 0, 0, out2);
+            camera_screen_y_down_to_world_y_up(&c2, 0, 0, out2);
             UT_ASSERTF(out2[0] == floorf(out2[0]) && out2[1] == floorf(out2[1]),
                        "%dx%d corner world (%.2f,%.2f) not integral",
                        ws[k], hs[k], (double)out2[0], (double)out2[1]);
+            UT_ASSERTF(out2[1] == ty2,
+                       "%dx%d screen (0,0) should be the TOP-left y %.1f, got %.1f",
+                       ws[k], hs[k], (double)ty2, (double)out2[1]);
         }
     }
 

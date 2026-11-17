@@ -606,12 +606,17 @@ static void col4(uint32_t c, const float tint[4], float out[4]) {
     out[3] = tint[3];
 }
 
+/* Glyph layout is px_y_down by construction (atlas rows and the baseline
+ * walk both grow downward), while the renderer's sprite anchor is
+ * world_y_up lower-left. This wrapper is the ONE place the two meet: a cell
+ * given as (x, y_top, w, h) becomes (x, y_top - h, w, h). Every face - pixel,
+ * hires, fallback - goes through it, so a new face cannot forget the flip. */
 static void push_sprite(int tex, float x, float y, float w, float h,
                         float u0, float v0, float u1, float v1,
                         const float col[4], float layer) {
     ame_rp_sprite sp;
     sp.tex = tex;
-    sp.x = x; sp.y = y; sp.w = w; sp.h = h;
+    sp.x = x; sp.y = y - h; sp.w = w; sp.h = h;
     sp.u0 = u0; sp.v0 = v0; sp.u1 = u1; sp.v1 = v1;
     sp.tint[0] = col[0]; sp.tint[1] = col[1];
     sp.tint[2] = col[2]; sp.tint[3] = col[3];
@@ -631,7 +636,7 @@ static void draw_glyph(const ame_txt_el *e, float x, float y, float scale,
         w *= scale;
         h *= scale;
         push_sprite(g_atlas_tex >= 0 ? g_atlas_tex : rp_white_texture(),
-                    x + e->x, y + e->y + cur_ascent() * scale - h, w, h,
+                    x + e->x, y - e->y - cur_ascent() * scale + h, w, h,
                     0.5f, 0.5f, 0.504f, 0.504f, col, layer);
         return;
     }
@@ -650,7 +655,7 @@ static void draw_glyph(const ame_txt_el *e, float x, float y, float scale,
             float v1 = (float)(d->ay + d->ah) / (float)AME_HIRES_ATLAS_HEIGHT;
             push_sprite(g_hires_tex,
                         x + e->x + d->xoff * scale,
-                        y + e->y + AME_HIRES_ASCENT * scale + d->yoff * scale,
+                        y - e->y - AME_HIRES_ASCENT * scale - d->yoff * scale,
                         (float)d->aw * HIRES_CELL_K * scale,
                         (float)d->ah * HIRES_CELL_K * scale,
                         u0, v0, u1, v1, col, layer);
@@ -673,13 +678,16 @@ static void draw_glyph(const ame_txt_el *e, float x, float y, float scale,
             q.u1 = (float)(d->ax + d->aw) / (float)AME_DSDF_ATLAS_W;
             q.v1 = (float)(d->ay + d->ah) / (float)AME_DSDF_ATLAS_H;
             float px = x + e->x + d->xoff * scale;
-            float py = y + e->y + AME_DSDF_ASCENT * scale + d->yoff * scale;
+            float py = y - e->y - AME_DSDF_ASCENT * scale - d->yoff * scale;
             float qz = 0.001f * layer; /* match rp_push_sprite z */
             float qw = (float)d->aw * scale, qh = (float)d->ah * scale;
+            /* py is the cell's TOP edge; in world_y_up the cell extends to
+             * py - qh. Corners stay ordered so p0/p1 carry the image's top
+             * row (uv ladder in push_quad_common) - upright either way. */
             q.p0[0] = px;      q.p0[1] = py;      q.p0[2] = qz;
             q.p1[0] = px + qw; q.p1[1] = py;      q.p1[2] = qz;
-            q.p2[0] = px + qw; q.p2[1] = py + qh; q.p2[2] = qz;
-            q.p3[0] = px;      q.p3[1] = py + qh; q.p3[2] = qz;
+            q.p2[0] = px + qw; q.p2[1] = py - qh; q.p2[2] = qz;
+            q.p3[0] = px;      q.p3[1] = py - qh; q.p3[2] = qz;
             q.tint[0] = col[0]; q.tint[1] = col[1];
             q.tint[2] = col[2]; q.tint[3] = col[3];
             q.layer = layer;
@@ -695,7 +703,7 @@ static void draw_glyph(const ame_txt_el *e, float x, float y, float scale,
     float v1 = (float)(g->ay + g->ah) / (float)AME_FONT_ATLAS_HEIGHT;
     push_sprite(g_atlas_tex,
                 x + e->x + g->xoff * scale,
-                y + e->y + cur_ascent() * scale + g->yoff * scale,
+                y - e->y - cur_ascent() * scale - g->yoff * scale,
                 (float)g->aw * scale, (float)g->ah * scale,
                 u0, v0, u1, v1, col, layer);
 }
@@ -704,15 +712,16 @@ void text_draw_screen(const ame_text_layout *l, float x, float y,
                       const float tint[4], float layer) {
     if (!l)
         return;
-    /* x,y are WINDOW px: translate into world px by the view's top-left
-     * (the ortho camera centers itself on pos, so world 0,0 is the screen
-     * CENTER otherwise). */
+    /* x,y are px_y_down WINDOW px (that is what _screen means): translate to
+     * world_y_up by the view's TOP-LEFT corner, and step DOWN in y for every
+     * layout row, which is why oy subtracts. The ortho camera centers on
+     * pos, so world 0,0 is the screen CENTER otherwise. */
     float ox, oy;
-    rp_screen_origin(&ox, &oy);
+    rp_screen_origin_y_up(&ox, &oy);
     /* one snap for the whole call: glyph quads AND any caret/selection
      * the caller derives from the same el[]/origin stay on one grid */
     ox = pen_snap(ox + x);
-    oy = pen_snap(oy + y);
+    oy = pen_snap(oy - y);
     float sc = l->scale > 0.0f ? l->scale : 1.0f;
     for (int i = 0; i < l->count; i++)
         draw_glyph(&l->el[i], ox, oy, sc, tint, layer);
@@ -788,11 +797,15 @@ void text_draw_world(const ame_text_layout *l, const float pose[16],
             x0 = e->x + (float)g->xoff * sc;
             y0 = e->y + (cur_ascent() + (float)g->yoff) * sc;
         }
-        /* glyph quad corners in layout space -> world pose */
-        ame_v3 c0 = ame_m4_xform_point(m, ame_v3_(x0, y0, 0));
-        ame_v3 c1 = ame_m4_xform_point(m, ame_v3_(x0 + w, y0, 0));
-        ame_v3 c2 = ame_m4_xform_point(m, ame_v3_(x0 + w, y0 + h, 0));
-        ame_v3 c3 = ame_m4_xform_point(m, ame_v3_(x0, y0 + h, 0));
+        /* glyph quad corners in layout space -> world pose. The layout is
+         * y-DOWN from the pose origin while pose space is world_y_up, so the
+         * local y is negated before the transform: the cell hangs BELOW the
+         * pose origin and p0/p1 keep the image's top row (v0), which is what
+         * makes pose text upright in 2D and on 3D billboards alike. */
+        ame_v3 c0 = ame_m4_xform_point(m, ame_v3_(x0, -y0, 0));
+        ame_v3 c1 = ame_m4_xform_point(m, ame_v3_(x0 + w, -y0, 0));
+        ame_v3 c2 = ame_m4_xform_point(m, ame_v3_(x0 + w, -(y0 + h), 0));
+        ame_v3 c3 = ame_m4_xform_point(m, ame_v3_(x0, -(y0 + h), 0));
         ame_rp_quad q;
         q.tex = tex;
         q.p0[0] = c0.x; q.p0[1] = c0.y; q.p0[2] = c0.z;

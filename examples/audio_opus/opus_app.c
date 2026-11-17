@@ -16,6 +16,13 @@ static ame_camera CAM;
 static int g_voice = -1;
 static float g_pan = 0.0f;
 
+/* loop declaration (app.h, loop.txt): this app is stepped at a fixed rate,
+ * so dt is exactly 1/hz every call and replays stay frame-rate independent.
+ * ame_loop_defaults() = FIXED 1000 Hz, 4-step gate: copy and change hz. */
+ame_loop_desc app_loop(void) {
+    return ame_loop_defaults();
+}
+
 int app_init(void) {
     const char *path = getenv("AME_OPUS");
     bool loop = true;
@@ -79,14 +86,14 @@ int app_render(void) {
     rp_begin_frame();
     float lvl = g_voice >= 0 ? audio_beat_amplitude(g_voice) : 0;
     /* level meter + pan indicator */
-    rp_push_sprite(&(ame_rp_sprite){ .tex = rp_white_texture(), .x = 40,
+    rp_push_sprite_screen(&(ame_rp_sprite){ .tex = rp_white_texture(), .x = 40,
         .y = 190, .w = 720, .h = 12, .u0 = 0, .v0 = 0, .u1 = 1, .v1 = 1,
         .tint = { 0.2f, 0.22f, 0.3f, 1 }, .layer = 0 });
-    rp_push_sprite(&(ame_rp_sprite){ .tex = rp_white_texture(), .x = 40,
+    rp_push_sprite_screen(&(ame_rp_sprite){ .tex = rp_white_texture(), .x = 40,
         .y = 190, .w = 720 * lvl, .h = 12, .u0 = 0, .v0 = 0, .u1 = 1,
         .v1 = 1, .tint = { 0.35f, 0.85f, 0.4f, 1 }, .layer = 2 });
     float px = (g_pan * 0.5f + 0.5f) * 800.0f;
-    rp_push_sprite(&(ame_rp_sprite){ .tex = rp_white_texture(), .x = px - 6,
+    rp_push_sprite_screen(&(ame_rp_sprite){ .tex = rp_white_texture(), .x = px - 6,
         .y = 170, .w = 12, .h = 52, .u0 = 0, .v0 = 0, .u1 = 1, .v1 = 1,
         .tint = { 0.9f, 0.7f, 0.2f, 1 }, .layer = 3 });
     rp_end_frame();

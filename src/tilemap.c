@@ -1,4 +1,8 @@
 /* ame-next — Tiled .tmj tilemap loader + single-batch tile renderer.
+ *
+ * SPACES (coords.txt): the .tmj is authored tile_row_down (row 0 = TOP); the
+ * draw places rows into world_y_up, so row 0 is the HIGHEST row on screen.
+ *
  * Ported in spirit from A-Monogoose-Engine's tilemap.c (same minimal
  * JSON subset), C23, fixed pools, no SDL in the parser. */
 #include "ame/tilemap.h"
@@ -257,7 +261,10 @@ int ame_tilemap_draw(const ame_tilemap *tm, int tex, float ox, float oy,
                 ame_rp_sprite sp;
                 sp.tex = tex;
                 sp.x = ox + (float)x * tw;
-                sp.y = oy + (float)y * th;
+                /* ingest: Tiled rows run DOWN from row 0 (the top row as
+                 * authored); world is world_y_up, so a row's rect sits BELOW
+                 * oy and its y anchor (lower-left) is the row's LOW edge. */
+                sp.y = oy - (float)(y + 1) * th;
                 sp.w = tw;
                 sp.h = th;
                 sp.u0 = u0; sp.v0 = v0; sp.u1 = u1; sp.v1 = v1;

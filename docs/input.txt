@@ -109,8 +109,8 @@ POLLING (deterministic sim) + REAL-TIME INPUT PATH
   down-state into actions and edges once per fixed step, then the sim
   reads that action state. pressed/released are edges computed by
   comparing current vs previous down-state at the fixed step
-  boundary, so they are frame-rate independent (the sim runs at >=
-  1000 Hz, loop.txt).
+  boundary, so they are frame-rate independent (the sim runs at
+  the app's declared step rate, 1000 Hz by default - loop.txt).
   For REAL-TIME / input-coupled actions (aim, camera, direct
   movement): a thin real-time layer may read the latest input atomic
   AT INPUT ARRIVAL and respond immediately (sub-tick), rather than
@@ -231,3 +231,11 @@ DEVICES, hunt fixes (2026-11-14: sanitizer sweep)
   zeros, so stuck buttons fire one released edge - the desirable
   behavior for hot-unplug. The device registry itself survives
   in_reset(): devices are physical, reset clears state.
+
+MOUSE COORDINATES
+  in_mouse_pos reports px_y_down window pixels (origin = window
+  TOP-LEFT, +y DOWN), like every other screen-space quantity. To place
+  something in the 2D world, convert ONCE with
+  camera_screen_y_down_to_world_y_up (or push a rect through
+  rp_push_sprite_screen) and keep the result in world_y_up. See
+  coords.txt - no gameplay code should carry a y flip of its own.

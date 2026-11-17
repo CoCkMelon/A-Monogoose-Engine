@@ -33,16 +33,61 @@
 #define AME_WEB_H 720
 #endif
 
-/* fixed 1 ms logic substep (loop.txt), accumulator cap per frame */
-#define AME_WEB_STEP (1.0 / 1000.0)
-#define AME_WEB_MAX_STEPS 100
+/* loop state (time.h): the same contract as the desktop bootstrap - app_loop()
+ * is read once, its hook is resolved once, and the result is logged. */
+static ame_time g_time;
+static int (*g_step_hook)(float);
+static const char *g_hook_name = "?";
+
+#if defined(__GNUC__) || defined(__clang__)
+#define AME_WEAK __attribute__((weak))
+#else
+#define AME_WEAK
+#endif
+
+AME_WEAK int app_fixed(float dt) {
+    (void)dt;
+    ame_set_error(AME_ERR_PLATFORM,
+                  "app_loop() declared AME_LOOP_FIXED but app_fixed() is not "
+                  "implemented - did you write app_step() instead? (app.h)");
+    ame_log_last_error();
+    return 1;
+}
+
+AME_WEAK int app_step(float dt) {
+    (void)dt;
+    ame_set_error(AME_ERR_PLATFORM,
+                  "app_loop() declared AME_LOOP_VARIABLE but app_step() is not "
+                  "implemented - did you write app_fixed() instead? (app.h)");
+    ame_log_last_error();
+    return 1;
+}
+
+double ame_loop_fixed_dt(void) { return g_time.variable ? 0.0 : g_time.step; }
+uint64_t ame_loop_dropped_steps(void) { return g_time.dropped; }
+double ame_sim_time(void) { return g_time.time; }
+void ame_loop_set_scale(float scale) { ame_time_set_scale(&g_time, scale); }
+
+static void resolve_loop(void) {
+    ame_loop_desc d = app_loop();
+    ame_time_configure(&g_time, &d);
+    g_step_hook = g_time.variable ? app_step : app_fixed;
+    g_hook_name = g_time.variable ? "app_step" : "app_fixed";
+    if (g_time.variable)
+        ame_log(AME_LOG_INFO, "loop: VARIABLE  hook=%s  dt clamp=%.3f s",
+                g_hook_name, g_time.hitch_max);
+    else
+        ame_log(AME_LOG_INFO,
+                "loop: FIXED  hz=%.3f  hook=%s  gate=%d steps  dt clamp=%.3f s",
+                1.0 / g_time.step, g_hook_name, g_time.max_steps,
+                g_time.hitch_max);
+}
 
 static SDL_Window *g_window;
 static SDL_GLContext g_gl;
 static float g_mouse_scale = 1.0f;
 static int g_running = 1;
 static int g_quit_called;
-static double g_acc;
 static double g_last_time;
 
 void ame_request_quit(void) {
@@ -260,23 +305,17 @@ static void frame(void) {
     double now = ame_time_seconds();
     double dt = g_last_time > 0.0 ? now - g_last_time : 0.0;
     g_last_time = now;
-    if (dt < 0.0)
-        dt = 0.0;
-    if (dt > 0.25)
-        dt = 0.25; /* tab was hidden: clamp, don't burst */
-    g_acc += dt;
-    int steps = 0;
-    while (g_acc >= AME_WEB_STEP && steps < AME_WEB_MAX_STEPS) {
+    /* the same gate the desktop loop uses: a hidden tab clamps, an overloaded
+     * frame drops steps instead of bursting (time.h) */
+    int steps = ame_time_plan(&g_time, dt);
+    for (int i = 0; i < steps; i++) {
         in_begin_step();
-        if (app_fixed((float)AME_WEB_STEP) != 0) {
+        if (g_step_hook((float)g_time.delta) != 0) {
             ame_request_quit();
             return;
         }
-        g_acc -= AME_WEB_STEP;
-        steps++;
+        ame_time_commit(&g_time);
     }
-    if (steps == AME_WEB_MAX_STEPS)
-        g_acc = 0.0; /* shed overload: slow-motion, never spiral */
 
     if (app_render() != 0) {
         ame_request_quit();
@@ -332,6 +371,7 @@ int main(void) {
 
     rp_set_gl_loader((ame_gl_getproc_fn)SDL_GL_GetProcAddress);
 
+    ame_time_init(&g_time); /* arithmetic defaults; app_loop() decides */
     in_reset();
     audio_init(48000, 2);
     audio_attach_sdl();
@@ -354,7 +394,7 @@ int main(void) {
     sync_mouse_scale();
     g_quit_called = 0;
     g_last_time = 0.0;
-    g_acc = 0;
+    resolve_loop();
 
     /* rAF-driven loop; the page pauses us via ame_set_running(0) when the
      * game card is not visible. */

@@ -1,0 +1,96 @@
+ame-next ENGINE SPEC
+File: coords.txt - the coordinate spaces, and where the one flip lives
+
+WHY THIS FILE EXISTS
+An engine that runs 2D and 3D, screens and worlds, has more than one
+coordinate system whether or not it admits it. When the difference is
+implicit, y-sign bugs appear at boundaries (input, texture atlases,
+Tiled maps) and every module re-derives the flip. So the spaces are
+NAMED, the conversions live in ONE header, and every function that
+takes or returns a coordinate says which space in its name.
+
+THE FOUR SPACES
+  px_y_down      window/screen pixels. origin = window TOP-LEFT, +x
+                 right, +y DOWN, 1 unit = 1 window px (times zoom).
+                 Used by: in_mouse_pos, screen-space UI/editor code,
+                 text layout (the atlas is authored top-down).
+  world_y_up     2D WORLD space. +x right, +y UP, origin arbitrary, 1
+                 unit = 1 world px at zoom 1. GRAVITY IS -Y.
+                 Used by: gameplay, physics, tile and sprite placement,
+                 every raycost/query on the 2D plane.
+  tile_row_down  Tiled .tmj layer rows as authored: row 0 is the TOP
+                 row, index = row * width + col (right-down).
+                 Used by: the tilemap loader, and nothing else.
+  mesh_y_up      3D/model space: right-handed, +y up, camera looks down
+                 -z. OBJ vertices, meshes, the persp3d camera.
+
+world_y_up IS THE 2D DEFAULT (superseding the older y-down pixel world)
+  Grounds: gameplay math reads correctly with no conversions ("above"
+  is +y, a jump is +vy, gravity is -vy), it matches the 3D path and
+  every DCC/Tiled author's mental model, and 2D/3D camera code stops
+  disagreeing about up. The y-down convention survives only where it
+  is genuinely native: screen pixels and authored texture rows.
+
+THE THREE RULES
+1. INGEST CONVERTS ONCE, AT LOAD. A .tmj row becomes a world rect at
+   load time (row 0 is the HIGHEST row); nothing re-derives it per
+   frame. Same for any future importer.
+2. SCREEN<->WORLD CONVERSION LIVES IN THE CAMERA/RENDER LAYER ONLY:
+   camera_screen_y_down_to_world_y_up, camera_world_y_up_to_screen_y_down,
+   rp_push_sprite_screen, text_draw_screen. Game code never flips by
+   hand; one call gets it into world space and the game stays there.
+3. GAME CODE PICKS ONE SPACE AND STAYS IN IT. Simulation is world_y_up.
+   HUD/editor/UI math is px_y_down and goes through the _screen entry
+   points. No flips inside a frame loop.
+
+NAMING (mechanical, no exceptions)
+  Every engine function that takes or returns a coordinate carries the
+  space: ..._y_up / ..._y_down / ..._row_down. Converters name both
+  sides they bridge (camera_screen_y_down_to_world_y_up). Legacy names
+  without a space were renamed when the world flipped; there is no
+  unsuffixed alias, because an unsuffixed name is exactly the ambiguity
+  this file removes.
+
+ANCHORS (which corner a rect is given by)
+  ame_rp_sprite / rp_push_sprite   LOWER-LEFT, w/h extend +x/+y
+                                   (world_y_up: the natural anchor for
+                                   y-up placement and growth).
+  rp_push_sprite_screen            TOP-LEFT, w/h extend +x/down, in
+                                   window px (px_y_down authoring).
+  text layout / text_draw_screen   pen origin, y-DOWN per line; the
+                                   texture module converts once.
+  ame_rp_quad / rp_push_quad       explicit corners, any order p0..p3
+                                   as long as uv0/uv1 pairs with the
+                                   first edge (image top).
+
+TEXTURES AND UV
+  Atlases stay authored top-down (v grows down the image). The sprite
+  push pairs the quad's TOP edge with v0, so a texture renders upright
+  in a y-up world with no texture-side change. Pose text (text_draw_world)
+  negates the layout's y-down offsets and spans the cell DOWNWARD from
+  the pose origin, so billboards stay upright in 2D and 3D alike.
+
+TILED
+  .tmj is stored raw (right-down, flip flags undecoded - a documented
+  scope limit, pinned by tests/test_tilemap.c). The DRAW converts:
+  row y occupies world y [base - (y+1)*tile_h, base - y*tile_h], i.e.
+  row 0 is the highest. gid_at() keeps Tiled's own indexing.
+
+WHAT THE FLIP COST (measured 2026-11-17, so the next flip is budgeted)
+  engine:    projection sign (ame_m4_ortho_px_y_up), camera origin and
+             screen<->world (4 functions), one sprite-push UV pairing,
+             tilemap ingest (3 lines), text (1 wrapper + pose sign).
+  consumers: 9 mouse->world call sites, 4 screen-space examples switched
+             to rp_push_sprite_screen, memory_game pose columns, 3 golden
+             render tests re-derived.
+  Per-vertex cost: ZERO. The flip is a matrix entry built once per frame
+            per camera; no per-entity or per-glyph work was added.
+
+PROOF
+  tests/test_coords.c asserts the sign and the round-trip identity of
+  every conversion (h - y is exact for integers, so applying a flip
+  twice is provably harmless); tests/test_camera.c pins the corner
+  conventions (screen (0,0) is world TOP-left, integral under snap);
+  tests/test_render*.c pin text orientation against the atlas itself
+  (SSD vs the flipped arm), which is what caught the two places a flip
+  is easy to miss: the sprite UV pairing and pose text.

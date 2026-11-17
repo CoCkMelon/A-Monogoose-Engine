@@ -1105,16 +1105,36 @@ void rp_push_text_quad(const ame_rp_quad *q) {
                      q->u1, q->v1, q->tint, q->layer, true);
 }
 
+/* lower-left anchored, +y up (world_y_up). Corners run bottom-left,
+ * bottom-right, top-right, top-left so the UV ladder in push_quad_common
+ * (p0->u0,v0 ... p2->u1,v1) still puts the IMAGE's top row at the quad's
+ * TOP: the v pair is therefore handed over swapped for the y-down atlas
+ * convention, which is what keeps every texture upright after the flip. */
 void rp_push_sprite(const ame_rp_sprite *s) {
     if (!s)
         return;
     float z = s->layer * 0.001f; /* slight z so depth-test ordering is stable */
-    float p0[3] = { s->x, s->y, z };
-    float p1[3] = { s->x + s->w, s->y, z };
-    float p2[3] = { s->x + s->w, s->y + s->h, z };
-    float p3[3] = { s->x, s->y + s->h, z };
-    push_quad_common(s->tex, p0, p1, p2, p3, s->u0, s->v0, s->u1, s->v1,
+    float p0[3] = { s->x, s->y, z };              /* bottom-left  */
+    float p1[3] = { s->x + s->w, s->y, z };       /* bottom-right */
+    float p2[3] = { s->x + s->w, s->y + s->h, z };/* top-right    */
+    float p3[3] = { s->x, s->y + s->h, z };       /* top-left     */
+    push_quad_common(s->tex, p0, p1, p2, p3, s->u0, s->v1, s->u1, s->v0,
                      s->tint, s->layer, false);
+}
+
+/* px_y_down entry point: the rect is given in WINDOW pixels exactly as a
+ * 2D UI/editor author writes it (x,y = top-left, y grows DOWN), and the
+ * conversion to world_y_up happens here, once, using the current camera
+ * (coords.txt rule 2). Screen-space code never sees a world y. */
+void rp_push_sprite_screen(const ame_rp_sprite *s) {
+    if (!s)
+        return;
+    float ox, oy;   /* world_y_up px of the view's TOP-LEFT */
+    rp_screen_origin_y_up(&ox, &oy);
+    ame_rp_sprite w = *s;
+    w.x = ox + s->x;
+    w.y = (oy - s->y) - s->h;   /* top edge -> y-up lower-left, one flip */
+    rp_push_sprite(&w);
 }
 
 /* --- directional shadow target (depth-only FBO) ------------------ */
@@ -1537,10 +1557,13 @@ void rp_post(const ame_rp_post *p) {
     S.post_vig = p->vignette < 0 ? 0 : p->vignette;
 }
 
-void rp_screen_origin(float *ox, float *oy) {
+/* world_y_up px of the view's TOP-LEFT corner (named: this is the corner a
+ * px_y_down caller means by "the window's (0,0)"). Lower-left lives in
+ * camera_world_origin_y_up. */
+void rp_screen_origin_y_up(float *ox, float *oy) {
     /* delegates to the camera's canonical mapping: build/origin/pick
      * can never disagree (they once did, by half a pixel) */
-    camera_world_origin(&S.cam, ox, oy);
+    camera_world_top_left_y_up(&S.cam, ox, oy);
 }
 
 bool rp_read_pixels(uint8_t *rgba_out, int w, int h) {

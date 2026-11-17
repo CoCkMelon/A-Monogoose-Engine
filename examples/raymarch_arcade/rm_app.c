@@ -64,6 +64,13 @@ static void spawn_row(rm_snap_t *s) {
     }
 }
 
+/* loop declaration (app.h, loop.txt): this app is stepped at a fixed rate,
+ * so dt is exactly 1/hz every call and replays stay frame-rate independent.
+ * ame_loop_defaults() = FIXED 1000 Hz, 4-step gate: copy and change hz. */
+ame_loop_desc app_loop(void) {
+    return ame_loop_defaults();
+}
+
 int app_init(void) {
     if (!in_bind_key(AME_ACT_CANCEL, AME_KEY_ESCAPE)
         || !in_bind_key(AME_ACT_CANCEL, AME_KEY_Q)
@@ -327,16 +334,18 @@ int app_render(void) {
     rp_update_texture(rm_tex, rm_pix, RM_W, RM_H, 4);
 
     rp_begin_frame();
-    /* one fullscreen quad through the ONE batch (screen-anchored so it
-     * covers the view whatever the camera center is) */
+    /* one fullscreen quad through the ONE batch (screen-anchored so it covers
+     * the view whatever the camera center is). The view's px_y_down TOP-left
+     * maps to the world_y_up corner (ox, oy); the quad therefore spans DOWN
+     * (oy .. oy - VIEW_H), and p0/p1 carry v0 so the image stays upright. */
     float ox, oy;
-    rp_screen_origin(&ox, &oy);
+    rp_screen_origin_y_up(&ox, &oy);
     float white[4] = { 1, 1, 1, 1 };
     rp_push_quad(&(ame_rp_quad){ .tex = rm_tex,
         .p0 = { ox, oy, 0 },
         .p1 = { ox + VIEW_W, oy, 0 },
-        .p2 = { ox + VIEW_W, oy + VIEW_H, 0 },
-        .p3 = { ox, oy + VIEW_H, 0 },
+        .p2 = { ox + VIEW_W, oy - VIEW_H, 0 },
+        .p3 = { ox, oy - VIEW_H, 0 },
         .u0 = 0, .v0 = 0, .u1 = 1, .v1 = 1,
         .tint = { white[0], white[1], white[2], white[3] }, .layer = 0 });
     rp_end_frame();

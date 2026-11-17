@@ -55,7 +55,7 @@ editor's two-ways law tests it against the shipping source):
 - `w` is the snapped pen after the last STORED element; if the
   glyph/line cap truncated the run, `layout.truncated` says which
   (`lean: cap_width_eq_pen`) — no phantom EOL carets;
-- 2D screen origin: `camera_world_origin()` — floor the camera
+- 2D screen origin: `camera_world_origin_y_up()` / `rp_screen_origin_y_up()` — floor the camera
   position, then floor the translation: integral origins at odd
   viewport sizes too (no half-pixel soft text at 1281×721).
 

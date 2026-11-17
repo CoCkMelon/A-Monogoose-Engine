@@ -62,7 +62,7 @@ void mem_config_from_env(mem_config *cfg) {
         cfg->seed.seed = (uint32_t)strtoul(sd, NULL, 0);
     }
 
-    /* presence (not value) enables, matching the old app_fixed check */
+    /* presence (not value) enables, matching the old app_step check */
     cfg->autoplay.enabled = getenv("AME_AUTOPLAY") != NULL;
 
     const char *fm = getenv("AME_FAKE_MOUSE");

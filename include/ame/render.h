@@ -120,7 +120,11 @@ void rp_pass_begin(const ame_rp_pass_frame *sel);
 void rp_begin_frame(void);
 void rp_end_frame(void);
 
-/* 2D sugar: axis-aligned quad in pixel space (camera must be ortho2d) */
+/* 2D sugar: axis-aligned rect in WORLD space (camera must be ortho2d).
+ * WORLD IS world_y_up (coords.txt): x,y is the rect's LOWER-LEFT corner and
+ * w,h extend +x/+y. UVs stay in the image's own (top-down) order - the
+ * sprite push maps them so textures render upright.
+ * Screen-space (px_y_down) drawing uses rp_push_sprite_screen instead. */
 typedef struct {
     int tex;
     float x, y, w, h;
@@ -129,6 +133,10 @@ typedef struct {
     float layer;
 } ame_rp_sprite;
 void rp_push_sprite(const ame_rp_sprite *s);
+/* Same struct, but x,y is the px_y_down TOP-LEFT in WINDOW pixels (the
+ * natural authoring space for HUD/editor/UI): converted to world_y_up
+ * here, once, through the current camera. */
+void rp_push_sprite_screen(const ame_rp_sprite *s);
 /* single triangle (batched; emitted as a quad with a degenerate 2nd tri) */
 typedef struct {
     int tex;
@@ -176,10 +184,10 @@ void rp_set_dsdf_atlas(const ame_rp_dsdf_atlas *a);
 bool rp_update_texture(int id, const uint8_t *pixels, int w, int h, int comps);
 int  rp_white_texture(void); /* 1x1 white, always id 0 */
 
-/* top-left of the current view in WORLD px (ortho pixel camera only).
- * Screen-anchored drawing (UI text) adds this so (0,0) means the window
- * corner, no matter where the camera center sits. */
-void rp_screen_origin(float *ox, float *oy);
+/* world_y_up px of the current view's TOP-LEFT corner (ortho camera only).
+ * The _y_up suffix matters: the world's lower-left is a different point
+ * (camera_world_origin_y_up), and screen space is y-DOWN (coords.h). */
+void rp_screen_origin_y_up(float *ox, float *oy);
 
 /* --- forward lighting (the LIT pass; single pass per pass) -----------------
  * Geometry is lit only when pushed between rp_set_lit(1) and

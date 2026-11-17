@@ -76,87 +76,35 @@ THREADING - SPLIT THREADS (the model that worked)
   thread. The cost (atomics + careful ownership) is worth it and is
   what the earlier engine validated.
 
-FIXED STEP - UPDATE RATE IS NON-NEGOTIABLE
-  A modern CPU runs a 1000 Hz (or higher) update trivially, and that
-  rate is ESSENTIAL for low-latency, smooth gameplay - do not settle
-  for a coarse per-frame step. Rule:
-    - The simulation runs at AT LEAST 1000 Hz (fixed dt <= 0.001 s)
-      on the logic thread. 1000 Hz or more is the floor, not a goal.
+STEP POLICY - THE APP DECLARES ITS RATE (fixed step RECOMMENDED)
+  A fixed step is the right default: a modern CPU runs a 1000 Hz
+  update trivially, and a rate far above the display rate is what
+  gives smooth, low-latency play. But the RATE IS THE APP'S CALL, and
+  a fixed step at all is not mandatory - a calculator, a settings
+  screen or a text tool has no simulation clock worth preserving.
+  Rule (loop.txt STEP POLICY, time.h):
+    - DEFAULT: fixed 1000 Hz on the logic thread (dt = exactly
+      0.001 s per step). Apps declare their rate in app_loop() -
+      60, 120, 240 - and the engine honours it.
+    - VARIABLE stepping (app_step) is a legitimate declared choice for tools and
+      non-real-time programs: one step per rendered frame, dt = the
+      measured frame dt (clamped). No logic thread is created.
+    - ANYTHING THAT MUST REPLAY, RESYNC OR REPRODUCE (netcode, golden
+      captures, deterministic tests, lockstep) REQUIRES a fixed step:
+      those apps declare FIXED, and each step's dt is exactly 1/hz.
+    - Time scale multiplies real time INTO the policy (step count),
+      never a step's dt, so a slowed or paused sim still replays
+      identically. scale 0 pauses the sim; wall clocks keep running.
+    - OVERLOAD GATES: when a wake is late by more than max_steps
+      steps, the excess is dropped and counted. Slow motion, never a
+      burst catch-up storm - the counter is what netcode watches.
     - For REAL-TIME / input-driven actions (aim, camera, movement
       that must track the controller exactly), response must be
-      sub-tick: the >= 1000 Hz loop already gives it, OR a real-time
-      layer reads the latest input atomic at input arrival and updates
-      that action without waiting for the next tick/frame. The raw
-      input reader thread only writes atomics (input.txt); realtime
-      updates come from those atomics on a thread that owns them.
-    - For DETERMINISTIC / simulation-driven cases (the sim, anything
-      that must replay), update BEFORE the frame on the fixed logic
-      step - do not advance them with raw per-frame dt.
-  Concretely: >= 1000 Hz fixed sim step is the default and
-  non-negotiable; real-time input-coupled actions additionally get
-  sub-tick response from the latest input atomics. The split-thread
-  model makes both safe: the sim thread owns sim state, and input
-  writes atomics the realtime/render/sim layers read. Cost-free on
-  modern hardware.
-
-RUNTIME PARSING (one rule, decided here)
-  Runtime parsing is BANNED in the hot loop and for scene/level data
-  (levels.txt bakes to C). It is ALLOWED at load/init time for
-  content-shaped data - dialogue, save/load, and settings definitions
-  (dialogue.txt, save.txt, settings.txt) - which use libfyaml. That
-  is the single rule; do not re-litigate it per file.
-
-DETERMINISM (guarantee we can actually keep)
-  Default guarantee is PER-BINARY / PER-PLATFORM: the same build on
-  the same platform replays identically (good for replays + golden
-  tests in CI). Determinism is NOT the backbone of online play: the
-  netcode is SERVER-AUTHORITATIVE (README Stage 1), so a server is
-  the source of truth and corrects client divergence - exact
-  cross-client bit-identity is not required for the game to work.
-  Cross-platform bit-identity is NOT promised by default; libm
-  (sinf/expf/powf) and vectorization/FMA differ across glibc / musl /
-  macOS / Android (bionic) / Emscripten and change float rounding.
-  Rules:
-    - Pin FP behaviour in build.txt (-ffast-math OFF, fp-contract OFF)
-      for EVERY target (POSIX, Windows, Android, web), and compile the
-      engine's geometry module with the same.
-    - At v0 there is no third-party physics, so determinism is fully
-      ours: we control the geometry/math, the FP gap is small, and
-      per-binary determinism is free. Exact cross-platform bit-identity
-      is cheap to add later (own sin/exp/sqrt + pinned FP) but not a
-      requirement, because the server is authoritative. If a project
-      opts into raw Box2D/Box3D later, their per-binary determinism
-      conventions apply (physics.txt).
-    - Determinism is not a vibe; it is enforced by tests. Golden
-      sim/audio/layout tests replay per-binary in CI.
-
-WHAT WE LEARNED FROM THE OLD ATTEMPTS
-  - Flecs ECS as a core dependency: REJECT. Not needed.
-  - Unity-style C++ facade (unitylike): REJECT. Delete the idea.
-  - 1000 Hz fixed step + split threads + atomics: KEEP. This is the
-    accepted model (see THREADING / FIXED STEP). It worked well in the
-    old engine.
-  - Big scene YAML with rules/systems baked in: REJECT.
-  - Four copies of one demo in C/TS/WAT: REJECT. One C version.
-  - Pointer builder API: KEEP for setup objects only.
-  - Deterministic procedural audio: KEEP.
-  - Test your claims, ship benchmark source if you mention speed:
-    KEEP.
-
-SCOPE GUARDRAIL (decided)
-  Keep the engine fast, small, and data-oriented. Big general runtimes
-  (an ECS, a solver such as psolve, a constraint/automation language,
-  a declarative UI/auto-layout system) are PARKED - they belong in a
-  separate, bigger engine. Adding one here requires amending this file
-  and giving a concrete need. See ui.txt and events.txt.
-
-DONE MEANS
-  Compiles clean (warnings as errors in CI). Engine is C23, one
-  standard per build (third_party/ keeps its own standard).
-  Has a test or a working example for what it does.
-  Stays POSIX-portable (no target-specific call in shared src/) unless
-  it is guarded behind a thin, documented platform shim.
-  No new dependency without updating this spec.
-  No duplicate implementation in another language, dimension, or
-  target.
-  Follows the two-layer rule and agents.txt.
+      sub-tick: the fixed loop already gives it at the default rate,
+      OR a real-time layer reads the latest input atomic at arrival
+      and updates that action without waiting for the next tick.
+    - For DETERMINISTIC / simulation-driven cases, update BEFORE the
+      frame on the step - never with raw per-frame dt unless the app
+      deliberately declared VARIABLE.
+  The split-thread model keeps both safe: the step thread owns sim
+  state, and input writes atomics the realtime/render/sim layers read.

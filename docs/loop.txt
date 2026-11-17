@@ -21,33 +21,80 @@ RULES
    published const snapshots (one writer per field; principles). On
    web and Android, the same split is emulated under their main loops.
 
-3. All simulation advances through ONE fixed-step function on the
-   logic thread. Rendering is separate and runs at display rate on
-   the main thread.
+3. All simulation advances through ONE step function, app_step(dt).
+   WHETHER IT IS A FIXED DT IS THE APP'S DECISION (see STEP POLICY);
+   rendering is separate and runs at display rate on the main thread.
 
 4. No game logic lives in the window/event boilerplate. Events are
    just forwarded to the input module; input state is published to the
    logic thread via atomics for it to read each step.
 
-FIXED STEP (>= 1000 Hz is NON-NEGOTIABLE)
-  A modern CPU runs 1000 Hz or more trivially, and that rate is
-  essential for low-latency smooth play - a coarse per-frame step is
-  NOT acceptable. Use a fixed dt of AT LEAST 1000 Hz (fixed_dt <=
-  0.001 s), as A-Mongoose did. The logic thread runs the fixed step
-  continuously at that rate, decoupled from the display refresh. It is
-  not tied to per-frame accumulator catch-up:
-    logic thread loop:  sleep until next 1 ms tick,
-                        run_all_updates(fixed_dt)
-  (On the main/SDL side an accumulator-style catch-up is NOT used for
-  gameplay - the sim owns its own high-frequency clock.)
+STEP POLICY (declared by the app; fixed 1000 Hz is the recommendation)
+  The engine does not legislate a rate, and it does not keep a mode in
+  hidden state either. The app DECLARES its loop in one function, and
+  implements the ONE hook that declaration names:
+
+      ame_loop_desc app_loop(void);   /* read once at startup, then logged */
+
+      app_fixed(float dt)   MODE FIXED     dt is exactly 1/hz, every call
+      app_step(float dt)    MODE VARIABLE  dt is the measured frame dt
+
+  Resolution is one-way and visible: the engine calls app_loop() once,
+  prints the result, binds the hook, and never changes mode again:
+
+      loop: FIXED  hz=1000.000  hook=app_fixed  gate=4 steps  dt clamp=0.250 s
+      loop: VARIABLE  hook=app_step  dt clamp=0.250 s  (per frame, no thread)
+
+  Both hooks always exist as declarations (app.h); the one the app did not
+  implement is a weak stub that fails loudly with a precise message if the
+  engine ever reaches it, which is what catches a mode/hook mismatch.
+  app_loop() itself has NO default: an app that forgets it fails at link
+  time with "undefined reference to app_loop", never by booting into a
+  mode nobody chose.
+
+    FIXED     ame_loop_desc d = ame_loop_defaults(); d.hz = 120; return d;
+              RECOMMENDED for anything real-time, and effectively
+              required wherever state must replay or resync: netcode,
+              deterministic tests, lockstep, golden captures. 1000 Hz is
+              the default because sub-millisecond input latency comes
+              free on a modern CPU; 60/120/240 Hz are legitimate choices
+              for a heavy 3D game or a slow target. The engine decides
+              HOW MANY steps run per wake; it never changes dt.
+    VARIABLE  return (ame_loop_desc){ .mode = AME_LOOP_VARIABLE };
+              One step per rendered frame, dt = measured frame dt clamped
+              by hitch_max. For programs with no simulation clock to
+              preserve (calculators, settings screens, text tools, menus):
+              no logic thread is created at all.
+    PAUSE     ame_loop_set_scale(0): sim time stops and no steps run, while
+              wall clocks keep running. Scale multiplies real time INTO
+              THE MODE, never a step's dt: 0.5 runs every other step, 2.0
+              runs two - so a slowed or paused fixed-step sim still
+              replays identically.
+
+  OVERLOAD: GATE, DO NOT BURST-CATCH-UP.
+    If a wake is late by more than max_steps steps (default 4), the excess
+    is DROPPED and counted (ame_loop_dropped_steps()), so the sim runs in
+    slow motion instead of falling further behind. Burst catch-up is the
+    failure mode to avoid: it makes the frame longer, which drops the next
+    wake too, and the backlog never clears. A server-authoritative online
+    game wants exactly this gate - the drop counter is the signal that a
+    client is slipping and a resync or input-rate change is due.
+    hitch_max does the same job for VARIABLE apps after a stall or a
+    hidden tab.
+
+  QA can force any mode without touching the app (screenshot/CI runs of a
+  FIXED game under VARIABLE, a 60 Hz sanity pass): AME_LOOP_HZ,
+  AME_LOOP_VARIABLE, AME_LOOP_MAX_STEPS. An override is printed in the
+  same startup line as "[QA override]", so the log never misstates how
+  the binary is actually running.
 
   REAL-TIME / INPUT-COUPLED ACTIONS GET SUB-TICK RESPONSE:
     For actions that must track input with the lowest latency (aim,
     camera, direct movement), the response time must be far below one
     display frame. Two acceptable mechanisms, both safe under the
     split-thread + atomics model (principles THREADING / input.txt):
-      - the >= 1000 Hz logic loop already yields sub-millisecond input
-        latency, OR
+      - the fixed logic loop already yields sub-millisecond input
+        latency at the default 1 kHz (less at a lower hz), OR
       - a real-time input-coupled layer reads the LATEST input atomic
         immediately (at input arrival) and updates that action's own
         state without waiting for the next logic tick or render frame.
@@ -58,7 +105,8 @@ FIXED STEP (>= 1000 Hz is NON-NEGOTIABLE)
   DETERMINISTIC / SIM CASES UPDATE BEFORE THE FRAME:
     The sim and anything that must replay are advanced only on the
     fixed logic step, before the frame - never with raw per-frame dt.
-  Both rules together give >= 1000 Hz sim plus sub-tick input response.
+  Together they give a sub-millisecond sim clock (at the default hz)
+  plus sub-tick input response.
 
 STATE
 Game state is module statics (data.txt) plus a reset() that rebuilds
@@ -71,7 +119,9 @@ INIT ORDER (be consistent)
   4 geometry init (static world for collision queries) if used
   5 load content (geometry, textures, audio) into static slots
   6 init simulation (pools, player, spawns)
-  7 start the fixed step on the logic thread (1000 Hz)
+  7 declare the loop: app_loop() (a pure function, read once after
+    app_init); the engine then starts the logic thread (FIXED) or steps
+    per frame (VARIABLE)
 
 NAMING: CAMERA (across 2D and 3D)
   There is ONE camera module, chosen by the build dimension macro,
@@ -86,8 +136,12 @@ PUBLIC API SHAPE
   app.h (extern "C")
     int  app_init(void)
     int  app_event(const ame_ev *event) (platform-neutral kind + payload)
-    int  app_fixed(float dt)            (logic thread) run all *_update at
-                                        fixed dt = 0.001 s
+    ame_loop_desc app_loop(void)        DECLARE the loop: FIXED hz /
+                                        VARIABLE / gate / dt clamp
+    int  app_fixed(float dt)            MODE FIXED hook: dt is exactly 1/hz
+    int  app_step(float dt)             MODE VARIABLE hook: dt is the frame dt
+    ame_loop_fixed_dt(), ame_loop_dropped_steps(), ame_sim_time(),
+    ame_loop_set_scale()                readback + pause (queries, not config)
     int  app_render(void)               (main thread) build + submit one frame
     void app_quit(void)
     ame_request_quit(), ame_cursor_visible(), ame_time_seconds()
@@ -99,15 +153,20 @@ PUBLIC API SHAPE
   web bootstrap: thin shim calling the SAME app_* functions.
 
 BANNED
-  - Advancing logic by raw per-frame dt (frame-rate dependent motion).
+  - Advancing a FIXED-policy simulation by raw per-frame dt (frame-rate
+    dependent motion). VARIABLE mode is an explicit, declared choice, never
+    an accident: an app that needs replay/netcode must declare FIXED.
   - Game logic inside event callbacks.
   - Writing the same shared field from two threads.
   - Separate native and web implementations of the game.
 
 CHECK
-  A sprite moves at identical fixed-step distance regardless of the
-  display refresh rate (the sim runs at >= 1000 Hz, not tied to the
-  display). Real-time input-coupled actions respond in well under one
+  Under a FIXED loop a sprite moves at identical step distance
+  regardless of the display refresh rate (the sim clock is not tied to
+  the display), and each step's dt is exactly 1/hz. Under VARIABLE the
+  dt equals the frame dt, clamped. Both are pinned headless in
+  tests/test_time.c, and all three policies run on a real app through
+  AME_LOOP_HZ / AME_LOOP_VARIABLE / AME_LOOP_MAX_STEPS. Real-time input-coupled actions respond in well under one
   display frame (sub-tick) from the latest input atomics. Two threads
   (logic + render) run without data races under the atomics/snapshot
   rules; ASan/TSan clean. Reset returns an identical first frame for a

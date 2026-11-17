@@ -29,6 +29,13 @@ static double T0;
  * snapshot feeds them per frame, the overlay reads the pinned pointers. */
 static float g_w_car_x, g_w_car_y, g_w_speed, g_w_fuel, g_w_hp;
 
+/* loop declaration (app.h, loop.txt): this app is stepped at a fixed rate,
+ * so dt is exactly 1/hz every call and replays stay frame-rate independent.
+ * ame_loop_defaults() = FIXED 1000 Hz, 4-step gate: copy and change hz. */
+ame_loop_desc app_loop(void) {
+    return ame_loop_defaults();
+}
+
 int app_init(void)
 {
     game_input_bindings();

@@ -177,35 +177,125 @@ void ame_sleep_seconds(double seconds) {
         seconds = 10.0;
     SDL_DelayPrecise((Uint64)(seconds * 1000000000.0));
 }
+/* --- loop state (time.h, loop.txt) -------------------------------------
+ * The MODE is not runtime state: app_loop() is read ONCE at startup, the
+ * hook it names is resolved into g_step_hook, and the whole thing is
+ * logged. Nothing can change the mode afterwards. */
+static ame_time g_time;
+static int (*g_step_hook)(float);   /* app_fixed or app_step, chosen once */
+static const char *g_hook_name = "?";
+
+/* Weak fallbacks: a mode/hook mismatch fails loudly at the first step
+ * instead of silently running an empty loop. */
+#if defined(__GNUC__) || defined(__clang__)
+#define AME_WEAK __attribute__((weak))
+#else
+#define AME_WEAK
+#endif
+
+AME_WEAK int app_fixed(float dt) {
+    (void)dt;
+    ame_set_error(AME_ERR_PLATFORM,
+                  "app_loop() declared AME_LOOP_FIXED but app_fixed() is not "
+                  "implemented - did you write app_step() instead? (app.h)");
+    ame_log_last_error();
+    return 1;
+}
+
+AME_WEAK int app_step(float dt) {
+    (void)dt;
+    ame_set_error(AME_ERR_PLATFORM,
+                  "app_loop() declared AME_LOOP_VARIABLE but app_step() is not "
+                  "implemented - did you write app_fixed() instead? (app.h)");
+    ame_log_last_error();
+    return 1;
+}
+
+double ame_loop_fixed_dt(void) { return g_time.variable ? 0.0 : g_time.step; }
+uint64_t ame_loop_dropped_steps(void) { return g_time.dropped; }
+double ame_sim_time(void) { return g_time.time; }
+void ame_loop_set_scale(float scale) { ame_time_set_scale(&g_time, scale); }
+
+/* Resolve app_loop() into state + hook, then say so in the log. QA knobs
+ * (AME_LOOP_HZ / AME_LOOP_VARIABLE / AME_LOOP_MAX_STEPS) override the
+ * declaration and are logged as overrides, so the line is never a lie. */
+static void resolve_loop(void) {
+    ame_loop_desc d = app_loop();
+    const char *forced = NULL;
+    const char *vz = SDL_getenv("AME_LOOP_VARIABLE");
+    const char *hz = SDL_getenv("AME_LOOP_HZ");
+    const char *ms = SDL_getenv("AME_LOOP_MAX_STEPS");
+    if (vz || hz || ms) {
+        forced = "QA override";
+        if (vz)
+            d.mode = (vz[0] && vz[0] != '0') ? AME_LOOP_VARIABLE
+                                             : AME_LOOP_FIXED;
+        if (hz)
+            d.hz = SDL_strtod(hz, NULL);
+        if (ms)
+            d.max_steps = (int)SDL_strtol(ms, NULL, 10);
+    }
+    ame_time_configure(&g_time, &d);
+    g_step_hook = g_time.variable ? app_step : app_fixed;
+    g_hook_name = g_time.variable ? "app_step" : "app_fixed";
+    if (g_time.variable)
+        ame_log(AME_LOG_INFO,
+                "loop: VARIABLE%s  hook=%s  dt clamp=%.3f s  (per frame, no "
+                "logic thread)", forced ? " [QA override]" : "", g_hook_name,
+                g_time.hitch_max);
+    else
+        ame_log(AME_LOG_INFO,
+                "loop: FIXED%s  hz=%.3f  hook=%s  gate=%d steps  dt clamp=%.3f s",
+                forced ? " [QA override]" : "", 1.0 / g_time.step, g_hook_name,
+                g_time.max_steps, g_time.hitch_max);
+}
+
 /* QA/headless: AME_FIXED_FRAME_DT=seconds runs the logic INLINE in the
  * render iterate (exactly dt per rendered frame, no logic thread), so
  * frame N always sees sim time N*dt - byte-deterministic captures of
- * mid-game animation (with e.g. AME_AUTOPLAY). Unset = the normal
- * split-thread 1 kHz loop (loop.txt). */
+ * mid-game animation (with e.g. AME_AUTOPLAY). Unset = the app's policy
+ * (default: split-thread 1 kHz loop, loop.txt). */
 static double g_fixed_dt = 0.0;
 
+/* one step of the declared mode: input edges, the resolved hook, commit */
+static int run_one_step(void) {
+    in_begin_step(); /* input.txt: edges computed once per step */
+    if (g_step_hook((float)g_time.delta) != 0)
+        return 1;
+    ame_time_commit(&g_time);
+    return 0;
+}
+
+/* FIXED-policy logic thread: wake every `step`, hand the MEASURED elapsed
+ * time to ame_time_plan(), run what it asks for. A late wake therefore asks
+ * for several steps; past max_steps the gate drops the excess, so the sim
+ * slows instead of spiralling (time.h). */
 static int logic_thread(void *ud) {
     (void)ud;
-    /* fixed step >= 1000 Hz (loop.txt): sleep until each 1 ms tick */
-    const double dt = 0.001;
+    const double step = g_time.step;
+    const double freq = (double)SDL_GetPerformanceFrequency();
+    const Uint64 one = (Uint64)(freq * step);
     Uint64 next = SDL_GetPerformanceCounter();
-    const Uint64 one = (Uint64)((double)SDL_GetPerformanceFrequency() * dt);
+    Uint64 last = next;
     while (atomic_load_explicit(&g_run, memory_order_relaxed)) {
-        in_begin_step(); /* input.txt: edges computed once per fixed step */
-        int rc = app_fixed((float)dt);
-        if (rc != 0) {
-            atomic_store(&g_exit_code, rc);
-            atomic_store(&g_run, 0);
-            ame_request_quit();
-            break;
+        Uint64 now = SDL_GetPerformanceCounter();
+        int n = ame_time_plan(&g_time, (double)(now - last) / freq);
+        last = now;
+        for (int i = 0; i < n; i++) {
+            if (run_one_step() != 0) {
+                atomic_store(&g_exit_code, 1);
+                atomic_store(&g_run, 0);
+                ame_request_quit();
+                return 0;
+            }
         }
         next += one;
-        Uint64 now = SDL_GetPerformanceCounter();
+        now = SDL_GetPerformanceCounter();
         if (now < next) {
-            double wait_s = (double)(next - now) / SDL_GetPerformanceFrequency();
+            double wait_s = (double)(next - now) / freq;
             SDL_DelayPrecise((Uint64)(wait_s * 1e9));
         } else {
-            next = now; /* fell behind: don't burst-catch-up */
+            next = now; /* woke late: do not add extra wakes on top */
         }
     }
     return 0;
@@ -270,6 +360,7 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char **argv) {
 
     rp_set_gl_loader((ame_gl_getproc_fn)SDL_GL_GetProcAddress);
 
+    ame_time_init(&g_time); /* arithmetic defaults; app_loop() decides the mode */
     in_reset();
     in_set_backend(&g_sdl_input_backend); /* sensor opens ride the backend */
 #if defined(AME_INPUT_ASYNCINPUT)
@@ -317,11 +408,15 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char **argv) {
         if (ffd)
             g_fixed_dt = SDL_strtod(ffd, NULL);
     }
-    if (g_fixed_dt <= 0.0)
+    resolve_loop(); /* app_loop() -> state + hook + one log line */
+
+    /* a VARIABLE app has no logic thread: its frame IS the step, so the
+     * measured frame dt is the dt the app sees (time.h) */
+    if (g_fixed_dt <= 0.0 && !g_time.variable)
         g_logic = SDL_CreateThread(logic_thread, "ame-logic", NULL);
-    if (g_fixed_dt <= 0.0 && !g_logic) {
+    if (g_fixed_dt <= 0.0 && !g_time.variable && !g_logic) {
         ame_set_error(AME_ERR_PLATFORM,
-                      "could not create the fixed-step logic thread");
+                      "could not create the logic thread");
         ame_log_last_error();
         return SDL_APP_FAILURE;
     }
@@ -505,10 +600,24 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
         }
     }
     if (g_fixed_dt > 0.0) {
-        /* fixed-frame QA mode: step logic inline, exact dt per frame */
+        /* fixed-frame QA mode: step logic inline, exact dt per frame,
+         * bypassing the policy so captures stay byte-deterministic */
         in_begin_step();
-        if (app_fixed((float)g_fixed_dt) != 0)
+        if (g_step_hook((float)g_fixed_dt) != 0)
             return SDL_APP_SUCCESS;
+    } else if (g_time.variable) {
+        /* VARIABLE policy: no logic thread - the frame IS the step, with the
+         * measured dt (time.h; tools/menus/calculators live here) */
+        static Uint64 last;
+        Uint64 now = SDL_GetPerformanceCounter();
+        double freq = (double)SDL_GetPerformanceFrequency();
+        double real = last ? (double)(now - last) / freq : 0.0;
+        last = now;
+        int n = ame_time_plan(&g_time, real);
+        for (int i = 0; i < n; i++) {
+            if (run_one_step() != 0)
+                return SDL_APP_SUCCESS;
+        }
     }
     if (app_render() != 0)
         return SDL_APP_SUCCESS;
@@ -555,10 +664,15 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
 void SDL_AppQuit(void *appstate, SDL_AppResult result) {
     (void)appstate; (void)result;
     atomic_store_explicit(&g_run, 0, memory_order_relaxed);
-    if (g_logic) {
+    if (g_logic) { /* stop the step thread before reporting its counters */
         SDL_WaitThread(g_logic, NULL);
         g_logic = NULL;
     }
+    ame_log(AME_LOG_INFO, "loop summary: %llu steps, %llu dropped, "
+            "sim %.3f s, wall %.3f s",
+            (unsigned long long)g_time.frame,
+            (unsigned long long)g_time.dropped, g_time.time,
+            g_time.unscaled_time);
     app_quit();
     audio_shutdown();
 #if defined(AME_INPUT_ASYNCINPUT)

@@ -96,6 +96,20 @@ add_executable(test_prefab test_prefab.c)
 target_link_libraries(test_prefab PRIVATE ame::3d)
 add_test(NAME prefab COMMAND test_prefab)
 
+# step policy + sim clock (time.h): due steps, the overload gate, pause,
+# scale, variable mode, long-run drift. Pure arithmetic - drives the loop
+# contract headless with synthetic wall-clock deltas.
+add_executable(test_time test_time.c)
+target_link_libraries(test_time PRIVATE ame::2d)
+target_compile_definitions(test_time PRIVATE AME_2D=1)
+add_test(NAME time COMMAND test_time)
+
+# coordinate-space contract (coords.h): sign + round-trip of every conversion
+add_executable(test_coords test_coords.c)
+target_link_libraries(test_coords PRIVATE ame::2d)
+target_compile_definitions(test_coords PRIVATE AME_2D=1)
+add_test(NAME coords COMMAND test_coords)
+
 # module coverage that was MISSING until now (measured 2026-11-17: both
 # src/tilemap.c and src/events.c shipped with zero tests). Both are pure
 # CPU/logic-thread suites: the tilemap DRAW half stays in test_render_2d.

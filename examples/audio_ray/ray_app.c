@@ -19,6 +19,13 @@ static float g_l, g_r;
 
 #define SCALE 90.0f /* world units -> px */
 
+/* loop declaration (app.h, loop.txt): this app is stepped at a fixed rate,
+ * so dt is exactly 1/hz every call and replays stay frame-rate independent.
+ * ame_loop_defaults() = FIXED 1000 Hz, 4-step gate: copy and change hz. */
+ame_loop_desc app_loop(void) {
+    return ame_loop_defaults();
+}
+
 int app_init(void) {
     camera_viewport(camera_ortho2d(camera_desc(&CAM)), 800, 450);
     /* world (0,0) = window TOP-LEFT: pos = view center. Without
@@ -80,7 +87,7 @@ void app_resize(int w, int h) {
 static void world_rect(float cx, float cy, float hw, float hh,
                        const float col[4], float layer) {
     float px = 400.0f + cx * SCALE, py = 225.0f - cy * SCALE;
-    rp_push_sprite(&(ame_rp_sprite){ .tex = rp_white_texture(),
+    rp_push_sprite_screen(&(ame_rp_sprite){ .tex = rp_white_texture(),
         .x = px - hw * SCALE, .y = py - hh * SCALE, .w = hw * 2 * SCALE,
         .h = hh * 2 * SCALE, .u0 = 0, .v0 = 0, .u1 = 1, .v1 = 1,
         .tint = { col[0], col[1], col[2], col[3] }, .layer = layer });
@@ -95,14 +102,14 @@ int app_render(void) {
     float mx = 400, my = 225;
     in_mouse_pos(&mx, &my);
     float lvl = (g_l + g_r) * 0.5f;
-    rp_push_sprite(&(ame_rp_sprite){ .tex = rp_white_texture(), .x = mx - 18,
+    rp_push_sprite_screen(&(ame_rp_sprite){ .tex = rp_white_texture(), .x = mx - 18,
         .y = my - 18, .w = 36, .h = 36, .u0 = 0, .v0 = 0, .u1 = 1, .v1 = 1,
         .tint = { 0.2f + 0.8f * lvl, 0.5f, 0.5f, 1 }, .layer = 2 });
     /* gain bars: L / R */
-    rp_push_sprite(&(ame_rp_sprite){ .tex = rp_white_texture(), .x = 20,
+    rp_push_sprite_screen(&(ame_rp_sprite){ .tex = rp_white_texture(), .x = 20,
         .y = 20, .w = 120 * g_l, .h = 14, .u0 = 0, .v0 = 0, .u1 = 1,
         .v1 = 1, .tint = { 0.9f, 0.4f, 0.3f, 1 }, .layer = 4 });
-    rp_push_sprite(&(ame_rp_sprite){ .tex = rp_white_texture(), .x = 20,
+    rp_push_sprite_screen(&(ame_rp_sprite){ .tex = rp_white_texture(), .x = 20,
         .y = 40, .w = 120 * g_r, .h = 14, .u0 = 0, .v0 = 0, .u1 = 1,
         .v1 = 1, .tint = { 0.3f, 0.5f, 0.95f, 1 }, .layer = 4 });
     rp_end_frame();

@@ -1319,3 +1319,60 @@ defaults to BAKED on that target; runtime stays the default where
 the cost is negligible, preserving editability without rebuilds.
 Results live in BENCH_REPORT.md; specs change only if a default
 flips.
+
+=====================================================================
+SESSION 2026-11-17: coordinate spaces + app-declared step policy
+=====================================================================
+1. 2D WORLD IS NOW world_y_up (+x right, +y UP, gravity -y).
+   Spec: docs/coords.txt. Conversions live ONLY in include/ame/coords.h
+   and the camera/render/text/tilemap boundary functions, and the space
+   is in every converted name:
+     ame_m4_ortho_px_y_up
+     camera_world_origin_y_up / camera_world_top_left_y_up
+     camera_screen_y_down_to_world_y_up / camera_world_y_up_to_screen_y_down
+     rp_screen_origin_y_up, rp_push_sprite_screen (px_y_down in)
+     ame_rp_sprite is LOWER-LEFT anchored; the sprite push pairs the top
+     edge with v0 so top-down atlases stay upright.
+   Screen space stays px_y_down (in_mouse_pos, UI/editor code, text
+   layout); Tiled stays tile_row_down and converts once at ingest.
+   Gotchas that cost time here (do not re-derive): a sprite placed by its
+   TOP-LEFT in a y-up world draws one height too high (use the lower-left
+   or _screen); pose text must negate the layout's y-down offsets or
+   billboards render upside down; the screen->world y term is
+   (view_h - sy/zoom) - ty, not sy/zoom - ty.
+   Tests: tests/test_coords.c (sign + round-trip), test_camera.c corner
+   conventions, test_render*.c text orientation by atlas SSD.
+
+2. STEP POLICY IS DECLARED BY THE APP (loop.txt STEP POLICY, time.h).
+   TWO hooks, one per mode - the hook you implement states the policy:
+     app_fixed(float dt)   MODE FIXED: dt is EXACTLY 1/hz every call
+     app_step(float dt)    MODE VARIABLE: dt is the measured frame dt
+   The declaration is a FUNCTION, not a setter (no hidden mode state):
+     ame_loop_desc app_loop(void);   /* read ONCE at startup, then logged */
+     ... ame_loop_defaults()  = FIXED 1000 Hz, gate 4, clamp 0.25 s
+         d.hz = 60; d.max_steps = 2;                 -> custom fixed rate
+         { .mode = AME_LOOP_VARIABLE }               -> tool, no thread
+   The engine resolves it once into a hook pointer and prints the truth:
+     loop: FIXED  hz=1000.000  hook=app_fixed  gate=4 steps  dt clamp=0.250 s
+     loop: VARIABLE  hook=app_step  dt clamp=0.250 s  (per frame, no thread)
+   Missing app_loop() = LINK error ("undefined reference to app_loop").
+   Mode/hook mismatch = the un-implemented hook is a weak stub that fails
+   loudly at the first step with the exact diagnosis. Both proven.
+   VARIABLE apps get NO logic thread (frame IS the step). Fixed step is
+   RECOMMENDED, not mandatory; replay/netcode/goldens require it.
+   - Overload GATES: a late wake drops the excess steps and counts them
+     (ame_loop_dropped_steps()); slow motion, never burst catch-up.
+   - Time scale multiplies real time INTO the policy (step COUNT), never
+     a step's dt, so slowed/paused sims still replay identically.
+     ame_loop_set_scale(0) pauses; wall clocks keep running.
+   - Readback: ame_loop_fixed_dt() (0 under VARIABLE), ame_sim_time(),
+     ame_loop_dropped_steps(), ame_loop_set_scale() (pause).
+   - Bootstraps share src/time.c (plan/commit); the web frame uses the
+     same gate instead of its old 100-step accumulator.
+   - QA/CI overrides without a rebuild: AME_LOOP_HZ=N,
+     AME_LOOP_VARIABLE=1, AME_LOOP_MAX_STEPS=n. Example: a memory_game
+     run under AME_LOOP_HZ=60 logs "loop: FIXED, step 0.016667 s".
+   - SDL_AppQuit logs "loop summary: N steps, M dropped, sim X s,
+     wall Y s" - the cheapest way to see the gate working.
+   Tests: tests/test_time.c (77 checks: due steps, gate, pause, scale,
+   variable, drift, determinism). ctest 32/32 (normal, ASan/UBSan, TSan).

@@ -218,16 +218,22 @@ static inline ame_m4 ame_m4_perspective(float fov_y, float aspect, float zn, flo
     return r;
 }
 
-/* Orthographic projection (2D pixel space: x right, y DOWN, origin top-left,
- * 1 unit = 1 pixel at zoom 1). This is what the pixel-perfect 2D camera
- * uses (render.txt rule 4). */
-static inline ame_m4 ame_m4_ortho_px(float w, float h, float zn, float zf) {
+/* Orthographic projection for the 2D WORLD: world_y_up pixel space, x right,
+ * +y UP, the view rectangle is [0,w] x [0,h], 1 unit = 1 world px at zoom 1
+ * (coords.txt; render.txt rule 4). The pixel-perfect 2D camera builds its
+ * view-projection from this.
+ *
+ * Y-UP IS THE PROJECTION'S SIGN, not per-vertex work: +y in world lands at
+ * NDC +y (up) here, so gameplay math can say "above = larger y" and gravity
+ * "-y" with no flips anywhere else. Screen-space consumers (px_y_down) are
+ * converted at the renderer's _screen entry points, never per glyph/quad. */
+static inline ame_m4 ame_m4_ortho_px_y_up(float w, float h, float zn, float zf) {
     ame_m4 r = ame_m4_identity();
     r.m[0]  =  2.0f / w;
-    r.m[5]  = -2.0f / h;
+    r.m[5]  =  2.0f / h;
     r.m[10] =  1.0f / (zf - zn);
     r.m[12] = -1.0f;   /* x=0 -> NDC -1 (left) */
-    r.m[13] =  1.0f;   /* y=0 -> NDC +1 (top; y axis points down in px space) */
+    r.m[13] = -1.0f;   /* y=0 -> NDC -1 (BOTTOM; +y is up in world space) */
     r.m[14] = -zn / (zf - zn);
     return r;
 }

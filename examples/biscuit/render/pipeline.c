@@ -115,7 +115,7 @@ void bf_view_shutdown(bf_view *v)
 
 /* world -> PIXEL-SPACE world coords: ortho2d is 1:1 in pixels and the
  * batch takes camera-centred world pixels ((0,0) = view centre), NOT
- * screen pixels - rp_screen_origin is the screen-anchored variant the
+ * screen pixels - rp_push_sprite_screen is the screen-anchored variant the
  * text module applies itself. Forgetting this offsets everything by half
  * a viewport. */
 static float sx(const bf_view *v, float wx)

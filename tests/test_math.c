@@ -51,13 +51,20 @@ static int t_mat(void) {
     /* clip.w = -z_view = 5; ndc z = clip.z/clip.w ~ 0.962 (5 units away) */
     UT_ASSERT_NEAR(clip.z / 5.0f, 0.96196f, 1e-4);
 
-    ame_m4 o = ame_m4_ortho_px(800, 600, -1, 1);
-    ame_v3 tl = ame_m4_xform_point(o, ame_v3_(0, 0, 0));
-    ame_v3 br = ame_m4_xform_point(o, ame_v3_(800, 600, 0));
-    UT_ASSERT_NEAR(tl.x, -1, 1e-6);
-    UT_ASSERT_NEAR(tl.y,  1, 1e-6); /* top-left px -> NDC top-left */
-    UT_ASSERT_NEAR(br.x,  1, 1e-6);
-    UT_ASSERT_NEAR(br.y, -1, 1e-6);
+    /* world_y_up projection (coords.txt): view pixel (0,0) is the BOTTOM-left
+     * of the view rectangle and lands at NDC bottom-left; (w,h) at top-right. */
+    ame_m4 o = ame_m4_ortho_px_y_up(800, 600, -1, 1);
+    ame_v3 bl = ame_m4_xform_point(o, ame_v3_(0, 0, 0));
+    ame_v3 tr = ame_m4_xform_point(o, ame_v3_(800, 600, 0));
+    UT_ASSERT_NEAR(bl.x, -1, 1e-6);
+    UT_ASSERT_NEAR(bl.y, -1, 1e-6); /* world y=0 -> NDC BOTTOM (y is up) */
+    UT_ASSERT_NEAR(tr.x,  1, 1e-6);
+    UT_ASSERT_NEAR(tr.y,  1, 1e-6); /* world y=h -> NDC top */
+    /* y really grows UP: raising y raises NDC y */
+    ame_v3 mid = ame_m4_xform_point(o, ame_v3_(400, 300, 0));
+    ame_v3 up  = ame_m4_xform_point(o, ame_v3_(400, 450, 0));
+    UT_ASSERT(up.y > mid.y);
+    UT_ASSERT_NEAR(mid.y, 0, 1e-6);
     UT_OK();
     return 0;
 }

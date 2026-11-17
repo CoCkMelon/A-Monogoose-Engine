@@ -14,6 +14,13 @@ static ame_camera CAM;
 static int g_voice = -1;
 static ame_synth_cfg g_cfg;
 
+/* loop declaration (app.h, loop.txt): this app is stepped at a fixed rate,
+ * so dt is exactly 1/hz every call and replays stay frame-rate independent.
+ * ame_loop_defaults() = FIXED 1000 Hz, 4-step gate: copy and change hz. */
+ame_loop_desc app_loop(void) {
+    return ame_loop_defaults();
+}
+
 int app_init(void) {
     camera_viewport(camera_ortho2d(camera_desc(&CAM)), 800, 400);
     /* world (0,0) = window TOP-LEFT: pos = view center. Without
@@ -64,15 +71,15 @@ int app_render(void) {
     in_mouse_pos(&mx, &my);
     /* pan track: center line + source puck + pan rails */
     float rails[4] = { 0, 190, 800, 190 };
-    rp_push_sprite(&(ame_rp_sprite){ .tex = rp_white_texture(),
+    rp_push_sprite_screen(&(ame_rp_sprite){ .tex = rp_white_texture(),
         .x = rails[0], .y = rails[1], .w = rails[2], .h = 10,
         .u0 = 0, .v0 = 0, .u1 = 1, .v1 = 1,
         .tint = { 0.25f, 0.28f, 0.35f, 1 }, .layer = 0 });
     float lvl = g_voice >= 0 ? audio_beat_amplitude(g_voice) : 0;
-    rp_push_sprite(&(ame_rp_sprite){ .tex = rp_white_texture(), .x = mx - 14,
+    rp_push_sprite_screen(&(ame_rp_sprite){ .tex = rp_white_texture(), .x = mx - 14,
         .y = my - 14, .w = 28, .h = 28, .u0 = 0, .v0 = 0, .u1 = 1, .v1 = 1,
         .tint = { 0.3f + lvl * 0.7f, 0.5f, 0.9f, 1 }, .layer = 5 });
-    rp_push_sprite(&(ame_rp_sprite){ .tex = rp_white_texture(), .x = mx - 2,
+    rp_push_sprite_screen(&(ame_rp_sprite){ .tex = rp_white_texture(), .x = mx - 2,
         .y = 40, .w = 4, .h = 320, .u0 = 0, .v0 = 0, .u1 = 1, .v1 = 1,
         .tint = { 0.9f, 0.7f, 0.2f, 0.6f }, .layer = 3 });
     rp_end_frame();

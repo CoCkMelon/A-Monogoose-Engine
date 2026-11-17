@@ -26,7 +26,19 @@ int app_event(const ame_ev *event) {
     return 0;
 }
 
-int app_fixed(float dt) {
+/* loop declaration (app.h, loop.txt). This template has no simulation
+ * clock, so it takes the VARIABLE mode: app_step(dt) is called once per
+ * rendered frame with the measured dt, and NO logic thread is created.
+ * A real-time game swaps this for:
+ *     ame_loop_desc d = ame_loop_defaults();   // FIXED 1000 Hz
+ *     d.hz = 120.0; d.max_steps = 2;           // or any rate it wants
+ *     return d;
+ * and implements app_fixed() instead of app_step(). */
+ame_loop_desc app_loop(void) {
+    return (ame_loop_desc){ .mode = AME_LOOP_VARIABLE };
+}
+
+int app_step(float dt) {
     (void)dt;
     if (in_pressed(AME_ACT_CANCEL))
         return 1;

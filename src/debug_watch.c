@@ -160,20 +160,20 @@ int ame_debug_watch_draw(float x, float y, const ame_debug_watch_style *st)
      * push is on top anyway. layer-1 would depth-clip the glyphs. */
     if (st->bg[3] > 0.0f) {
         float w = ln.w + WATCH_COL_GAP * st->scale + lv.w;
-        /* window px -> world px exactly like text_draw_screen does: the
-         * ortho2d camera may be centred anywhere (biscuit follows the
-         * car), so raw window coords would land off-screen */
-        float ox, oy;
-        rp_screen_origin(&ox, &oy);
+        /* px_y_down UI rect: rp_push_sprite_screen applies the view's
+         * top-left so the overlay lands at the window corner whatever the
+         * camera centre is (biscuit follows the car) */
+        /* the overlay is px_y_down UI: hand the rect to the SCREEN push and
+         * let the renderer do the one y-up conversion (coords.txt rule 2) */
         ame_rp_sprite sc = {
             .tex = rp_white_texture(),
-            .x = ox + x - st->pad, .y = oy + y - st->pad,
+            .x = x - st->pad, .y = y - st->pad,
             .w = w + 2.0f * st->pad, .h = ln.h + 2.0f * st->pad,
             .u0 = 0.0f, .v0 = 0.0f, .u1 = 1.0f, .v1 = 1.0f,
             .tint = { st->bg[0], st->bg[1], st->bg[2], st->bg[3] },
             .layer = st->layer + 1.0f,
         };
-        rp_push_sprite(&sc);
+        rp_push_sprite_screen(&sc);
     }
 text_draw_screen(&ln, x, y, st->tint, st->layer);
     text_draw_screen(&lv, x + ln.w + WATCH_COL_GAP * st->scale, y, vt,

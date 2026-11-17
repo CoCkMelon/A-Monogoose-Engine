@@ -18,6 +18,13 @@ static line_state g_logic;
 static line_state_snap g_snap;
 static ame_camera CAM;
 
+/* loop declaration (app.h, loop.txt): this app is stepped at a fixed rate,
+ * so dt is exactly 1/hz every call and replays stay frame-rate independent.
+ * ame_loop_defaults() = FIXED 1000 Hz, 4-step gate: copy and change hz. */
+ame_loop_desc app_loop(void) {
+    return ame_loop_defaults();
+}
+
 int app_init(void) {
     if (!in_bind_button(AME_ACT_CONFIRM, AME_BTN_LEFT)
         || !in_bind_button(AME_ACT_CANCEL, AME_BTN_RIGHT))
@@ -45,6 +52,13 @@ int app_fixed(float dt) {
     (void)dt;
     float mx = 0, my = 0;
     in_mouse_pos(&mx, &my);
+    /* the canvas is world_y_up while the mouse arrives px_y_down: convert ONCE
+     * here through the camera (coords.txt rule 2), then the stroke is plain
+     * world geometry - moving the mouse UP draws up. */
+    float wpt[2];
+    camera_screen_y_down_to_world_y_up(&CAM, mx, my, wpt);
+    mx = wpt[0];
+    my = wpt[1];
     if (in_held(AME_ACT_CONFIRM) && g_logic.n < MAX_PTS) {
         int n = g_logic.n;
         if (n == 0

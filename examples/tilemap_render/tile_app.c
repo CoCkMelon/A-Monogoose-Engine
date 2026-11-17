@@ -13,6 +13,13 @@ static ame_camera CAM;
 static ame_tilemap TM;
 static float g_ox, g_oy;
 
+/* loop declaration (app.h, loop.txt): this app is stepped at a fixed rate,
+ * so dt is exactly 1/hz every call and replays stay frame-rate independent.
+ * ame_loop_defaults() = FIXED 1000 Hz, 4-step gate: copy and change hz. */
+ame_loop_desc app_loop(void) {
+    return ame_loop_defaults();
+}
+
 int app_init(void) {
     if (!in_bind_key(AME_ACT_LEFT, AME_KEY_LEFT)
         || !in_bind_key(AME_ACT_RIGHT, AME_KEY_RIGHT)
@@ -39,8 +46,11 @@ int app_init(void) {
     }
     printf("tilemap_render: %dx%d tiles (%dpx), %d layer(s)\n", TM.width,
            TM.height, TM.tile_width, TM.layer_count);
+    /* world_y_up: g_ox is the map's LEFT edge and g_oy its TOP edge (rows go
+     * DOWN from it), so centring means placing the top edge half a map ABOVE
+     * the view centre. */
     g_ox = 400 - TM.width * TM.tile_width * 0.5f;
-    g_oy = 300 - TM.height * TM.tile_height * 0.5f;
+    g_oy = 300 + TM.height * TM.tile_height * 0.5f;
     return 0;
 }
 
@@ -52,7 +62,7 @@ int app_fixed(float dt) {
     if (in_held(AME_ACT_RIGHT))
         g_ox -= spd;
     if (in_held(AME_ACT_UP))
-        g_oy += spd;
+        g_oy += spd;   /* +y is UP (world_y_up) */
     if (in_held(AME_ACT_DOWN))
         g_oy -= spd;
     return 0;
