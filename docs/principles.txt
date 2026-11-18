@@ -14,6 +14,14 @@ CORE IDEAS
 2. NO abstraction layers.
    The plain C API IS the engine. No ECS-core, no GameObject /
    Behaviour facade, no reflection, no virtual components.
+   BOUNDARY (recorded 2026-11-18, components.txt): this idea bans
+   OBJECTS + VIRTUAL DISPATCH - vtables, GameObject classes,
+   reflection, runtime type discovery, script VMs, ECS. It does not
+   ban DATA + EXPLICIT TABLES: visual components in fixed pools,
+   bound by name from baked scene data, with behaviour as a table of
+   plain C functions registered at startup and one engine draw system
+   that walks the pools. That layer is components.txt, and it is how
+   the majority of visuals (entities and HUD) is defined.
 
 3. DATA ORIENTED.
    Live game state sits in fixed static arrays. Hot loops never

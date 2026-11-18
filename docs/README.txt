@@ -248,6 +248,8 @@ FILES IN THIS FOLDER
                    exact-step FIXED, gated overload, worked arithmetic
   state-audit.txt  module-level hidden state, measured 2026-11-17
   texture-files.txtfiles.txt
+  components.txt   visual components + behaviour tables (data, not
+                   objects; explicit draw targets)
   plan-3d-puzzle.txt campaign F: 3D third-person puzzle game (glTF
                    bake-only, kinematic controller, CPU skinning)
   reference/       source documents the specs derive from + CI notes:

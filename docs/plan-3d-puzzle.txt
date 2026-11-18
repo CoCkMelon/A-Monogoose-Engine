@@ -115,6 +115,11 @@ WHAT IS NEW (nothing exists on any of the three attempts)
   Character controller, third-person camera (spring arm + occlusion).
   Measured donor fact: the B-rewrite contains ZERO files matching
   skeleton/anim/gltf/skin/scene - there is no donor for any of this.
+  Component/behaviour layer (campaign F2, docs/components.txt): visual
+    components in pools, name-bound from baked scene data, one engine
+    draw system, behaviour as registered C function tables. No donor
+    exists for this either - attempt 1's cpp/unitylike is a C++ facade
+    on flecs and is archive.
 
 =====================================================================
 WORK PACKAGES AND TURN BUDGET
@@ -175,10 +180,69 @@ WP10 Platform proof: native + Android (4 ABIs, portrait) + web build
 WP11 Feel: animation state tuning, root motion vs in-place, foot
      sliding, turn-in-place, camera weight.                 2-3 turns
 
-TOTAL 20-29 turns; plan around 24. With WP4: 22-32.
+TOTAL (campaign F alone) 20-29 turns; with campaign F2 below the
+INTEGRATED total is 25-38, plan around 31 (27-41 if GPU skinning is
+measured necessary). F's WP2 (runtime scene module, 1-2 turns) is
+SUBSUMED by F2's B2/B3, so F alone drops to 19-27.
 CRITICAL PATH to "animated character walks a Blender-authored 3D level
 with a third-person camera": WP0 -> WP1 -> WP3 -> WP5 -> WP7 = 10-13
 turns; 12-15 to the first playable slice of WP9.
+
+=====================================================================
+CAMPAIGN F2 (2026-11-18): COMPONENT-DRIVEN VISUALS - spec components.txt
+=====================================================================
+Recorded requirement: the MAJORITY of visuals - entity/scene visuals
+AND HUD/UI/text - are defined by data and behaviour tables, not by
+hand-written immediate-mode draw calls in app_render. Stated as
+"monogoose behaviour script", after attempt 1's MongooseBehaviour.
+
+Decisions, with grounds:
+- TRUNK-NATIVE SHAPE. Data in fixed pools + explicit tables of plain C
+  functions, registered at startup; no per-entity vtable, no
+  GameObject class, no reflection, no script VM, no ECS, C-only.
+  principles.txt CORE IDEA 2 and the agents.txt forbidden item both
+  stand; the boundary (DATA + EXPLICIT TABLES, never OBJECTS +
+  VIRTUAL DISPATCH) is now written into both files so the next agent
+  does not have to re-derive it. Measured: attempt 1's cpp/unitylike
+  is 25 files / 178 KB of C++ on a flecs EcsChildOf hierarchy - the
+  facade shape, archive, nothing ported.
+- SCOPE = entities + HUD/UI/text. app_render becomes the exception
+  path (full-screen passes, debug overlays, one-off draws).
+- The explicit draw-target change is FOLDED INTO THIS WORK, not
+  patched separately: a `pass` field on ame_rp_sprite / ame_rp_mesh /
+  the text draw entry, an invalid pass failing loudly (the ae0e465
+  rule), and all 68 rp_push_* call sites migrated in the same change
+  set with a golden zero-diff proof. Measured ground for the change:
+  the batch sort key is pass*8192 + tex*256 + layer (render.c:223,243)
+  where tex and layer come from the push struct but pass comes from
+  ambient S.cur_pass - so today a draw call cannot answer "which
+  buffer am I in" from its own arguments.
+
+Packages:
+ B1  Spec + boundary notes (components.txt, principles.txt,
+     agents.txt, this section).                       1 turn (landed)
+ B2  Component pools + name-bind tables + tests, no drawing yet:
+     sprite, mesh, text, tilemap, particle, skinned.   2-3 turns
+ B3  The draw system + the explicit .pass migration (68 sites) +
+     golden zero-diff proof.                           2-3 turns
+ B4  Behaviour tables + prefab integration (name -> behaviour beside
+     name -> spawn), registration order logged + tested. 1-2 turns
+ B5  HUD/UI/text components in px_y_down, entity visuals in world
+     space, same frame.                                1-2 turns
+ B6  Migrate one or two examples as proof (goldens); the rest are
+     follow-ups.                                       2-3 turns
+Subtotal F2: 9-14 turns.
+
+MILESTONE PATHS (integrated):
+- walking animated character in a Blender level with a third-person
+  camera: 10-13 turns (unchanged).
+- majority of visuals component-driven including HUD: 10-17 turns
+  (B1 -> WP1 baker -> B2 -> B3 -> B4 -> B5).
+- playable puzzle vertical slice with both: 25-38 turns.
+
+SEQUENCING: B3 touches render.c and every example, so it is the only
+package in either campaign that must not run concurrently with other
+render.c work. B2/B4/B5 do not touch the renderer's existing paths.
 SEQUENCING: WP1/WP3 do not touch render.c or text.c, so they can run
 concurrently with the frame-independence campaign. WP4 cannot.
 
@@ -235,3 +299,11 @@ CHECKLIST (this phase)
   [ ] Android (4 ABIs) and web builds of the game exist and run
   [ ] docs/: skeleton.txt, animation.txt, scene.txt written; README
       index and choices current; every new public header has a spec
+  [ ] components.txt boundary respected: no vtable, no reflection, no
+      ECS, no script VM, C-only
+  [ ] A named entity from a baked scene renders its components with no
+      app_render code in the game
+  [ ] .pass explicit on every push; invalid pass fails loudly; all 68
+      sites migrated; goldens pixel-identical
+  [ ] HUD from text + sprite components in px_y_down while entity
+      visuals render in world space, same frame

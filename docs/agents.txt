@@ -59,6 +59,14 @@ SPEC/CODE DRIFT CHECK (CI)
 EXPLICITLY FORBIDDEN (verbatim pitfalls from the past)
   - Do not build a Unity/Behaviour facade "as the next example."
     That was the wrong step in the old engine's own notes.
+    BOUNDARY (2026-11-18): the ban is on a FACADE - per-entity
+    vtables, GameObject classes, virtual Update managers, reflection,
+    script VMs, ECS. It is not a ban on data-driven visuals:
+    components.txt defines visual components in fixed pools plus
+    behaviour as registered tables of plain C functions, which is the
+    intended way to define the majority of visuals. Attempt 1's
+    cpp/unitylike (25 files, 178 KB C++, MongooseBehaviour on a flecs
+    hierarchy) is the facade this forbids; nothing is ported from it.
   - Do not revive the big scene YAML schema or a scene runtime.
   - Do not hand-write a WASM module or a TS engine twin.
   - Do not add a results-only benchmark doc without the benchmark

@@ -1,0 +1,149 @@
+ame-next ENGINE SPEC
+File: components.txt - visual components + behaviour tables
+
+WHY THIS FILE EXISTS
+Recorded requirement (2026-11-18): the MAJORITY of visuals - entity
+and scene visuals AND HUD/UI/text - are defined by data and behaviour
+tables, not by immediate-mode draw calls written by hand in
+app_render. The requirement was stated as "monogoose behaviour
+script", after attempt 1's MongooseBehaviour. This file records what
+that means on trunk, what it explicitly is NOT, and how a draw finds
+its buffer.
+
+=====================================================================
+WHAT THIS IS
+=====================================================================
+- VISUAL COMPONENTS IN FIXED POOLS (data.txt rule: no malloc in the
+  hot path). Kinds at v1: sprite, mesh, text, tilemap, particle, and
+  the skinned-character component from plan-3d-puzzle.txt.
+- Components bind to entities BY NAME from baked scene data, using
+  the levels.txt marker rules: kind prefix + stable id, 63-byte
+  Blender name cap, integer ids at runtime, no per-frame string
+  lookups.
+- ONE engine draw system walks the pools once per frame and pushes to
+  the renderer. app_render becomes the EXCEPTION path: full-screen
+  passes, debug overlays, one-off draws.
+- A BEHAVIOUR IS A TABLE OF PLAIN C FUNCTIONS per kind (init, update,
+  and a draw hook only where a kind needs one), registered explicitly
+  at startup. prefab already maps name -> spawn; this adds
+  name -> behaviour, same table, same integer ids.
+
+=====================================================================
+WHAT THIS IS NOT (the recorded boundary)
+=====================================================================
+principles.txt CORE IDEA 2 stands: "No ECS-core, no GameObject /
+Behaviour facade, no reflection, no virtual components." agents.txt
+stands: do not build "a Unity/Behaviour facade as the next example."
+Concretely, banned in this module:
+  - no per-entity vtable, no virtual Awake/Start/Update/LateUpdate
+    manager objects;
+  - no GameObject class, no handle-chasing object layers;
+  - no reflection, no runtime type discovery, no embedded script VM;
+  - no second implementation in C++ or another language (principles
+    idea 1: implement a behavior once, in C);
+  - no ECS: no archetype storage, no query DSL, no flecs.
+Allowed and intended: data in pools, explicit function tables,
+Unity-like FILE organization (one behaviour per file with its own
+init/update), and name-bound authoring from the DCC.
+
+The boundary in one line: DATA + EXPLICIT TABLES, never OBJECTS +
+VIRTUAL DISPATCH.
+
+Measured reference for the shape this is NOT: attempt 1's layer lives
+in master's cpp/unitylike (25 files, 178 KB of C++: Scene.h 36.7 KB,
+SceneCore.cpp 31.7 KB, AudioComponents 15.6 KB, Rigidbody2D 10 KB,
+PhysicsCallbacks 9.4 KB, SpriteRenderer 4.9 KB, Transform 6 KB,
+TextRenderer, MeshRenderer, Material, TilemapRenderer, CameraFacade,
+SceneAsset YAML, TransformHierarchy) with MongooseBehaviour
+Awake/Start/Update/FixedUpdate/LateUpdate/OnCollision*/OnTrigger* and
+a flecs EcsChildOf hierarchy. It is archive. NOTHING is ported from
+it; it is listed here so the comparison is measured, not remembered.
+
+=====================================================================
+DRAW TARGETS ARE EXPLICIT (the "which buffer?" rule)
+=====================================================================
+Today a push's destination is HALF AMBIENT. The batch sort key is
+computed at push time as pass*8192 + tex*256 + layer
+(src/render.c:223,243): tex and layer come from the push struct, but
+PASS comes from S.cur_pass, selected earlier by rp_pass_begin().
+Commit 81ef8cd made that state frame-scoped instead of process-scoped;
+this spec removes the ambience entirely.
+
+- ame_rp_sprite, ame_rp_mesh and the text draw entry gain a `pass`
+  field: an AME_RP_PASS_* built-in kind or a handle from
+  rp_pass_create. A push whose pass is not valid FAILS LOUDLY (the
+  ae0e465 rule: a call that cannot take effect is an error, not a
+  silent no-op) rather than using whatever was selected last.
+- The draw system reads pass + layer FROM THE COMPONENT, so "which
+  buffer does this sprite belong to" is answerable from data at the
+  authoring site, not from call order in app_render.
+- Migration: the 68 rp_push_* call sites in examples/, src/ and
+  tests/ are patched in the SAME change set that adds the field, with
+  a golden zero-diff proof. The expectation is no behaviour change:
+  every in-app pass selection is already paired and balanced, which is
+  the same measurement that made 81ef8cd safe.
+- rp_pass_begin() stays for the cases that genuinely draw a whole
+  frame section into one pass (a custom post pass, a shadow caster
+  pre-pass). It becomes an explicit scope, not the default routing.
+
+=====================================================================
+DATA SHAPE (v1)
+=====================================================================
+Every component carries its own draw target and sort fields:
+  sprite    tex, src rect, uv, tint[4], pass, layer, depth_test
+  mesh      mesh id, xform (4x4 column-major), tint[4], pass, layer
+  text      layout id, face, position, tint[4], pass, layer
+  tilemap   map id, origin, pass, layer
+  particle  emitter id, pass, layer
+  skinned   skeleton id, clip state, pass, layer   (plan-3d-puzzle)
+Authoring sources, in order of preference:
+  1. BAKED scene data for Blender-authored content
+     (plan-3d-puzzle.txt WP1 emits the component tables).
+  2. TOML sidecars for 2D and HUD content - TOML per the 2026-11-14
+     format decision; no YAML outside the dialogue module.
+  3. The same pool API at runtime for code-driven visuals (particles,
+     debug draws, anything a behaviour spawns).
+One pool set serves all three sources; the source only decides how a
+row is filled, never how it is drawn.
+
+=====================================================================
+UPDATE AND DRAW ORDER
+=====================================================================
+Behaviours update inside the fixed step (loop.txt, app_fixed) in
+REGISTRATION ORDER, which is explicit, logged at startup and
+testable. No priority guessing, and no LateUpdate phase unless a
+measurement demands one. Draw order is the batch sort key (pass, tex,
+layer) and is deliberately INDEPENDENT of update order - the two must
+not be coupled, or component order becomes a rendering dependency.
+
+Coordinate spaces follow coords.txt: entity visuals live in
+world_y_up (2D) or mesh_y_up (3D); HUD and screen-space components
+live in px_y_down and push through the screen-space entry. A
+component declares which, and the draw system does not guess.
+
+=====================================================================
+ACCEPTANCE TESTS
+=====================================================================
+- A named entity loaded from a baked scene renders all of its
+  components with NO app_render code in the game.
+- Component pools allocate nothing in the hot path (data.txt); a test
+  asserts pool capacity behaviour and the drop counter.
+- A push with an invalid pass fails loudly; tested, including the
+  error code and the message naming the fix.
+- Golden captures of the existing examples are PIXEL-IDENTICAL after
+  the .pass migration (proof the migration changed routing, not
+  output).
+- A HUD built from text + sprite components renders in px_y_down while
+  entity visuals render in world space, in the same frame.
+- Registration order is asserted by a test: two behaviours that write
+  the same pool run in declared order.
+
+=====================================================================
+STAGES (turn budget in plan-3d-puzzle.txt)
+=====================================================================
+1. Spec + boundary notes: this file, principles.txt, agents.txt.
+2. Pools + name-bind tables + tests (no drawing yet).
+3. The draw system + the explicit .pass migration + goldens.
+4. Behaviour tables + prefab integration.
+5. HUD/UI/text components.
+6. Migrate one or two examples as proof; the rest are follow-ups.

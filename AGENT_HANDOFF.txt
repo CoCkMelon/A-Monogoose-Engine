@@ -1492,3 +1492,71 @@ committed objects sometimes did not). Recovery that always worked:
   git reset --hard FETCH_HEAD ; git stash drop
 so the REMOTE is the source of truth, and the patches in /home/user/patches
 are regenerated with: git format-patch 110810f..HEAD -o ... --start-number 1
+
+=====================================================================
+DECISION (2026-11-18): component-driven visuals - campaign F2
+=====================================================================
+Recorded requirement: the MAJORITY of visuals (entity/scene visuals
+AND HUD/UI/text) are defined by data and behaviour tables, not by
+hand-written immediate-mode draw calls in app_render. The requirement
+was stated as "monogoose behaviour script", after attempt 1's
+MongooseBehaviour. Spec: docs/components.txt. Integrated plan and turn
+budget: docs/plan-3d-puzzle.txt (campaign F2 section).
+Shape chosen, with grounds:
+- TRUNK-NATIVE: visual components in fixed pools, bound to entities by
+  name from baked scene data (levels.txt marker rules), ONE engine draw
+  system walking the pools per frame, behaviour as a table of plain C
+  functions registered at startup (prefab's name -> spawn extended to
+  name -> behaviour). Banned in this module: per-entity vtables,
+  GameObject classes, reflection, runtime type discovery, script VMs,
+  ECS, and any second implementation in C++ (principles idea 1).
+  Boundary in one line: DATA + EXPLICIT TABLES, never OBJECTS +
+  VIRTUAL DISPATCH. principles.txt CORE IDEA 2 and the agents.txt
+  forbidden item STAND; the boundary is now written into both.
+  Measured reference for the shape this is not: master's cpp/unitylike
+  = 25 files, 178 KB C++ (Scene.h 36.7 KB, SceneCore.cpp 31.7 KB,
+  AudioComponents 15.6 KB, Rigidbody2D 10 KB, PhysicsCallbacks 9.4 KB,
+  SpriteRenderer, TextRenderer, Transform, MeshRenderer, Material,
+  TilemapRenderer, CameraFacade, SceneAsset YAML) with MongooseBehaviour
+  Awake/Start/Update/FixedUpdate/LateUpdate/OnCollision*/OnTrigger* on a
+  flecs EcsChildOf hierarchy. Archive; nothing ported.
+- SCOPE: entities + HUD/UI/text. app_render becomes the exception path.
+- DRAW TARGETS BECOME EXPLICIT, folded into this work rather than
+  patched twice. Measured ground: the batch sort key is
+  pass*8192 + tex*256 + layer (src/render.c:223,243); tex and layer
+  come from the push struct but pass comes from ambient S.cur_pass
+  selected by rp_pass_begin(), so a draw call cannot answer "which
+  buffer am I in" from its arguments. 81ef8cd made that state
+  frame-scoped; F2 removes the ambience: a `pass` field on
+  ame_rp_sprite / ame_rp_mesh / the text draw entry, invalid pass fails
+  loudly (the ae0e465 rule), and all 68 rp_push_* call sites migrate in
+  the same change set with a golden zero-diff proof. rp_pass_begin
+  remains for genuine whole-section passes (custom post, shadow caster).
+- API-STYLE CORRECTIONS recorded the same day, all measured:
+  * NO engine-side defaults. The proposed zero-valid ame_rp_desc,
+    rp_init_screen() and an engine-owned default camera are WITHDRAWN.
+    Ground: hidden defaults converge output and hide choices. Distinction
+    kept: authored defaults in TOML data (a visible, editable `default`
+    field) are data, not hidden policy.
+  * CONFIG BY STRUCT VALUES. The rp_desc_* builder chain is a defaults
+    mechanism (rp_desc_begin fills, the rest override); the replacement
+    is a struct literal with every field named. Same for the camera: the
+    4-call mutating chain (camera_desc/ortho2d/viewport/pos + build),
+    duplicated in app_resize, becomes a value-returning constructor with
+    a struct arg. Measured effect on the same example app (window +
+    quad + text + ESC): 39 code lines today -> about 30 with struct
+    values, optional callbacks and explicit pass targets, i.e. MORE
+    explicit and SHORTER; the boilerplate came from mutating builders
+    and duplicated derivation, not from explicitness.
+  * OPTIONAL CALLBACKS ARE ACCEPTED: weak app_event / app_quit /
+    app_resize, matching the existing weak app_fixed / app_step pattern.
+    app_loop STAYS MANDATORY - it is the declared policy (2026-11-17
+    decision), it costs one line, and its weak-stub diagnosis already
+    names the exact mistake.
+Budget: F2 = 9-14 turns (B1 spec landed, B2 pools+binds, B3 draw system
++ .pass migration + goldens, B4 behaviour tables, B5 HUD components,
+B6 example migration proof). Integrated F+F2 = 25-38 turns, plan around
+31. Milestones: walking animated character 10-13; majority of visuals
+component-driven including HUD 10-17; playable slice 25-38.
+Sequencing: B3 touches render.c and every example - the only package in
+either campaign that must not run concurrently with other render.c work.
