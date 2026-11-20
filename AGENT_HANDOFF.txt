@@ -1601,3 +1601,67 @@ Blocking human input for the whole sequence, exactly one item: the
 startup-budget share for the bench stage S21 (issue #8). The decision
 rule needs a threshold agreed BEFORE measuring, or the threshold gets
 chosen after seeing the results.
+
+=====================================================================
+DEPENDENCIES (canonical list for a fresh sandbox, 2026-11-19)
+=====================================================================
+Native build + all 32 test suites + the assimp2c baker tool:
+  sudo apt-get install -y cmake ninja-build libsdl3-dev libgl-dev \
+    libglu1-mesa-dev libx11-dev libasound2-dev libopusfile-dev \
+    libfyaml-dev libcglm-dev libegl-dev libgles-dev libfreetype-dev \
+    libopus-dev xvfb libassimp-dev
+  Measured this sandbox: cmake 3.31.6, libsdl3-dev 3.2.10, assimp
+  5.4.3, and the configure line prints "ame: assimp2c tool available
+  (assimp 5.4.3)". ctest 32/32 after a full restore.
+Windows cross build adds: gcc-mingw-w64-x86-64.
+Android APK builds add: openjdk-17-jdk-headless, plus NDK r27c,
+  commandlinetools-linux-9477386_latest.zip unpacked as
+  cmdline-tools/latest, and gradle-7.5 - all under /opt/dl, because
+  /tmp is a small tmpfs. Recipe: tools/android_apk_libs.sh, then the
+  gradle invocation in the session notes above.
+Blender fixtures add: blender (4.3.2+dfsg-2, installs and runs
+  headless as blender -b --python tools/mk_fixture.py).
+After any sandbox rewind: chmod +x tools/*.sh web/build.sh, and
+  git -C external/asyncinput checkout -- examples/ if the submodule
+  reports dirty. A rewind also drops the git remote and every stored
+  credential, so re-add the remote or push with an inline token URL.
+  The token is supplied by the human per invocation and is never
+  written to a file, a commit, a comment or a log.
+
+=====================================================================
+DECISION (2026-11-19): the two budgets and the fresh-agent workflow
+=====================================================================
+The pipeline in docs/agent-sequence.txt needed two numbers and one
+workflow decision. All three were answered by the human on 2026-11-19
+and are recorded there as AGREED BUDGETS B1, B2 and W1.
+
+B1 STARTUP DATA LOAD, at most 1 SECOND per target. Levels, dialogue and
+   settings are therefore parsed at RUNTIME by default, and the bench
+   stage S21 confirms the budget instead of choosing between two
+   designs. Applied per target (desktop, armeabi-v7a, wasm): a target
+   over 1 s bakes for that target only, with the forcing number filed in
+   issue #8. This is NOT a ground for reopening bake-only glTF, which
+   rests on parser size, validation and reproducible output rather than
+   on load time.
+B2 PER-FRAME CHARACTER MATH, at most 1 MILLISECOND. Consequence: GPU
+   blending is required, not conditional. Campaign F's decision 3 is
+   amended in docs/plan-3d-puzzle.txt to "pose on the CPU, blend on the
+   GPU", WP4 moves onto the critical path
+   (WP0->WP1->WP3->WP4->WP5->WP7 = 12-16), and the pipeline gains stage
+   S15B between S15 and S16. Existing stage numbers were left untouched
+   so references already published in issues stay valid; the total is
+   now 31 stages and the turn budget 47-73. The CPU blend stays as a
+   TEST ORACLE in tests/ only: it runs headless without GL and it is
+   what the GPU output is compared against, so the shipped runtime keeps
+   exactly one skinning path.
+W1 ONE FRESH AGENT PER STAGE, PLANNED ORDER KEPT. Stages run S1 to S30
+   in order, each in a fresh agent with no carried-over context, each
+   build stage followed by its verify stage in a different agent. For
+   that to work the invocation block at the top of
+   docs/agent-sequence.txt is now self-sufficient (anonymous clone,
+   remote-tip check, dependency pointer, read order, push-and-verify
+   protocol, token handling), and the apt list above is the canonical
+   copy it points at.
+Blocking human input for the sequence: NONE remaining. Each invocation
+needs the stage id and a push token; the tree, the dependency list and
+every acceptance criterion are in the repository.

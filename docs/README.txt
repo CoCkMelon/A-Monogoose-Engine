@@ -251,9 +251,11 @@ FILES IN THIS FOLDER
   components.txt   visual components + behaviour tables (data, not
                    objects; explicit draw targets)
   plan-3d-puzzle.txt campaign F: 3D third-person puzzle game (glTF
-                   bake-only, kinematic controller, CPU skinning)
-  agent-sequence.txt the subagent pipeline: 30 stages, build/verify
-                   alternation, per-stage briefs and status
+                   bake-only, kinematic controller, CPU pose + GPU
+                   blend)
+  agent-sequence.txt the subagent pipeline: 31 stages, build/verify
+                   alternation, agreed budgets B1/B2, per-stage briefs
+                   and status
   reference/       source documents the specs derive from + CI notes:
                    settings-taxonomy-2d3d.txt,
                    sdl3-fast-build-recipe.txt (headless SDL3 for CI)

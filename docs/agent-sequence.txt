@@ -10,21 +10,59 @@ a decision needs a number before code does. A stage that is not
 verified did not happen.
 
 =====================================================================
-HOW TO INVOKE A STAGE (paste, fill in the stage id)
+HOW TO INVOKE A STAGE
 =====================================================================
-  You are stage <S#> of the ame-next subagent pipeline.
-  Read, in this order: docs/agent-sequence.txt (the rules for every
-  stage, then YOUR stage brief), AGENT_HANDOFF.txt, docs/agents.txt,
-  docs/principles.txt, docs/components.txt, docs/plan-3d-puzzle.txt,
-  and the GitHub issue your brief names - including its latest
-  comments. The coordination hub is issue #3.
-  Execute your stage brief exactly. End green: build, ctest, the
-  sanitizer trees and goldens your brief requires, drift gate, commit,
-  push, and the remote sha verified through the branches API.
-  Then post your stage report as a comment in that issue, and set your
-  stage's STATUS line in docs/agent-sequence.txt in the same commit.
-  If your brief's premise turns out to be wrong, STOP and report the
-  measurement in the issue instead of working around it.
+Workflow decided 2026-11-19: every stage is run by a FRESH agent that
+has no prior conversation and an empty sandbox. This block is therefore
+self-sufficient - paste it, fill in <S#> and <TOKEN>, and nothing else
+is needed. <TOKEN> is a GitHub token with push and issue-comment rights
+on the repository; the human supplies it per invocation. It must never
+be written into a file, a commit, a comment or a log.
+
+  You are stage <S#> of the ame-next subagent pipeline. You start with
+  no context: everything you need is in the repository or below.
+
+  1. Get the tree. Anonymous read is enough:
+       git clone --depth 50 -b ame-next-trunk \
+         https://github.com/CoCkMelon/A-Monogoose-Engine ame
+       cd ame && git submodule update --init --recursive
+     If your sandbox already holds a checkout, do not trust it:
+     compare HEAD against
+       git ls-remote https://github.com/CoCkMelon/A-Monogoose-Engine \
+         ame-next-trunk
+     and reset --hard onto that sha BEFORE editing anything. Sandboxes
+     are rewound without warning (24 recorded); a rewind also wipes
+     installed packages, build/ and file exec bits, so afterwards run
+     chmod +x tools/*.sh web/build.sh. Anything never pushed is gone.
+  2. Install the build dependencies: the exact apt list is in
+     AGENT_HANDOFF.txt under DEPENDENCIES (canonical copy). Then
+       cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo
+       cmake --build build -j && ctest --test-dir build
+     and note the baseline test count BEFORE you change anything. Your
+     stage must never end with fewer passing tests than that baseline.
+  3. Read, in this order: docs/agent-sequence.txt (RULES FOR EVERY
+     STAGE, then AGREED BUDGETS, then YOUR stage brief),
+     AGENT_HANDOFF.txt, docs/agents.txt, docs/principles.txt,
+     docs/components.txt, docs/plan-3d-puzzle.txt, and the GitHub issue
+     your brief names - including its latest comments. Issue #3 is the
+     coordination hub.
+  4. Execute your brief exactly: its SCOPE, its MUST NOT, its
+     ACCEPTANCE, its PROOF. If your brief's premise turns out to be
+     wrong, STOP and report the measurement in the issue instead of
+     working around it.
+  5. End green: build OK, ctest at or above the baseline, the sanitizer
+     trees and goldens your brief requires, and
+       tools/ci_drift_check.sh HEAD~1 HEAD
+     printing "drift: ok". Then commit and push:
+       R=https://github.com/CoCkMelon/A-Monogoose-Engine
+       git push "https://x-access-token:<TOKEN>@${R#https://}" \
+         ame-next-trunk
+     and VERIFY THE REMOTE SHA THROUGH THE BRANCHES API afterwards -
+     push output alone is not proof, and a push made while HEAD was
+     rewound has already published a stale tip once.
+  6. Post your stage report as a comment in your issue (<TOKEN> works
+     for the API too), and set your stage's STATUS line in
+     docs/agent-sequence.txt in the same commit as the work.
 
 =====================================================================
 RULES FOR EVERY STAGE
@@ -104,8 +142,44 @@ Render facts a draw-target change rests on: the batch sort key is
   makes it explicit.
 
 =====================================================================
-STAGE TABLE
+AGREED BUDGETS (human answers, 2026-11-19)
 =====================================================================
+The sequence needed two numbers before it could proceed, and a workflow
+decision. All three are settled; they bind stages, they are not advice.
+
+B1 STARTUP DATA LOAD: at most 1 SECOND.
+   A game may spend up to 1 s reading its own authored data (levels,
+   dialogue, settings) at startup before that data has to be pre-baked
+   into the binary. Lenient on purpose: it keeps authored files editable
+   and the rebuild loop short, which matters more than a fast splash.
+   It is applied PER TARGET - desktop, armeabi-v7a and wasm are measured
+   separately in S21, and a target that goes over budget bakes for that
+   target only, with the number that forced it recorded in #8.
+   Consequences: RUNTIME PARSING IS THE DEFAULT for level, dialogue and
+   settings data, so S21 confirms a budget instead of choosing between
+   two designs. This does NOT reopen bake-only glTF (decision of
+   2026-11-14): that rests on parser size, validation and reproducible
+   output, not on load time, so 1 s is not a ground for revisiting it.
+
+B2 PER-FRAME CHARACTER MATH: at most 1 MILLISECOND.
+   Skeleton pose plus vertex blending for animated characters has to fit
+   inside 1 ms of a 16.7 ms frame. Strict on purpose: it leaves the
+   frame for rendering, which is what the puzzle slice spends it on.
+   Consequence, reversing campaign F's decision 3 on objective grounds
+   (a 4-influence blend of a few thousand vertices is not expected to
+   fit 1 ms on armeabi-v7a, and the phone is a required target): the
+   SHIPPING path is pose on the CPU (bone palette) plus blend on the GPU
+   - stage S15B. The CPU blend survives as a TEST ORACLE ONLY: it is
+   what the GPU output is compared against, it runs headless with no GL,
+   and it is not compiled into a game binary, so the runtime keeps
+   exactly one skinning path. 1 ms is measured, not assumed: S15 records
+   the oracle's cost, S15B and S28 record the shipping path's.
+
+W1 ONE FRESH AGENT PER STAGE, PLANNED ORDER KEPT.
+   Stages run S1 to S30 in the order in the table below, each in its own
+   agent, each build stage followed by its verify stage run by a
+   different agent. Nothing is reordered to reach the game sooner.
+
 kind: B=build, V=verify, M=measure.  STATUS: todo / doing / done(sha)
 
 S1  B  #6  leanness 1: optional callbacks, loud diagnostics, dead-math,
@@ -128,15 +202,19 @@ S11 V  #5  verify S10 (goldens + all three sanitizer trees)    STATUS todo
 S12 B  #5  B4 behaviour tables + prefab integration            STATUS todo
 S13 B  #5  B5 HUD/UI/text components                           STATUS todo
 S14 V  #5  verify S12 + S13                                    STATUS todo
-S15 B  #4  WP3 skeleton + animation + CPU skinning             STATUS todo
-S16 V  #4  verify S15                                          STATUS todo
+S15 B  #4  WP3 skeleton + animation + CPU skinning, kept as the
+                     test oracle for budget B2                 STATUS todo
+S15B B #4  WP4 GPU skinning: bone-palette UBO + LIT shader
+                     variant + batcher change. REQUIRED by budget
+                     B2. Exclusive on render.c and shaders/    STATUS todo
+S16 V  #4  verify S15 + S15B (oracle vs GPU agreement)         STATUS todo
 S17 B  #4  WP5 kinematic character controller                  STATUS todo
 S18 B  #4  WP7 third-person camera + WP6 colliders/triggers    STATUS todo
 S19 V  #4  verify S17 + S18                                    STATUS todo
 S20 B  #9  settings module, TOML (structure from B's 91e222b)  STATUS todo
-S21 B  #8  bench harness bench_data + BENCH_REPORT numbers.
-                     BLOCKED: needs the startup-budget number agreed
-                     in #8 before measuring                    STATUS todo
+S21 B  #8  bench harness bench_data + BENCH_REPORT numbers,
+                     measured against budget B1 (1 s per target).
+                     UNBLOCKED 2026-11-19                      STATUS todo
 S22 V  #9/#8 verify S20 + S21                                  STATUS todo
 S23 B  #10 dialogue showcase example(s)                        STATUS todo
 S24 B  #9  net + memnet with hardened recv bounds              STATUS todo
@@ -359,14 +437,43 @@ quaternion interpolation, 2-way blending, a small explicit state machine
 scratch buffer that rp_push_mesh already takes. render.c, mesh.h and the
 shaders stay UNTOUCHED. Tests on a synthetic 2-bone fixture with
 hand-computed expected poses (deterministic, no GL). Record the measured
-per-frame skinning cost - it is the number that decides whether GPU
-skinning is ever needed.
+per-frame CPU skinning cost. Under budget B2 this path is a TEST ORACLE
+rather than the shipping path, so the number is recorded as the oracle's
+cost and as the bound S15B has to beat - not as a go/no-go for S15B,
+which budget B2 already decided.
+MUST NOT: compile the CPU blend into a game binary (tests/ only), touch
+render.c, mesh.h or the shaders.
 ESTIMATE  3-4 turns.
 
+--- S15B (BUILD, issue #4) WP4 GPU skinning -------------------------
+REQUIRED by budget B2 (1 ms per frame for character math), not
+conditional: the CPU blend is not expected to fit 1 ms on armeabi-v7a
+even for one character, and the phone is a required target.
+SCOPE: joints and weights uploaded as a side vertex buffer bound to the
+mesh draw (ame_mesh_vert stays float[8], so the baked parallel arrays
+feed this directly); a bone-palette UBO filled from S15's CPU pose each
+frame; a LIT shader variant blending 4 influences; and the batcher
+change that selects the variant when a mesh carries skin data.
+MUST NOT: ship two skinning paths; change the baked data format S6
+produced; weaken or delete S15's tests; run concurrently with any other
+stage that touches render.c or shaders/ (S10/S11 must have landed).
+ACCEPTANCE: the GPU blend matches the CPU oracle on the synthetic 2-bone
+fixture within a tolerance stated in the test (readback compare, or
+pixel-for-pixel goldens); every committed golden stays pixel-identical;
+per-frame skinning cost measured on desktop and armeabi-v7a against the
+1 ms budget and written into BENCH_REPORT.md; all three sanitizer trees
+green; ctest at or above the baseline.
+PROOF: the oracle-vs-GPU comparison test, the two cost numbers, the
+golden diffs, the sanitizer runs.
+ESTIMATE  2-3 turns.
+
 --- S16 (VERIFY, issue #4) ------------------------------------------
-Re-derive the hand-computed poses independently; check the skinning cost
-number by re-running the bench; confirm render.c/mesh.h/shaders are
-untouched by diff; three sanitizer trees (skinning is new hot-path code).
+Re-derive the hand-computed poses independently; re-run the oracle cost
+bench and the oracle-vs-GPU comparison; confirm S15 left
+render.c/mesh.h/shaders untouched (S15B is the stage that changes them,
+and its diff is the only one allowed to); confirm exactly ONE skinning
+path is linked into a game binary and the CPU oracle lives in tests/;
+three sanitizer trees (skinning is new hot-path code) plus the goldens.
 
 --- S17 (BUILD, issue #4) WP5 character controller -----------------
 Kinematic capsule on trunk's geometry module: sweep, move-and-slide,
@@ -395,19 +502,31 @@ Target shape is docs/settings.txt (settings.definitions.toml,
 [[category]] + [[category.setting]] with id/label/type/options/default/
 live/applier/support/help, device rows with kind + sub). libfyaml stays
 DIALOGUE-ONLY. Tests: parse, validate, apply, round-trip write-then-read,
-malformed input fails loudly.
+malformed input fails loudly. Under budget B1 (1 s) settings are parsed
+at runtime by default - no bake step unless a target measures over
+budget in S21.
 ESTIMATE  2-3 turns.
 
 --- S21 (BUILD, issue #8) bench harness ----------------------------
-BLOCKED until the startup-budget share is agreed in #8 - the decision
-rule needs a threshold chosen BEFORE measuring, or the threshold gets
-chosen after seeing the results. Then: benches/bench_data following the
-bench_core.c pattern (monotonic clock) for dialogue (libfyaml runtime vs
-dlg2c bake) and levels (runtime OBJ vs level_to_c bake) - both paths
-exist today - plus settings once S20 lands. Metrics: cold parse ms, hot
-lookup cost, resident memory, artifact size, on desktop AND armeabi-v7a
-AND wasm. Numbers into BENCH_REPORT.md. Optional CI trend job, not a gate.
-ESTIMATE  2-3 turns.
+UNBLOCKED 2026-11-19 by budget B1: at most 1 s of startup data load, per
+target. The threshold was therefore fixed before measuring, which was the
+whole point of the block.
+SCOPE: benches/bench_data following the bench_core.c pattern (monotonic
+clock) for dialogue (libfyaml runtime vs dlg2c bake) and levels (runtime
+OBJ vs level_to_c bake) - both paths exist today - plus settings once S20
+lands. Metrics: cold parse ms, hot lookup cost, resident memory, artifact
+size, on desktop AND armeabi-v7a AND wasm.
+ACCEPTANCE: every number in BENCH_REPORT.md, each labelled pass/miss
+against 1000 ms cold parse per target. A target over budget bakes for
+that target only, and the bake decision is filed in #8 with the number
+that forced it. PASS on all three targets means the runtime-parse default
+stands and no bake work is added anywhere.
+MUST NOT: re-open the glTF bake decision with a load-time argument (it
+rests on parser size and validation), or tune the threshold after seeing
+results.
+PROOF: BENCH_REPORT.md numbers, reproducible by re-running the bench.
+Optional CI trend job, not a gate.
+ESTIMATE  2 turns (was 2-3; the design choice is already made).
 
 --- S22 (VERIFY, issue #9 and #8) ----------------------------------
 Re-run the bench suite and confirm the numbers reproduce within stated
@@ -455,7 +574,11 @@ Native, Android (arm64-v8a, armeabi-v7a, x86_64, universal; portrait),
 web/emscripten. Shots per policy (webp-only, smallest of lossless or
 lossy q72 method 6, into shots/); every built APK copied to the workspace
 root; APK freshness verified by content (unzip -p ... | cmp -), never by
-size. Frame-time and skinning numbers per target into BENCH_REPORT.md.
+size. Frame-time and skinning numbers per target into BENCH_REPORT.md:
+the SHIPPING skinning path measured against budget B2 (1 ms) on
+armeabi-v7a as well as desktop, and startup data load measured against
+budget B1 (1 s) on every target. A miss is reported in #4 and #8 with
+the number - it is never absorbed silently by lowering a budget.
 ESTIMATE  2-3 turns.
 
 --- S29 (VERIFY, issue #4) -----------------------------------------
@@ -472,14 +595,25 @@ ESTIMATE  2-3 turns.
 =====================================================================
 SEQUENCE NOTES
 =====================================================================
-- Total: 30 stages. Build stages 1-2, 3-4, 5, 6, 8, 10, 12-13, 15, 17-18,
+- Total: 31 stages. S15B was added 2026-11-19 when budget B2 made GPU
+  skinning a requirement; existing stage numbers were left untouched so
+  every reference already published in issues and handoff notes stays
+  valid. Build stages 1-2, 3-4, 5, 6, 8, 10, 12-13, 15, 15B, 17-18,
   20-21, 23-24, 26, 28, 30; verify stages after each; one measure stage
   (S5) before any baker code.
-- Turn budget: 45-70 turns across the sequence at 1-5 turns per stage.
+- Turn budget: 47-73 turns across the sequence at 1-5 turns per stage.
   With no deadline the budget is a planning figure, not a constraint;
   what is constrained is that each stage ends green, pushed and verified.
-- Blocking human input, exactly one item: the startup-budget share for
-  S21 (issue #8). Everything else can proceed without it.
+- Blocking human input: NONE REMAINING. The two numbers the sequence
+  needed were answered on 2026-11-19 and are recorded above as AGREED
+  BUDGETS B1 (startup data load, 1 s per target) and B2 (per-frame
+  character math, 1 ms), together with the workflow decision W1 (one
+  fresh agent per stage, planned order kept). S21 is unblocked, and no
+  later stage has an open question in it.
+- Because stages run in fresh sandboxes, each invocation needs three
+  things from the human: the stage id, a push token, and nothing else -
+  the tree, the dependency list and every acceptance criterion are in
+  the repository.
 - Two decisions derived from recorded rules rather than asked, both in
   S1: NO built-in key binds (a default bind is a hidden default), and a
   missing app_resize while a camera is installed is a LOUD FAILURE, not a

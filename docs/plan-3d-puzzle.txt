@@ -52,16 +52,26 @@ DECISIONS LOCKED (2026-11-18, with grounds)
    Rigid-body props (stacking crates, joints) stay OUT of scope; they
    would reverse the settled no-solver spec and need their own case.
 
-3. SKINNING IS CPU-SIDE FIRST.
-   Grounds: one character, so the per-frame cost is a few thousand
+3. SKINNING: POSE ON THE CPU, BLEND ON THE GPU.
+   AMENDED 2026-11-19 on new grounds. The frame budget for character
+   math was set at 1 ms (AGREED BUDGETS B2 in docs/agent-sequence.txt).
+   A 4-influence blend of a few thousand vertices is not expected to fit
+   1 ms on armeabi-v7a, and the phone is a required target, so the
+   per-vertex blend moves to the GPU: bone palette computed on the CPU
+   each frame (tens of matrix multiplies, microseconds), blending done
+   in a LIT shader variant. The CPU blend is KEPT as a test oracle - it
+   runs headless with no GL and it is what the GPU output is compared
+   against - but it is not compiled into a game binary, so the runtime
+   still has exactly one skinning path.
+   Original grounds (2026-11-18), preserved because they are still true
+   of the oracle: one character, so the per-frame cost is a few thousand
    transformed vertices - measurable, and cheap next to the batch
-   renderer's own work. CPU skinning writes plain ame_mesh_vert into a
-   scratch buffer that rp_push_mesh already accepts, so render.c,
-   mesh.h and the shader set stay UNTOUCHED. That also de-conflicts
-   this campaign from the frame-independence work currently editing
-   render.c and text.c. GPU skinning (bone-palette UBO + a shader
-   variant + batcher changes) is deferred until a measurement says the
-   CPU path misses the frame budget; budget for it separately.
+   renderer's own work on a desktop core. CPU skinning writes plain
+   ame_mesh_vert into a scratch buffer that rp_push_mesh already
+   accepts, so render.c, mesh.h and the shader set stay UNTOUCHED, which
+   also de-conflicts this campaign from the frame-independence work
+   editing render.c and text.c. That de-confliction now holds for WP3
+   only; WP4 takes the render.c lane by itself, after it.
 
 4. BAKED OUTPUT IS CHECKED IN, AND BAKING IS CI-VERIFIED.
    The generated scene/skeleton/clip C files live in generated/ (the
@@ -151,10 +161,13 @@ WP3  Skeleton + animation runtime: bone palette from clips, sampling
      state machine (idle/walk/run/turn), CPU skinning into a scratch
      ame_mesh_vert buffer. Tests on a synthetic 2-bone fixture with
      hand-computed expected poses (deterministic, no GL).    3-4 turns
-WP4  CONDITIONAL - GPU skinning, only if WP3's measured frame cost
-     misses budget. Bone-palette UBO + shader variant + batcher
-     changes; touches render.c, so it must be sequenced AFTER the
-     frame-independence commits land.                    (2-3 turns)
+WP4  REQUIRED, was conditional - GPU skinning: bone-palette UBO +
+     LIT shader variant + batcher change. Required by budget B2
+     (1 ms of per-frame character math, agreed 2026-11-19), so it is
+     no longer waiting on a measurement. It touches render.c and
+     shaders/, so it must be sequenced AFTER the frame-independence
+     commits and after pipeline stage S10/S11, alone in that lane.
+     Pipeline id S15B. The CPU blend stays its oracle.       2-3 turns
 WP5  Character controller on the geometry module: capsule sweep,
      move-and-slide, ground probe, step-up, slope limit, gravity,
      driven from app_fixed. Tests: slope, step, wall slide, fall,
@@ -181,11 +194,13 @@ WP11 Feel: animation state tuning, root motion vs in-place, foot
      sliding, turn-in-place, camera weight.                 2-3 turns
 
 TOTAL (campaign F alone) 20-29 turns; with campaign F2 below the
-INTEGRATED total is 25-38, plan around 31 (27-41 if GPU skinning is
-measured necessary). F's WP2 (runtime scene module, 1-2 turns) is
-SUBSUMED by F2's B2/B3, so F alone drops to 19-27.
+INTEGRATED total is 25-38; GPU skinning is no longer conditional
+(budget B2, 2026-11-19), so plan 27-41, around 34. F's WP2 (runtime
+scene module, 1-2 turns) is SUBSUMED by F2's B2/B3, so F alone drops to
+19-27.
 CRITICAL PATH to "animated character walks a Blender-authored 3D level
-with a third-person camera": WP0 -> WP1 -> WP3 -> WP5 -> WP7 = 10-13
+with a third-person camera": WP0 -> WP1 -> WP3 -> WP4 -> WP5 -> WP7 =
+12-16. WP4 joined the path when budget B2 made GPU blending required.
 turns; 12-15 to the first playable slice of WP9.
 
 =====================================================================
@@ -268,15 +283,17 @@ R4 Sandbox rollbacks (~0.5-1 turn each, 18+ so far). Everything lands
    pushed and API-verified; the baker fixture and generated output are
    in the repo, so a rollback costs a rebuild, not the work.
 R5 Contention with the frame-independence campaign in render.c/text.c.
-   Avoided by decisions 3 and 5; WP4 is the only package that must
-   wait.
+   Avoided by decisions 3 and 5; WP4 (GPU skinning) is the only package
+   that must wait, and pipeline stage S10/S11 holds render.c exclusively
+   until it lands.
 
 =====================================================================
 OUT OF SCOPE (this campaign)
 =====================================================================
 Rigid-body solver / physics engine (reverses physics.txt v0).
 Runtime glTF parsing (decision 1). Live .blend loading. A Blender
-addon. GPU skinning before it is measured. Level streaming/chunking.
+addon. Any skinning path other than the 4-influence blend (no compute
+skinning, no morph targets). Level streaming/chunking.
 Facial animation, IK, cloth, ragdoll. Multiple characters on screen as
 a performance target (one animated character is the requirement; more
 is a later measurement). glTF materials beyond what the LIT pass
