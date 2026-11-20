@@ -95,3 +95,7 @@ BANNED
   - Static variables defined in a header (causes duplicate copies
     per file). Put state in one .c, expose prototypes in the header.
   - Object/interface wrappers that hide the arrays.
+
+CENSUS (S1, tests-only surface)
+  Intended consumers for ame.h tests-only hash helper (ame_fnv1a):
+  S6 scene baker and S8 component name-bind tables.

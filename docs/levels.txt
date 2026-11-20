@@ -156,3 +156,9 @@ CHECK
   No runtime allocation during play after initial load.
   Storing logic in a scene file is impossible (there is no scene
   file runtime).
+
+CENSUS (S1, tests-only surface)
+  Intended consumers for mesh.h / obj.h / tilemap.h tests-only
+  functions: S6 scene baker / S8 bind tables / S26 level mesh group
+  lookup (ame_mesh_group_find), dev-path OBJ loader (ame_obj_parse),
+  and 2D tile collision/queries (ame_tilemap_gid).

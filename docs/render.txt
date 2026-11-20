@@ -160,6 +160,15 @@ EXAMPLE API (render.h, extern "C")
   rp_push_sprite(&(ame_rp_sprite){ .tex = t, .x = x, ... });
   rp_end_frame()       upload verts, draw ranges, present
   rp_load_texture(pixels, w, h, comps, nearest)
+  rp_has_camera()       true once a camera was installed via rp_init or
+                        rp_set_camera (used by bootstraps to require app_resize)
+
+CENSUS (S1, tests-only surface)
+  Intended consumers for render.h tests-only functions
+  (rp_draw_calls_last_frame, rp_quads_last_frame, rp_gl_renderer,
+  rp_set_gl_loader, rp_lighting_off, rp_shadow_off): platform bootstraps
+  (rp_set_gl_loader), S28 frame-time/draw telemetry, and per-scene
+  lighting/shadow toggles in S26.
 
 BANNED
   - Rebinding programs/buffers per sprite (kills batching).

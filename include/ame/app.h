@@ -1,8 +1,12 @@
 /* ame-next — platform-neutral app lifecycle and services (loop.txt).
  *
- * The GAME implements the five app_* hooks. The engine owns SDL/browser
- * callbacks, the split threads, and translates platform events into ame_ev
- * before calling app_event. A game never needs an SDL event type.
+ * The GAME implements app_init, app_loop, app_render, and one of
+ * app_fixed / app_step. app_event, app_quit and app_resize are optional
+ * weak callbacks (except app_resize becomes mandatory at startup whenever
+ * a camera has been installed via rp_init or rp_set_camera). The engine
+ * owns SDL/browser callbacks, the split threads, and translates platform
+ * events into ame_ev before calling app_event. A game never needs an SDL
+ * event type.
  */
 #ifndef AME_APP_H
 #define AME_APP_H
@@ -32,7 +36,7 @@ typedef struct {
 
 /* returns 0 on success (SDL_AppInit convention: non-zero fails startup) */
 int  app_init(void);
-/* return 1 if the platform-neutral event was consumed, 0 otherwise */
+/* OPTIONAL (weak default returns 0): return 1 if event was consumed */
 int  app_event(const ame_ev *event);
 /* --- THE TWO STEP HOOKS: implement exactly the one your app_loop() names --
  *
@@ -52,11 +56,15 @@ int  app_event(const ame_ev *event);
  * engine ever calls it, which is what catches a mode/hook mismatch. */
 int  app_fixed(float dt);
 int  app_step(float dt);
-/* MAIN THREAD: window size changed (the engine already did rp_viewport);
- * rebuild cameras/projections here so content never stretches. */
+/* OPTIONAL unless a camera is installed (weak default is a stub; installing
+ * a camera via rp_init or rp_set_camera without implementing app_resize
+ * fails loudly at startup). MAIN THREAD: window size changed (the engine
+ * already did rp_viewport); rebuild cameras/projections here so content
+ * never stretches. */
 void app_resize(int w, int h);
 /* MAIN THREAD: build + submit one frame from the latest snapshot */
 int  app_render(void);
+/* OPTIONAL (weak default is a no-op): called on shutdown */
 void app_quit(void);
 
 /* --- the loop declaration (REQUIRED; loop.txt STEP POLICY) --------------

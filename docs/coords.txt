@@ -94,3 +94,9 @@ PROOF
   tests/test_render*.c pin text orientation against the atlas itself
   (SSD vs the flipped arm), which is what caught the two places a flip
   is easy to miss: the sprite UV pairing and pose text.
+
+CENSUS (S1, tests-only surface)
+  Intended consumers for coords.h tests-only functions
+  (ame_index_row_major_row_down, ame_index_row_major_row_up, ame_rect_*,
+  ame_tile_*, ame_y_*): src/tilemap.c, S6 scene baker, and S13 HUD/grid
+  components.

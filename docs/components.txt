@@ -147,3 +147,8 @@ STAGES (turn budget in plan-3d-puzzle.txt)
 4. Behaviour tables + prefab integration.
 5. HUD/UI/text components.
 6. Migrate one or two examples as proof; the rest are follow-ups.
+
+CENSUS (S1, tests-only surface)
+  Intended consumers for prefab.h tests-only functions
+  (ame_prefab_register, ame_prefab_reset): S12 behaviour tables +
+  prefab integration and S26 level reload/spawn.

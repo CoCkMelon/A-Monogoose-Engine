@@ -66,6 +66,7 @@ int  rp_init(const ame_rp_desc *desc);
 void rp_shutdown(void);
 void rp_viewport(int w, int h);
 void rp_set_camera(const ame_camera *cam);
+bool rp_has_camera(void);
 const char *rp_gl_renderer(void);
 
 /* --- render passes: applications create their own --------------------------

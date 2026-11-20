@@ -176,6 +176,32 @@ if(UNIX AND NOT APPLE)
         add_test(NAME render COMMAND test_render)
         set_tests_properties(render PROPERTIES
             ENVIRONMENT "LIBGL_ALWAYS_SOFTWARE=1")
+
+        # S1: optional weak app_event/app_quit/app_resize + loud missing-resize
+        # diagnostic when a camera is installed
+        add_executable(app_probe_optional app_probe_optional.c
+            ${CMAKE_SOURCE_DIR}/src/app_sdl.c)
+        target_link_libraries(app_probe_optional PRIVATE ame::2d)
+        target_compile_definitions(app_probe_optional PRIVATE
+            AME_2D=1 AME_INPUT_SDL=1)
+        target_compile_options(app_probe_optional PRIVATE
+            -Wall -Wextra -Werror -ffp-contract=off)
+
+        add_executable(app_probe_missing_resize app_probe_missing_resize.c
+            ${CMAKE_SOURCE_DIR}/src/app_sdl.c)
+        target_link_libraries(app_probe_missing_resize PRIVATE ame::2d)
+        target_compile_definitions(app_probe_missing_resize PRIVATE
+            AME_2D=1 AME_INPUT_SDL=1)
+        target_compile_options(app_probe_missing_resize PRIVATE
+            -Wall -Wextra -Werror -ffp-contract=off)
+
+        add_executable(test_app_hooks test_app_hooks.c)
+        target_compile_options(test_app_hooks PRIVATE
+            -Wall -Wextra -Werror -ffp-contract=off)
+        add_test(NAME app_hooks COMMAND test_app_hooks
+            $<TARGET_FILE:app_probe_optional>
+            $<TARGET_FILE:app_probe_missing_resize>)
+        set_tests_properties(app_hooks PROPERTIES TIMEOUT 30)
     else()
         message(STATUS "tests: EGL render tests skipped (need EGL headers and library)")
     endif()

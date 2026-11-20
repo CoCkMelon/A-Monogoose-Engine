@@ -177,3 +177,8 @@ CHECK
   Choices, jump-to-label loops, portrait changes, "on" events, and
   UTF-8/Cyrillic lines all play correctly, native and web.
   A malformed .yaml reports a clear libfyaml error, never a crash.
+
+CENSUS (S1, tests-only surface)
+  Intended consumers for dialogue.h tests-only functions
+  (ame_dlg_advance, ame_dlg_has_choices, ame_dlg_select): S23 dialogue
+  showcase example(s) and S26 puzzle vertical slice.

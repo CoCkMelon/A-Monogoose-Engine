@@ -98,6 +98,11 @@ DEV OVERLAY (include/ame/debug.h - the v1 inspector)
     (ame_debug_watch / _int); the overlay prints them through the ONE
     trunk text path (PIXEL face). No reflection, no ECS, no per-frame
     allocation (stack buffers + text_layout).
+
+CENSUS (S1, tests-only surface)
+  Intended consumers for debug.h tests-only functions
+  (ame_debug_watch_clear, ame_debug_watch_count, ame_debug_watch_int,
+  ame_debug_watch_name): S13 HUD/UI components and S30 dev overlay.
   - Draw is TWO ALIGNED COLUMNS: names in style.tint, values in
     style.value_tint, values left-aligned in a shared column so digits
     line up vertically. ame_debug_watch_size() measures the block so

@@ -54,3 +54,9 @@ The app/bootstrap or the operation owner logs once, with the module's code and
 platform detail preserved. Successful operations do not erase a previous
 failure from another operation; call ame_clear_error() before a new boundary
 when that distinction matters.
+
+CENSUS (S1, tests-only surface)
+  Intended consumers for error.h tests-only functions (ame_clear_error,
+  ame_error_drain, ame_error_name, ame_error_string, ame_last_error*,
+  ame_set_error*): app-facing error inspection/reporting and the
+  platform bootstrap per-frame drain (src/app_sdl.c).

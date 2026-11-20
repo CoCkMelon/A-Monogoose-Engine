@@ -319,6 +319,7 @@ typedef struct {
     int tex_count;
     int draws, quads;
     bool inited;
+    bool has_cam;
 } rp_state;
 
 static rp_state S;
@@ -702,6 +703,17 @@ void rp_pass_begin(const ame_rp_pass_frame *sel) {
     S.cur_pass = sel->pass;
 }
 
+static bool cam_is_installed(const ame_camera *c) {
+    if (!c)
+        return false;
+    if (c->vw > 0 || c->vh > 0)
+        return true;
+    for (int i = 0; i < 16; i++)
+        if (c->vp.m[i] != 0.0f)
+            return true;
+    return false;
+}
+
 int rp_init(const ame_rp_desc *desc) {
     ame_clear_error();
     if (S.inited)
@@ -723,6 +735,7 @@ int rp_init(const ame_rp_desc *desc) {
     S.desc = *desc;
     S.desc.gles = desc->gles || gl_is_es();
     S.cam = desc->cam;
+    S.has_cam = cam_is_installed(&desc->cam);
     S.vw = desc->width;
     S.vh = desc->height;
 
@@ -889,6 +902,11 @@ void rp_set_camera(const ame_camera *cam) {
     if (!cam)
         return;
     S.cam = *cam;
+    S.has_cam = true;
+}
+
+bool rp_has_camera(void) {
+    return S.inited && S.has_cam;
 }
 
 const char *rp_gl_renderer(void) {

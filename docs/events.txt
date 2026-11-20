@@ -160,3 +160,8 @@ CHECK
   Determinism: same seed -> same event sequence per-binary (golden CI
   replay); event ordering is preserved, not relied on across platforms
   (principles.txt). No physics solver is used to produce events.
+
+CENSUS (S1, tests-only surface)
+  Intended consumers for events.h tests-only functions (events_init,
+  events_clear, events_subscribe, events_drain, events_*_count): S18
+  trigger/collider events and S26 puzzle game gameplay event bus.

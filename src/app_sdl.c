@@ -211,6 +211,42 @@ AME_WEAK int app_step(float dt) {
     return 1;
 }
 
+AME_WEAK int app_event(const ame_ev *event) {
+    (void)event;
+    return 0;
+}
+
+AME_WEAK void app_quit(void) {
+}
+
+#if defined(__ELF__) || defined(__EMSCRIPTEN__)
+static void ame_weak_app_resize(int w, int h) {
+    (void)w;
+    (void)h;
+}
+
+void app_resize(int w, int h)
+    __attribute__((weak, alias("ame_weak_app_resize")));
+
+static bool app_resize_is_stub(void) {
+    void (*hook)(int, int) = app_resize;
+    void (*stub)(int, int) = ame_weak_app_resize;
+    return hook == stub;
+}
+#else
+static bool g_resize_stub_ran = false;
+
+AME_WEAK void app_resize(int w, int h) {
+    (void)w;
+    (void)h;
+    g_resize_stub_ran = true;
+}
+
+static bool app_resize_is_stub(void) {
+    return g_resize_stub_ran;
+}
+#endif
+
 double ame_loop_fixed_dt(void) { return g_time.variable ? 0.0 : g_time.step; }
 uint64_t ame_loop_dropped_steps(void) { return g_time.dropped; }
 double ame_sim_time(void) { return g_time.time; }
@@ -382,6 +418,25 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char **argv) {
     if (app_init() != 0) {
         if (ame_last_error_code() == AME_ERR_OK)
             ame_set_error(AME_ERR_PLATFORM, "app_init returned failure");
+        ame_log_last_error();
+        return SDL_APP_FAILURE;
+    }
+
+#if !defined(__ELF__) && !defined(__EMSCRIPTEN__)
+    if (rp_has_camera()) {
+        int pw = 0, ph = 0;
+        SDL_GetWindowSizeInPixels(g_window, &pw, &ph);
+        g_resize_stub_ran = false;
+        if (pw > 0 && ph > 0)
+            app_resize(pw, ph);
+    }
+#endif
+    if (rp_has_camera() && app_resize_is_stub()) {
+        ame_set_error(AME_ERR_PLATFORM,
+                      "camera installed (rp_init desc or rp_set_camera) but "
+                      "app_resize() is not implemented - implement "
+                      "app_resize(int w, int h) to rebuild your camera on "
+                      "window resize (app.h)");
         ame_log_last_error();
         return SDL_APP_FAILURE;
     }

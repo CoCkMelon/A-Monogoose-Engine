@@ -104,8 +104,6 @@ int app_init(void) {
     return 0;
 }
 
-int app_event(const ame_ev *ev) { (void)ev; return 0; }
-
 int app_fixed(float dt) {
     static rm_snap_t s;
     static float spawn_acc, gc_acc, t_acc;
@@ -351,5 +349,3 @@ int app_render(void) {
     rp_end_frame();
     return 0;
 }
-
-void app_quit(void) {}

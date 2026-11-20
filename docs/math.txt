@@ -1,0 +1,32 @@
+ame-next ENGINE SPEC
+File: math.txt - pure header-only 2D/3D math (include/ame/math.h)
+
+WHAT THIS IS
+Single-header pure value math shared by AME_2D and AME_3D (principles
+rule 6): vec2, vec3, vec4, mat3, column-major mat4, unit quaternions,
+frustum planes/culling, and Bezier/Catmull-Rom curves. No state, no
+allocation, -ffp-contract=off for per-binary determinism, with SSE2
+twins for ame_m4_mul and ame_quat_mul bit-identical to their scalar
+bodies (proven in tests/test_math_cglm.c against cglm 0.9).
+
+S1 DEAD-MATH RESOLUTION (2026-11-21, issue #6)
+The API census found five public math functions with no external
+caller and no unit test. Decisions per function:
+  ame_m3_identity    KEEP + TESTED (tests/test_math.c): needed by S15
+                     skeleton/normal-matrix math.
+  ame_quat_identity  KEEP + TESTED (tests/test_math.c): needed by S15
+                     rest poses and clip sampling.
+  ame_quat_norm      KEEP + TESTED (tests/test_math.c): needed by S15
+                     quaternion normalization and slerp fallback.
+  ame_v2_scale       KEEP + TESTED (tests/test_math.c): used internally
+                     by ame_v2_norm; planned consumer S17 kinematic
+                     character controller (2D velocity/displacement).
+  ame_v4_add         KEEP + TESTED (tests/test_math.c): used internally
+                     by ame_v4_lerp; planned consumer S15/S15B 4-weight
+                     skinning/RGBA accumulation.
+
+CENSUS (S1, tests-only surface)
+  Intended consumers for the math.h functions currently called only in
+  tests/: S15 skeleton/animation (ame_quat_*, ame_m3_*, ame_m4_*),
+  S15B GPU skinning (ame_v4_*), S17 character controller (ame_v2_*,
+  ame_v3_*), S18 camera & culling (ame_frustum_*, ame_m4_*).

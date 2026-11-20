@@ -74,6 +74,10 @@ EXPLICITLY FORBIDDEN (verbatim pitfalls from the past)
   - Do not leave dead code nothing imports. If you add an
     experimental file, wire it in or delete it.
   - Do not commit trash folders, editor backups, or build output.
+  - No built-in key binds (2026-11-18): ESC -> AME_ACT_CANCEL stays
+    app-written; app_event, app_quit and app_resize are optional weak
+    callbacks (app_resize fails loudly at startup if a camera is
+    installed without implementing it).
 
 HANDOFF
 For long work, keep a short AGENT_HANDOFF.txt at the root: current

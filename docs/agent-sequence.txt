@@ -183,7 +183,7 @@ W1 ONE FRESH AGENT PER STAGE, PLANNED ORDER KEPT.
 kind: B=build, V=verify, M=measure.  STATUS: todo / doing / done(sha)
 
 S1  B  #6  leanness 1: optional callbacks, loud diagnostics, dead-math,
-                     census follow-through                    STATUS todo
+                     census follow-through                    STATUS done
 S2  V  #6  verify S1                                           STATUS todo
 S3  B  #6  leanness 2: value constructors (camera 101, desc 70,
                      text 29) + goldens                        STATUS todo

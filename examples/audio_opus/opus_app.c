@@ -65,7 +65,6 @@ int app_init(void) {
     return 0;
 }
 
-int app_event(const ame_ev *ev) { (void)ev; return 0; }
 int app_fixed(float dt) {
     (void)dt;
     float mx = 0, my = 0;

@@ -46,8 +46,6 @@ int app_init(void) {
     return 0;
 }
 
-int app_event(const ame_ev *ev) { (void)ev; return 0; }
-
 int app_fixed(float dt) {
     (void)dt;
     float mx = 0, my = 0;
@@ -107,5 +105,3 @@ int app_render(void) {
     rp_end_frame();
     return 0;
 }
-
-void app_quit(void) {}

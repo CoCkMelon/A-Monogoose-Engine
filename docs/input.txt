@@ -242,3 +242,16 @@ MOUSE COORDINATES
   camera_screen_y_down_to_world_y_up (or push a rect through
   rp_push_sprite_screen) and keep the result in world_y_up. See
   coords.txt - no gameplay code should carry a y flip of its own.
+
+NO BUILT-IN KEY BINDS (2026-11-18 decision)
+  The engine installs zero default action bindings. Apps bind their
+  own keys explicitly in app_init() (e.g. ESC -> AME_ACT_CANCEL),
+  because a built-in bind would be a hidden engine default.
+
+CENSUS (S1, tests-only surface)
+  Intended consumers for input.h tests-only functions (in_device_*,
+  in_touch_*, in_gamepad_*, in_sensor_*, in_on_*, in_set_backend,
+  in_begin_step, in_reset, in_released, in_axis, in_btn_held,
+  in_mouse_button_raw, in_tap_dropped): platform bootstraps
+  (src/app_sdl.c, src/app_web.c), S18 third-person camera look/deadzone,
+  and S26/S28 multi-target mobile/gamepad input.

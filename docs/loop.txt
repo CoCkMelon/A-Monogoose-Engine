@@ -134,17 +134,26 @@ NAMING: CAMERA (across 2D and 3D)
 
 PUBLIC API SHAPE
   app.h (extern "C")
-    int  app_init(void)
-    int  app_event(const ame_ev *event) (platform-neutral kind + payload)
-    ame_loop_desc app_loop(void)        DECLARE the loop: FIXED hz /
-                                        VARIABLE / gate / dt clamp
-    int  app_fixed(float dt)            MODE FIXED hook: dt is exactly 1/hz
-    int  app_step(float dt)             MODE VARIABLE hook: dt is the frame dt
+    int  app_init(void)                 (required)
+    int  app_event(const ame_ev *event) (optional weak default returns 0)
+    ame_loop_desc app_loop(void)        (required; link error if omitted)
+    int  app_fixed(float dt)            MODE FIXED hook (weak loud stub)
+    int  app_step(float dt)             MODE VARIABLE hook (weak loud stub)
+    void app_resize(int w, int h)       (optional weak stub, EXCEPT fails
+                                         loudly at startup if a camera was
+                                         installed via rp_init/rp_set_camera)
     ame_loop_fixed_dt(), ame_loop_dropped_steps(), ame_sim_time(),
     ame_loop_set_scale()                readback + pause (queries, not config)
     int  app_render(void)               (main thread) build + submit one frame
-    void app_quit(void)
+    void app_quit(void)                 (optional weak no-op)
     ame_request_quit(), ame_cursor_visible(), ame_time_seconds()
+  There are NO built-in key binds (2026-11-18 decision): ESC -> AME_ACT_CANCEL
+  remains app-written in app_init() because default binds are hidden state.
+
+CENSUS (S1, tests-only surface)
+  Intended consumers for camera.h tests-only queries
+  (camera_world_origin_y_up, camera_world_top_left_y_up): src/render.c
+  (rp_screen_origin_y_up) and S13/S18 2D HUD and world-corner alignment.
   Input clicks are also queued in the engine and arrive through
   in_click_consumed(), so gameplay does not need an event callback. The
   neutral AME_EV_CLICK notification is available to apps that want it; the

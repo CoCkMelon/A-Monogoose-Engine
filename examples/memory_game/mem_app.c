@@ -323,11 +323,6 @@ int app_init(void) {
     return 0;
 }
 
-int app_event(const ame_ev *ev) {
-    (void)ev;
-    return 0;
-}
-
 void app_resize(int w, int h) {
     /* engine already did rp_viewport; rebuild projection so the aspect
      * never stretches the scene */

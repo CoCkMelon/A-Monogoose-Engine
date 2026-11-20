@@ -84,3 +84,9 @@ CHECK
   fixed seed and compare to a golden buffer -> byte identical.
   No heap growth over minutes of synthesis.
   Native and web synth output match.
+
+CENSUS (S1, tests-only surface)
+  Intended consumers for audio.h tests-only functions (audio_attach_sdl,
+  audio_shutdown, audio_render, audio_load_wav, audio_load_opus_mem,
+  audio_voice_active): platform bootstraps (src/app_sdl.c, src/app_web.c),
+  offline mixer tests, and S23/S26 decoded SFX/voice playback.

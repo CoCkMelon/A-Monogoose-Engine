@@ -21,11 +21,6 @@ int app_init(void) {
     return 0;
 }
 
-int app_event(const ame_ev *event) {
-    (void)event;
-    return 0;
-}
-
 /* loop declaration (app.h, loop.txt). This template has no simulation
  * clock, so it takes the VARIABLE mode: app_step(dt) is called once per
  * rendered frame with the measured dt, and NO logic thread is created.
@@ -62,5 +57,3 @@ int app_render(void) {
     rp_end_frame();
     return 0;
 }
-
-void app_quit(void) {}

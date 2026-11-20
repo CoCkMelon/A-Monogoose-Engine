@@ -210,3 +210,7 @@ COORDINATE SPACES (coords.txt)
   a pose's +y column is world/camera UP and the ink hangs BELOW the
   pose origin - billboards stay upright in 2D and 3D. Tests pin both
   against the atlas by SSD (tests/test_render.c).
+
+CENSUS (S1, tests-only surface)
+  Intended consumer for text.h tests-only query (text_font_px): S13
+  HUD/UI/text components and app layout metrics queries.

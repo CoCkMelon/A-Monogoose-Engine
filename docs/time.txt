@@ -146,3 +146,9 @@ RELATION TO THE REST OF THE ENGINE
               (replaces the policy AND removes the logic thread).
   audit #3    a step-thread failure reaches the reporting thread through
               ame_error_drain(); the loop drains it once per frame.
+
+CENSUS (S1, tests-only surface)
+  Intended consumers for time.h tests-only functions (ame_time_init,
+  ame_time_configure, ame_time_plan, ame_time_commit, ame_time_paused,
+  ame_time_set_scale): platform bootstraps (src/app_sdl.c,
+  src/app_web.c) and S26 pause/time-scale control.

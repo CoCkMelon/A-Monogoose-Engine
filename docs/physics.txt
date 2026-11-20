@@ -109,3 +109,9 @@ CHECK
   rigid-body solver, joint, or gravity stepper appears anywhere in the
   v0 build. A pure C file including geometry.h compiles in both
   dimensions. No Box2D/Box3D dependency is present in v0.
+
+CENSUS (S1, tests-only surface)
+  Intended consumers for geometry.h tests-only query functions
+  (20 functions: ame_geo_* overlap, dist, ray, OBB, capsule, static
+  world queries): S17 kinematic character controller and S18 camera
+  occlusion / trigger volumes.

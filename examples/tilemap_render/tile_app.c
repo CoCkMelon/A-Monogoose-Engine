@@ -54,7 +54,6 @@ int app_init(void) {
     return 0;
 }
 
-int app_event(const ame_ev *ev) { (void)ev; return 0; }
 int app_fixed(float dt) {
     const float spd = 300.0f * dt;
     if (in_held(AME_ACT_LEFT))
@@ -81,5 +80,3 @@ int app_render(void) {
     rp_end_frame();
     return 0;
 }
-
-void app_quit(void) {}

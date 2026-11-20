@@ -298,8 +298,6 @@ int app_init(void) {
     return 0;
 }
 
-int app_event(const ame_ev *ev) { (void)ev; return 0; }
-
 /* measurement hooks (QA): AME_ED_CARET=<flat> pins the caret,
  * AME_ED_SOLID_CARET stops the blink, AME_ED_TRACE prints the live
  * two-ways check each 30 frames: the DRAWN caret (way A) vs the pen
@@ -559,8 +557,6 @@ int app_render(void) {
     rp_end_frame();
     return 0;
 }
-
-void app_quit(void) {}
 
 /* --- QA SELF-TEST -----------------------------------------------------------
  * Compiled from the REAL app source (tests/test_editor_geom) so the

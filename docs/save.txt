@@ -71,3 +71,8 @@ CHECK
   The save file is readable TOML (open it in an editor).
   Corrupt/truncated save is handled cleanly (defaults + a clear log),
   never a crash. Same behavior native and web.
+
+CENSUS (S1, tests-only surface)
+  Intended consumers for fs.h tests-only functions (ame_fs_pref_path,
+  ame_fs_read_path, ame_fs_write_path, ame_fs_set_ops): app-facing
+  save/settings storage (S20 settings module and S26 puzzle saves).
