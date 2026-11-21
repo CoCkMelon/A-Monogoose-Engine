@@ -23,6 +23,7 @@ static FILE *ame_fopen_shim(const char *path, const char *mode) {
     return fopen_s(&f, path, mode) == 0 ? f : NULL;
 }
 #define AME_FOPEN(p, m) ame_fopen_shim((p), (m))
+#ifndef __MINGW32__
 /* MSVC's UCRT deprecates getenv in favour of _dupenv_s, which under -Werror is
  * a hard error on the windows clang job (src/fs.c:119, reading AME_PREF_PATH).
  * _dupenv_s returns a CALLER-OWNED COPY that must be free()d, so it cannot
@@ -46,6 +47,17 @@ static const char *ame_getenv_shim(const char *name) {
     return g_env_buf;
 }
 #define AME_GETENV(n) ame_getenv_shim((n))
+#else
+/* MinGW-w64 declares _dupenv_s in its headers but its default msvcrt runtime
+ * does not export it, so this file compiles and then every example fails to
+ * link with "undefined reference to `__imp__dupenv_s'". MinGW's gcc does not
+ * deprecate getenv in the first place - that is an MSVC/UCRT rule - so MinGW
+ * takes the plain path, exactly as it did before the shim existed. Note the
+ * asymmetry with AME_FOPEN just above: fopen_s DOES link under MinGW, which is
+ * why the windows-cross job was green with that shim and only this one broke
+ * it. Same _WIN32 && !__MINGW32__ predicate render.c uses for D12. */
+#define AME_GETENV(n) getenv((n))
+#endif
 #else
 #include <sys/stat.h>
 #include <sys/types.h>

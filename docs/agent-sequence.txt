@@ -494,11 +494,75 @@ UPDATE after the D4c fix landed (run 44902108301): macOS got past configure
     undocumented SDL_getenv variable each produce "ENV FAIL ... missing from
     docs/env.txt". Any new wrapper or shim around getenv must be added to that
     pattern in the same change.
-  A pattern worth naming: fixing one configure failure reveals the next defect
-  behind it. Three layers deep on the windows job alone (sibling build dir ->
-  host FreeType -> SDL3 config layout), and two on macOS (sibling build dir ->
-  GL deprecation). A job that dies at configure tells you about exactly one
-  defect, so "the job is red" is not a count of the defects in it.
+ D14 MinGW cannot LINK _dupenv_s - a direct consequence of D11's AME_GETENV.
+    The windows-cross job, green since the branch opened, went red the moment
+    the shim landed: four examples failed with
+      libame_2d.a(fs.c.obj):fs.c:(.text+0x1ce): undefined reference to
+      `__imp__dupenv_s'
+    MinGW-w64's headers DECLARE _dupenv_s, so it compiles clean; its default
+    msvcrt runtime does not EXPORT it, so every executable that links the
+    engine fails. A deprecation shim is a COMPILER problem and this was a
+    RUNTIME-LIBRARY problem - two different things that happen to share the
+    symbol name, and only the second one is visible at link time.
+    Fix: gate AME_GETENV with the same _WIN32 && !__MINGW32__ predicate D12
+    uses, so MinGW takes plain getenv. That is not a compromise: MinGW's gcc
+    never deprecated getenv in the first place, so there is no warning to
+    satisfy there. _dupenv_s was only ever needed by MSVC's UCRT.
+    The asymmetry with AME_FOPEN is the instructive part and was verified
+    rather than assumed: fopen_s DOES link under MinGW, which is exactly why
+    the fopen shim committed earlier left this job green and only the getenv
+    shim broke it. Reproduced locally with x86_64-w64-mingw32-gcc 14-win32 -
+    a four-line program calling _dupenv_s fails to link with the byte-identical
+    CI message, the same program calling fopen_s links fine, and after the gate
+    src/fs.c compiles clean under MinGW with zero dupenv imports and a plain
+    Ugetenv. The CI log listed _dupenv_s as the ONLY undefined reference (4
+    occurrences, one per failing example), so nothing hides behind it.
+ D15 the vendored header needs its own directory on the include path - a
+    direct consequence of D12. glcorearb.h line 63 does
+      #include <KHR/khrplatform.h>
+    with ANGLE brackets, which searches the -I paths only and never the
+    including file's own directory. On Linux that resolves from /usr/include;
+    on the windows runner there is no system KHR directory at all, so the
+    vendored glcorearb.h could not find the vendored khrplatform.h sitting
+    beside it:
+      external/khronos/GL/glcorearb.h:63:10: fatal error:
+      'KHR/khrplatform.h' file not found
+    Hand-editing the vendored header to a relative include was rejected - it is
+    upstream Khronos text copied verbatim, and a local edit breaks the
+    provenance recorded in external/khronos/README.txt and every future refresh
+    of it. Fix: CMakeLists.txt adds external/khronos to the engine target's
+    include path, guarded by if(WIN32 AND NOT MINGW).
+    The guard matters more than the fix. Verified by exporting
+    compile_commands.json on Linux: of the 2 entries that compile src/render.c,
+    ZERO carry -Iexternal/khronos, and a preprocessor trace still shows Linux
+    resolving /usr/include/GL/glcorearb.h. Every other target keeps compiling
+    against the exact headers its own toolchain ships; only the one target on
+    the one platform that has no Khronos headers gets the vendored root.
+    Verified the mechanism locally: with -Iexternal/khronos, a TU including the
+    vendored glcorearb.h compiles clean under -Wall -Wextra -Werror and the
+    dependency file shows khrplatform.h resolving to
+    external/khronos/KHR/khrplatform.h, not /usr/include/KHR.
+ LESSON across D14 and D15, and it generalises past this repo: a fix aimed at
+   one platform is a CHANGE to every platform that shares the predicate.
+   #ifdef _WIN32 is not "MSVC" - MinGW matches it too, and the two disagree on
+   both which deprecations exist and which CRT symbols their runtime exports.
+   Likewise a header vendored for one platform still has to resolve its OWN
+   includes there, which a relative include from the .c file does not arrange.
+   Both were invisible to every local check available when D11 and D12 were
+   written, because Linux matches neither predicate. The cheap insurance that
+   catches them: after adding a platform shim, compile the affected file under
+   EVERY toolchain that shares the predicate, and for a link-time symbol,
+   actually LINK something rather than only compiling it.
+  A pattern worth naming, and the depth here is worth stating exactly because
+  the first draft of this paragraph said "three layers" and was wrong: fixing
+  one failure reveals the next defect behind it. The windows clang job alone
+  ran SEVEN deep - sibling build dir -> host FreeType -> SDL3 config layout ->
+  strncpy -> getenv -> missing Khronos headers -> the vendored header's own
+  include path - and the windows-cross job then added an eighth (D14) caused by
+  the fix for the fifth. macOS ran two (sibling build dir -> GL deprecation).
+  A job that dies at configure tells you about exactly one defect, and a job
+  that dies at compile tells you about exactly one more, so "the job is red" is
+  never a count of the defects in it. Budget for the chain, not the head of it.
 PROOF  D3 locally under gcc with the project's exact flags
   (-std=c23 -O3 -Wall -Wextra -Werror, a real -c, -Igenerated): clang
   does not implement -Wformat-truncation, so a green clang job proves

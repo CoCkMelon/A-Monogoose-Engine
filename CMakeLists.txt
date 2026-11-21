@@ -105,6 +105,20 @@ function(ame_dim_lib dim)
     target_include_directories(ame_${dim}d PUBLIC
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
         $<INSTALL_INTERFACE:include>)
+    if(WIN32 AND NOT MINGW)
+        # D12: native Windows with LLVM/MSVC ships no Khronos GL headers, so
+        # render.c includes the ones vendored under external/khronos. That
+        # header does "#include <KHR/khrplatform.h>" with ANGLE brackets, which
+        # searches the -I paths only; on Linux it resolves from /usr/include, on
+        # this runner there is no system KHR directory at all. Add the vendored
+        # root to the search path so it resolves from the repo. Guarded to
+        # WIN32 AND NOT MINGW so no other target's header resolution changes:
+        # Linux, macOS, Android and web keep compiling against the exact
+        # headers their own toolchain ships, and MinGW's cross sysroot already
+        # has GL/ (that job was always green).
+        target_include_directories(ame_${dim}d PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/external/khronos)
+    endif()
     target_compile_options(ame_${dim}d PRIVATE ${AME_WARN_FLAGS} ${AME_FP_FLAGS})
     target_compile_definitions(ame_${dim}d PUBLIC AME_${dim}D=1)
     target_link_libraries(ame_${dim}d PUBLIC ${AME_SDL3_LINK})
