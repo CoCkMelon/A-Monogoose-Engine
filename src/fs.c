@@ -12,11 +12,23 @@
 #include <sys/stat.h>
 #define AME_MKDIR(p) _mkdir(p)
 #define AME_STAT _stat
+/* MSVC's UCRT deprecates fopen in favour of fopen_s, which under -Werror is a
+ * hard error on the windows clang job. Same reasoning as AME_COPY_N in
+ * debug_watch.c: shim the one call rather than define _CRT_SECURE_NO_WARNINGS,
+ * which would hide every genuinely unsafe use the deprecation exists to flag.
+ * fopen_s wants an extra out-parameter and returns an errno_t, so wrap it to
+ * keep the two call sites unchanged and the POSIX shape intact. */
+static FILE *ame_fopen_shim(const char *path, const char *mode) {
+    FILE *f = NULL;
+    return fopen_s(&f, path, mode) == 0 ? f : NULL;
+}
+#define AME_FOPEN(p, m) ame_fopen_shim((p), (m))
 #else
 #include <sys/stat.h>
 #include <sys/types.h>
 #define AME_MKDIR(p) mkdir((p), 0777)
 #define AME_STAT stat
+#define AME_FOPEN(p, m) fopen((p), (m))
 #endif
 
 static ame_fs_ops g_ops; /* zeroed = builtin */
@@ -48,7 +60,7 @@ static int is_abs(const char *p)
 
 static int exists(const char *p)
 {
-    FILE *f = fopen(p, "rb");
+    FILE *f = AME_FOPEN(p, "rb");
     if (!f)
         return 0;
     fclose(f);
@@ -209,5 +221,5 @@ FILE *ame_fs_fopen(const char *rel, const char *mode)
         p = ame_fs_write_path(rel, buf, sizeof(buf));
     if (!p)
         return NULL;
-    return fopen(p, mode);
+    return AME_FOPEN(p, mode);
 }

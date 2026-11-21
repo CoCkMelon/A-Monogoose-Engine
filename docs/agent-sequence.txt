@@ -417,15 +417,39 @@ UPDATE after the D4c fix landed (run 44902108301): macOS got past configure
   pointers and are not deprecated at all. This is not a weakening of -Werror,
   which stays on for everything else.
  D9 macOS (found only after D2 could be reached): as above.
- D10 windows clang (found only after D8 could be reached): find_package(SDL3
-    REQUIRED) fails although the SDL3 install step succeeded, because SDL3's
-    install LAYOUT differs per platform. macOS/Linux/Android put the config at
-    <prefix>/lib/cmake/SDL3/SDL3Config.cmake, and <prefix>/lib/cmake/<name> is
-    one of the subdirs CMake's prefix search tries. The MSVC-style Windows
-    install puts it at <prefix>/cmake/SDL3Config.cmake - no <name> subdir - and
-    <prefix>/cmake is not in that list. So CMAKE_PREFIX_PATH alone cannot find
-    it. Fix: pass -DSDL3_DIR=<prefix>/cmake explicitly; keep PREFIX_PATH for
-    headers and the import library.
+ D10 windows clang: find_package(SDL3 REQUIRED) failed although the SDL3
+    install step succeeded and the log showed it writing
+    D:\a\_temp\sdl-prefix\cmake\SDL3Config.cmake. THE CAUSE WAS UNQUOTED
+    PowerShell ARGUMENTS: $env:RUNNER_TEMP is D:\a\_temp, and unquoted,
+    cmake received something other than what Write-Host printed. Quoting both
+    -D arguments fixed it; --debug-find then confirmed CMake considers exactly
+    that path and configure succeeds. -DSDL3_DIR is kept (harmless, explicit).
+    Three wrong hypotheses are recorded in ci.yml so nobody re-derives them:
+    that <prefix>/cmake is outside CMake's prefix search (it is not - cmake
+    3.31.6 and 4.4.5 both find a config there locally via PREFIX_PATH alone),
+    that backtick continuation dropped the flag (one line changed nothing),
+    and that SDL3's config rejects clang (SDL3Config.cmake.in has no compiler
+    or ABI guard). LESSON: when a runner disagrees with a local reproduction,
+    make the runner print the resolved values instead of guessing a fourth
+    time - one diagnostic pass (Write-Host the paths, Test-Path the file, list
+    the prefix, cmake --debug-find) settled it.
+ D11 windows clang (found only after D10 could be reached): MSVC's UCRT marks
+    strncpy and fopen deprecated, which under -Werror is a hard error:
+    'strncpy' is deprecated ... Consider using strncpy_s instead
+    [-Werror,-Wdeprecated-declarations]. Two engine call sites:
+    src/debug_watch.c:43 and src/fs.c (two fopen calls).
+    strncpy: replaced by memcpy of an explicitly clamped length plus an
+    explicit terminator, ONE path for all platforms - keeping strncpy for
+    POSIX is not available either, because with a strlen-derived bound gcc
+    reports -Werror=stringop-truncation ("specified bound depends on the
+    length of the source argument"). So strncpy is out on both sides, for
+    different reasons, and the single memcpy path is warning-clean everywhere.
+    fopen: a _WIN32 shim (fopen_s wrapped to keep the POSIX shape) matching the
+    AME_MKDIR/AME_STAT shims already in fs.c, with plain fopen on the POSIX
+    branch where it is not deprecated.
+    NOT _CRT_SECURE_NO_WARNINGS: defining that globally would hide every
+    genuinely unsafe use the deprecation exists to flag, and this project's
+    rule is thin per-platform shims, one C codebase.
   A pattern worth naming: fixing one configure failure reveals the next defect
   behind it. Three layers deep on the windows job alone (sibling build dir ->
   host FreeType -> SDL3 config layout), and two on macOS (sibling build dir ->
