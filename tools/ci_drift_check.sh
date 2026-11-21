@@ -61,7 +61,33 @@ fi
 # must be documented there. Undocumented env vars are hidden state - the
 # exact class state-audit.txt exists to remove - so the table is checked
 # rather than trusted.
-envs=$(grep -rhoE 'getenv\("[A-Z0-9_]+"\)' src/*.c 2>/dev/null \
+# Matches BOTH getenv("X") and SDL_getenv("X"). The SDL_ form matters because
+# src/app_sdl.c reads its variables through the SDL wrapper - it always did for
+# the loop policy, log path, window geometry and fixed-dt, and the shot-capture
+# hook joined them when bare getenv became a hard -Werror failure under MSVC's
+# UCRT deprecation. A gate that only matched the bare form silently stopped
+# seeing those variables, which is exactly how an undocumented env var would
+# slip through: the count dropped from 12 to 11 the moment the call form
+# changed, with no failure. Grepping the call, not the wrapper, keeps the gate
+# honest about what the engine reads.
+# Matches every form the engine actually uses to read an environment variable:
+#   getenv("X")        the plain call
+#   SDL_getenv("X")    src/app_sdl.c, which leans on the SDL wrapper (it always
+#                      did for the loop policy, log path, window geometry and
+#                      fixed-dt; the shot-capture hook joined them when bare
+#                      getenv became a hard -Werror failure under MSVC's UCRT
+#                      deprecation)
+#   AME_GETENV("X")    the _WIN32 shim in src/fs.c, same reason
+# A gate that matched only the bare form silently stopped seeing variables as
+# soon as the call form changed - the count fell from 12 to 11 with no failure,
+# which is precisely how an undocumented env var slips through. Any new wrapper
+# or shim around getenv MUST be added to this pattern in the same change, and
+# the count printed below is the check that it was.
+# The alternation is case-EXPLICIT rather than a blanket -i, because the three
+# forms differ in case: getenv and SDL_getenv are lowercase, the fs.c shim macro
+# is AME_GETENV in capitals. A case-insensitive pattern would also pick up the
+# two "#define AME_GETENV(n)" lines, which is harmless but noise.
+envs=$(grep -rhoE '(SDL_getenv|AME_GETENV|getenv)\("[A-Z0-9_]+"\)' src/*.c 2>/dev/null \
        | sed 's/.*("//; s/")//' | sort -u || true)
 envexists=$(git ls-tree -r --name-only "$head" docs/ | grep -c '^docs/env\.txt$' || true)
 missing=''

@@ -41,6 +41,19 @@
 #define GL_SILENCE_DEPRECATION 1
 #define AME_GL_DIRECT 1
 #include <OpenGL/gl3.h>
+#elif defined(_WIN32) && !defined(__MINGW32__)
+/* Native Windows with MSVC/LLVM: the Khronos headers are not part of the
+ * toolchain or the Windows SDK, so there is no <GL/glcorearb.h> to include -
+ * the runner has only SDL3's own SDL_opengl.h. Using that is not an option:
+ * this file takes an injected proc getter precisely so app_sdl.c owns every
+ * SDL symbol and render.c stays platform-agnostic. So the registry header is
+ * vendored under external/khronos (MIT, unedited, provenance and licence in
+ * external/khronos/README.txt), the same way external/stb is vendored.
+ * MinGW is excluded because its cross sysroot ships GL/ already, and the
+ * windows-cross job compiles this file through the generic path below.
+ * Loader path, not AME_GL_DIRECT: desktop GL entry points are resolved at
+ * runtime through the injected getter on this target, exactly as on Linux. */
+#include "../external/khronos/GL/glcorearb.h"
 #else
 #include <GL/glcorearb.h> /* Khronos core typedefs+enums; fns via loader */
 #endif

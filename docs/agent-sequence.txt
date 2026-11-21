@@ -450,6 +450,50 @@ UPDATE after the D4c fix landed (run 44902108301): macOS got past configure
     NOT _CRT_SECURE_NO_WARNINGS: defining that globally would hide every
     genuinely unsafe use the deprecation exists to flag, and this project's
     rule is thin per-platform shims, one C codebase.
+    ALSO in this class, found in the same pass: getenv is deprecated too
+    (_dupenv_s), hitting src/fs.c:119 (AME_PREF_PATH) and the shot-capture
+    hook in src/app_sdl.c. fs.c gets an AME_GETENV shim - _dupenv_s returns a
+    caller-owned copy that must be free()d, so it cannot stand in for getenv's
+    borrowed pointer without changing the call site's lifetime contract, and
+    the value is read and copied out, never retained. app_sdl.c switches to
+    SDL_getenv, which it already used for every other AME_* variable, and to a
+    local AME_SHOT_FOPEN shim for its fopen (SDL3 has no FILE*-returning
+    wrapper; SDL_IOFromFile returns an SDL_IOStream and the PPM writer needs
+    fprintf/fputc on a real FILE*).
+ D12 windows clang: with configure and the CRT deprecations fixed, the job
+    reached src/render.c and failed with "fatal error: 'GL/glcorearb.h' file
+    not found" - the SAME error class as D2 on macOS, from the opposite cause.
+    Native Windows with LLVM/MSVC ships no Khronos GL headers at all; the
+    runner had only SDL3's own SDL_opengl.h. Every other target gets the
+    declarations from its toolchain (Linux libgl-dev, the NDK and emscripten
+    sysroots via GLES3/gl3.h, Apple via OpenGL/gl3.h, and the MinGW cross
+    sysroot, which is why the windows-cross job was always green).
+    Using SDL3's header is NOT an option: render.c takes an injected proc
+    getter precisely so app_sdl.c owns every SDL symbol and render.c stays
+    platform-agnostic, and CI greps examples/ for SDL_ to hold that line. So
+    the Khronos registry headers are VENDORED under external/khronos
+    (glcorearb.h + the KHR/khrplatform.h it includes; both MIT, copied
+    verbatim from libgl-dev, provenance and licence recorded in
+    external/khronos/README.txt), the same way external/stb is vendored, and
+    a new _WIN32 && !__MINGW32__ branch in render.c includes them. Loader
+    path, not AME_GL_DIRECT: desktop GL entry points still resolve at runtime
+    through the injected getter on Windows, exactly as on Linux.
+    Verified locally as far as a Linux box can: the vendored header compiles
+    clean under -Wall -Wextra -Werror and supplies all 64 PFNGL*PROC typedefs
+    in AME_GL_FUNCS plus every GL type render.c names. That is not a Windows
+    compile and is not claimed as one.
+ D13 the drift gate itself: tools/ci_drift_check.sh grepped only bare
+    getenv("X"), so the moment D11 moved calls to SDL_getenv and AME_GETENV
+    the gate STOPPED SEEING THEM - the documented count fell from 12 to 11 and
+    it still printed "drift: ok". A gate that silently narrows when the code
+    changes shape is worse than no gate. The pattern now matches all three
+    forms, case-explicit (getenv and SDL_getenv lowercase, AME_GETENV capital),
+    and the count is back to 12 with AME_PREF_PATH recovered.
+    BOTH negative paths were tested, because a widened grep proves nothing
+    until it fails when it should: an undocumented AME_GETENV variable and an
+    undocumented SDL_getenv variable each produce "ENV FAIL ... missing from
+    docs/env.txt". Any new wrapper or shim around getenv must be added to that
+    pattern in the same change.
   A pattern worth naming: fixing one configure failure reveals the next defect
   behind it. Three layers deep on the windows job alone (sibling build dir ->
   host FreeType -> SDL3 config layout), and two on macOS (sibling build dir ->
