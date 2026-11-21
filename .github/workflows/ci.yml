@@ -35,7 +35,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             clang-19 lld-19 cmake ninja-build libegl1 \
-            libgl1-mesa-dri libgles-dev libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxfixes-dev libxi-dev libxinerama-dev libxxf86vm-dev libxss-dev libxtst-dev libfreetype-dev
+            libgl1-mesa-dri libgles-dev libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxfixes-dev libxi-dev libxinerama-dev libxxf86vm-dev libxss-dev libxtst-dev libfreetype-dev libfyaml-dev libopusfile-dev libopus-dev libcglm-dev
 
       - name: SDL3 from source (pinned release; noble has no libsdl3-dev)
         run: |
@@ -50,7 +50,8 @@ jobs:
       - name: configure + build (Debug, tests + examples + game)
         run: |
           cmake -S . -B build -G Ninja \
-            -DCMAKE_C_COMPILER=clang-19 -DCMAKE_BUILD_TYPE=Debug
+            -DCMAKE_C_COMPILER=clang-19 -DCMAKE_BUILD_TYPE=Debug \
+            -DAME_REQUIRE_OPTIONAL_DEPS=ON
           cmake --build build
 
       - name: game-side SDL boundary gate
@@ -84,7 +85,8 @@ jobs:
         run: |
           cmake -S . -B build-rel -G Ninja \
             -DCMAKE_C_COMPILER=clang-19 -DCMAKE_BUILD_TYPE=Release \
-            -DAME_ENABLE_ASAN=OFF
+            -DAME_ENABLE_ASAN=OFF \
+            -DAME_REQUIRE_OPTIONAL_DEPS=ON
           cmake --build build-rel
 
       - uses: actions/upload-artifact@v4
@@ -201,7 +203,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             clang-19 lld-19 cmake ninja-build libegl1 \
-            libgl1-mesa-dri libgles-dev libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxfixes-dev libxi-dev libxinerama-dev libxxf86vm-dev libxss-dev libxtst-dev libfreetype-dev libclang-rt-19-dev
+            libgl1-mesa-dri libgles-dev libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxfixes-dev libxi-dev libxinerama-dev libxxf86vm-dev libxss-dev libxtst-dev libfreetype-dev libclang-rt-19-dev libfyaml-dev libopusfile-dev libopus-dev libcglm-dev
       - name: SDL3 from source (pinned release; noble has no libsdl3-dev)
         run: |
           git clone --depth 1 --branch release-3.4.16 \
@@ -215,7 +217,8 @@ jobs:
       - name: build + run tests under sanitizers
         run: |
           cmake -S . -B build -G Ninja -DCMAKE_C_COMPILER=clang-19 \
-            -DCMAKE_BUILD_TYPE=Debug -DAME_ENABLE_ASAN=ON
+            -DCMAKE_BUILD_TYPE=Debug -DAME_ENABLE_ASAN=ON \
+            -DAME_REQUIRE_OPTIONAL_DEPS=ON
           cmake --build build
           # LeakSanitizer stays ON. The suppression file names only
           # uninstrumented driver libraries: on this runner's Mesa (26.0.8)
@@ -268,7 +271,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             clang-19 lld-19 cmake ninja-build libegl1 \
-            libgl1-mesa-dri libgles-dev libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxfixes-dev libxi-dev libxinerama-dev libxxf86vm-dev libxss-dev libxtst-dev libfreetype-dev libclang-rt-19-dev
+            libgl1-mesa-dri libgles-dev libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxfixes-dev libxi-dev libxinerama-dev libxxf86vm-dev libxss-dev libxtst-dev libfreetype-dev libclang-rt-19-dev libfyaml-dev libopusfile-dev libopus-dev libcglm-dev
       - name: SDL3 from source (pinned release; noble has no libsdl3-dev)
         run: |
           git clone --depth 1 --branch release-3.4.16 \
@@ -283,7 +286,8 @@ jobs:
         run: |
           cmake -S . -B build -G Ninja -DCMAKE_C_COMPILER=clang-19 \
             -DCMAKE_BUILD_TYPE=Debug \
-            -DCMAKE_C_FLAGS="-fsanitize=thread -fno-omit-frame-pointer -g -O1"
+            -DCMAKE_C_FLAGS="-fsanitize=thread -fno-omit-frame-pointer -g -O1" \
+            -DAME_REQUIRE_OPTIONAL_DEPS=ON
           cmake --build build
           # WIDENED from "test_snap + test_pool only". That pair is exactly the
           # two suites that never touch the device registry, so the one real

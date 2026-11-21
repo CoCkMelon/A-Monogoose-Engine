@@ -175,13 +175,31 @@ THIRD_PARTY RULES
   - The optional bake-to-C path for dialogue reuses libfyaml in a
     small host tool (tools/), not a second parser.
 
-OPTIONS
-  AME_BUILD_EXAMPLES   on/off
-  AME_BUILD_TESTS      on/off
-  AME_BUILD_WEB        off; builds the same C to WASM
-  AME_BUILD_ANDROID    off; Android NDK toolchain build
-  AME_ENABLE_ASAN/UBSAN
+OPTIONS (every entry here is an option() in CMakeLists.txt, and every option()
+there is listed here - the two were out of step: AME_BUILD_WEB and
+AME_BUILD_ANDROID were documented but do not exist, while AME_BUILD_BENCHES,
+AME_BUILD_ASYNCINPUT_GAME and AME_FONT_FROM_COMMITTED existed and were not
+documented. The web and Android builds are driven by web/build.sh and the NDK
+toolchain file, not by an option.)
+  AME_BUILD_EXAMPLES   on
+  AME_BUILD_TESTS      on
+  AME_BUILD_BENCHES    on; microbenchmarks (BENCH_REPORT.md numbers)
+  AME_BUILD_ASYNCINPUT_GAME
+                       off; the asyncinput-backend game variant
+  AME_ENABLE_ASAN      off; ASan/UBSan debug build
+  AME_FONT_FROM_COMMITTED
+                       off; build ame_font from the committed arrays and skip
+                       the host font bakers. For cross builds and CI jobs with
+                       no host FreeType; the claim is that the engine sources
+                       compile natively, not that the host tools build.
+  AME_REQUIRE_OPTIONAL_DEPS
+                       off; fail configure when pkg-config, libfyaml, opusfile,
+                       opus or cglm is missing. Optional deps stay optional for
+                       the ENGINE - this is for jobs that mean to TEST them, so
+                       a missing package cannot silently drop suites while the
+                       job still reports 100% passed (issue #15).
 There is NO unitylike option, NO flecs option. Those do not exist.
+There is NO AME_BUILD_WEB and NO AME_BUILD_ANDROID option either.
 
 TARGET PLATFORMS (first-class; deploy.txt has each)
   POSIX DESKTOP   Linux, macOS, other Unix (BSD). glibc/clang or gcc.

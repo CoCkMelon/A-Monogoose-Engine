@@ -235,6 +235,9 @@ if(CGLM_FOUND)
 else()
     message(STATUS "ame: cglm not found - math parity oracle test skipped")
 endif()
+ame_require_dep("${CGLM_FOUND}" "cglm"
+    "apt install libcglm-dev: test_math_cglm is the parity oracle that checks "
+    "the engine math against an independent implementation")
 
 # dialogue (needs libfyaml - conditional like the engine module)
 if(FYAML_FOUND)

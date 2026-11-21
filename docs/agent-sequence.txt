@@ -202,6 +202,8 @@ S1B B  #3  CI repair: the 5 inherited job failures, TSan coverage,
                      trunk trigger                          STATUS done
 S1C B  #12 the src/input.c device-name race (registry_add's
                      update-in-place path)                     STATUS todo
+S1D B  #15 CI coverage gap: 3 of the 33 suites had never run in
+                     CI at all (dialogue, audio_opus, math_cglm)  STATUS done
 S2  V  #6  verify S1                                           STATUS todo
 S3  B  #6  leanness 2: value constructors (camera 101, desc 70,
                      text 29) + goldens                        STATUS todo
@@ -553,6 +555,62 @@ UPDATE after the D4c fix landed (run 44902108301): macOS got past configure
    catches them: after adding a platform shim, compile the affected file under
    EVERY toolchain that shares the predicate, and for a link-time symbol,
    actually LINK something rather than only compiling it.
+ D16 three of the 33 test suites had NEVER RUN IN CI, on any commit, while
+    every linux job printed a clean "100% tests passed out of 30". Found by
+    accident: confirming on the runner that S1C's removal of -E '^input$' had
+    taken effect meant reading the suite count, and the runner said 30 where
+    the same tree registers 33 locally.
+    The missing three and their gates (tests/CMakeLists.txt):
+      dialogue    if(FYAML_FOUND)              needs libfyaml-dev
+      audio_opus  if(OPUSFILE_FOUND AND
+                     OPUS_FOUND)               needs libopusfile-dev AND
+                                               libopus-dev (the ENCODER bakes
+                                               the asset via tools/mkopus_sine)
+      math_cglm   if(CGLM_FOUND)               needs libcglm-dev
+    None of the linux, asan or tsan jobs installed any of the four packages.
+    The worst of the three is dialogue: CMakeLists.txt does not merely skip the
+    test, it runs list(FILTER AME_ENGINE_SRC EXCLUDE REGEX ".*/dialogue\.c$"),
+    so an entire engine module was never COMPILED by those jobs. math_cglm is
+    the parity oracle that checks engine math against an independent
+    implementation, i.e. the check that the math is right. audio_opus without
+    opusfile tests a stub.
+    CMake announced every one of these, and the announcements are IN the logs -
+    the linux job's log carries 12 "ame: " STATUS lines including all four
+    "not found" messages. That is the point: message(STATUS) is an
+    announcement, not a gate. It scrolls past a green run, exactly like the
+    hand-maintained source list in D1 and the silently narrowing grep in D13.
+    FIX, two parts, because adding packages only fixes today:
+      (a) the four packages added to the linux, asan and tsan jobs;
+      (b) a new option AME_REQUIRE_OPTIONAL_DEPS (default OFF) that turns a
+          missing dep into message(FATAL_ERROR), passed as ON at all four
+          engine configure sites in those three jobs. It also covers
+          pkg-config ITSELF, which matters because all four deps are found
+          through pkg_check_modules: a runner without pkg-config would report
+          every dep missing no matter what was installed, so a gate that only
+          checked the results could pass while testing nothing.
+    Deliberately NOT applied to the cross and other-platform jobs (android,
+    windows, windows-cross, macos, web) - those host packages do not exist
+    there, and the helper no-ops when CMAKE_CROSSCOMPILING so a future job
+    cannot footgun itself by setting the option. Not applied to the package
+    job either, which installs libfyaml-dev but packs rather than tests; note
+    that it therefore ships a release unit with opus decode STUBBED while
+    dialogue is enabled, which is worth its own look against deploy.txt.
+    One risk retired before spending a CI run on it: the worry that enabling
+    dialogue would make CI compile dialogue.c for the first time under
+    -Werror. It would not have been the first time - the package job installs
+    libfyaml-dev today and its log shows
+      [18/42] Building C object CMakeFiles/ame_3d.dir/src/dialogue.c.o
+    which proves both that pkg_check_modules works on ubuntu-latest and that
+    dialogue.c already compiles clean on a runner under the engine's
+    warnings-as-errors. Read the log of the job that DOES have the dependency
+    before assuming the others are the first.
+    Also fixed in passing, same class: docs/build.txt's OPTIONS list documented
+    two options that DO NOT EXIST (AME_BUILD_WEB, AME_BUILD_ANDROID - the web
+    and Android builds are driven by web/build.sh and the NDK toolchain file)
+    and omitted three that do (AME_BUILD_BENCHES, AME_BUILD_ASYNCINPUT_GAME,
+    AME_FONT_FROM_COMMITTED, the last added by D8 without a doc entry). The
+    drift gate checks public headers -> docs and env vars; it does not check
+    CMake options, so nothing caught that either.
   A pattern worth naming, and the depth here is worth stating exactly because
   the first draft of this paragraph said "three layers" and was wrong: fixing
   one failure reveals the next defect behind it. The windows clang job alone
