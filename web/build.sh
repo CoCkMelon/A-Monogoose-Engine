@@ -22,15 +22,35 @@ if ! command -v emcc >/dev/null 2>&1; then
     exit 1
 fi
 
-# Engine sources: the same set the desktop CMake globs (src/*.c), minus
-# the desktop bootstrap (app_sdl.c), the native-only input backend
-# (input_asyncinput.c needs /dev/input + thread), and dialogue.c (needs
-# libfyaml, unavailable under emcc — same rule as a desktop build
-# without the dev package). Generated font atlases are committed, so no
-# host bake step is needed.
-ENGINE="src/audio.c src/audio_ray.c src/camera.c src/events.c src/error.c src/geometry.c
-    src/input.c src/particles.c src/render.c src/text.c src/tilemap.c
-    generated/font_atlas.c generated/font_atlas_dsdf.c
+# Engine sources: DERIVED from src/*.c, not listed by hand. The hand-written
+# list drifted once and cost a link failure - src/time.c was missing, so the
+# bundles failed with "undefined symbol: ame_loop_defaults" plus the four
+# ame_time_* entry points (all of which live in src/time.c). Six modules were
+# absent in total: time.c, fs.c, mesh.c, obj.c, prefab.c, debug_watch.c.
+# A derived list cannot drift the same way again: a new module joins the web
+# build by default, and if it cannot compile for wasm this script fails loudly
+# here instead of the bundle silently shipping without it.
+# Exclusions, each with its reason:
+#   app_sdl.c          the desktop bootstrap; the web bundle uses app_web.c
+#   app_web.c          passed explicitly per game below, not via ENGINE
+#   input_asyncinput.c native-only backend (/dev/input + a thread); the web
+#                      bootstrap is single-threaded - static hosts send no
+#                      COOP/COEP, so there are no pthreads
+#   dialogue.c         needs libfyaml, unavailable under emcc - the same rule
+#                      as a desktop build without the dev package
+# Generated font atlases are committed, so no host bake step is needed.
+WEB_EXCLUDE="app_sdl.c app_web.c input_asyncinput.c dialogue.c"
+ENGINE=""
+for _f in src/*.c; do
+    _b=${_f#src/}
+    _skip=0
+    for _e in $WEB_EXCLUDE; do
+        if [ "$_b" = "$_e" ]; then _skip=1; fi
+    done
+    if [ "$_skip" -eq 1 ]; then continue; fi
+    ENGINE="$ENGINE $_f"
+done
+ENGINE="$ENGINE generated/font_atlas.c generated/font_atlas_dsdf.c
     generated/font_atlas_hires.c generated/shaders_gen.c"
 
 # Engine's OWN code stays warnings-as-errors; FP contraction stays off

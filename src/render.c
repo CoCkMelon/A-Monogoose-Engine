@@ -13,6 +13,18 @@
 #if defined(__EMSCRIPTEN__) || defined(__ANDROID__)
 #define AME_GL_DIRECT 1
 #include <GLES3/gl3.h> /* GLES3 entry points LINK directly; no loader */
+#elif defined(__APPLE__)
+/* Apple ships no GL/glcorearb.h: the 3.2 core profile lives in
+ * <OpenGL/gl3.h>, and its entry points LINK directly against
+ * -framework OpenGL - the same shape as the GLES3 targets above, so this
+ * reuses AME_GL_DIRECT instead of adding a third path (rp_set_gl_loader is
+ * a no-op here exactly as it is on web and Android). Every function in
+ * AME_GL_FUNCS is GL 3.0/3.1 core, which <OpenGL/gl3.h> declares; nothing
+ * in the list needs the 3.3+ names that Apple only exposes as ARB
+ * extensions. This job is COMPILE-ONLY coverage (ci.yml): no runtime claim
+ * is made for Apple. */
+#define AME_GL_DIRECT 1
+#include <OpenGL/gl3.h>
 #else
 #include <GL/glcorearb.h> /* Khronos core typedefs+enums; fns via loader */
 #endif

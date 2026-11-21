@@ -73,7 +73,13 @@ static void ring_push(ame_error_code code, const char *detail) {
     r->code = code;
     r->thread_id = thread_tag();
     if (detail && detail[0])
-        snprintf(r->detail, sizeof r->detail, "%s", detail);
+        /* Truncation is intended: r->detail is a fixed slot in the error
+         * ring. Naming the bound explicitly is what keeps GCC's
+         * -Wformat-truncation satisfied at -O3; clang does not implement
+         * that warning, so only the GCC builds (MinGW cross, the release
+         * package) ever reported it. */
+        snprintf(r->detail, sizeof r->detail, "%.*s",
+                 (int)sizeof r->detail - 1, detail);
     else
         r->detail[0] = '\0';
     g_ring_head = (g_ring_head + 1u) % AME_ERR_RING;
@@ -132,7 +138,8 @@ void ame_set_error(ame_error_code code, const char *detail) {
         code = AME_ERR_INVALID_ARGUMENT;
     g_last.code = code;
     if (detail && detail[0])
-        snprintf(g_last.detail, sizeof g_last.detail, "%s", detail);
+        snprintf(g_last.detail, sizeof g_last.detail, "%.*s",
+                 (int)sizeof g_last.detail - 1, detail);
     else
         g_last.detail[0] = '\0';
     g_last.rendered[0] = '\0';

@@ -31,7 +31,7 @@ be written into a file, a commit, a comment or a log.
        git ls-remote https://github.com/CoCkMelon/A-Monogoose-Engine \
          ame-next-trunk
      and reset --hard onto that sha BEFORE editing anything. Sandboxes
-     are rewound without warning (24 recorded); a rewind also wipes
+     are rewound without warning (26 recorded); a rewind also wipes
      installed packages, build/ and file exec bits, so afterwards run
      chmod +x tools/*.sh web/build.sh. Anything never pushed is gone.
   2. Install the build dependencies: the exact apt list is in
@@ -53,22 +53,31 @@ be written into a file, a commit, a comment or a log.
   5. End green: build OK, ctest at or above the baseline, the sanitizer
      trees and goldens your brief requires, and
        tools/ci_drift_check.sh HEAD~1 HEAD
-     printing "drift: ok". Then commit and push:
+     printing "drift: ok". Then commit on YOUR OWN BRANCH and open a
+     pull request into ame-next-trunk (recorded 2026-11-20: every stage
+     gets a branch + PR; the verify stage checks it and merges it, so
+     trunk never receives an unverified direct push):
        R=https://github.com/CoCkMelon/A-Monogoose-Engine
-       git push "https://x-access-token:<TOKEN>@${R#https://}" \
-         ame-next-trunk
-     and VERIFY THE REMOTE SHA THROUGH THE BRANCHES API afterwards -
-     push output alone is not proof, and a push made while HEAD was
-     rewound has already published a stale tip once.
-  6. Post your stage report as a comment in your issue (<TOKEN> works
-     for the API too), and set your stage's STATUS line in
-     docs/agent-sequence.txt in the same commit as the work.
+       A=https://x-access-token:<TOKEN>@github.com/CoCkMelon/A-Monogoose-Engine
+       git checkout -b s<N>-<slug>            # off the remote tip
+       git commit -am "<stage>: <what landed>"
+       git push "$A" s<N>-<slug>
+     Verify the branch sha through the API afterwards - push output
+     alone is not proof, and a push made while HEAD was rewound has
+     already published a stale tip once. The <TOKEN> goes in the push
+     URL and the API header ONLY: never in .git/config, a credential
+     file, a commit, a comment, a doc or a log.
+  6. Open the pull request into ame-next-trunk, then post your stage
+     report as a comment in your issue (<TOKEN> works for the API too),
+     and set your stage's STATUS line in docs/agent-sequence.txt in the
+     same commit as the work. The verify stage merges the PR; you do
+     not merge your own.
 
 =====================================================================
 RULES FOR EVERY STAGE
 =====================================================================
 1. The remote branch ame-next-trunk is the source of truth. Sandboxes
-   are rewound without warning (23 recorded): fetch, compare the tip,
+   are rewound without warning (26 recorded): fetch, compare the tip,
    and reset --hard onto the remote tip BEFORE working. Local commits
    that were never pushed are gone after a rollback.
 2. Dependencies vanish with the sandbox. Reinstall list is in the hub
@@ -91,8 +100,13 @@ RULES FOR EVERY STAGE
    re-runs the previous stage's claims with the same commands, and
    either confirms them with numbers or files the defect in the issue.
    Fixing a defect it finds is in scope; growing scope is not.
-7. Update this file: every stage has a STATUS line, set by the agent
-   that finishes it, in the same commit as the work.
+7. Update this file: every stage has a STATUS line. The BUILD agent
+   sets done in the same commit as the work; the VERIFY agent that
+   checks it fills in the sha (done(<sha>)) once it has confirmed the
+   merge, because the build agent cannot know its own merge commit
+   before the merge happens (amended 2026-11-21 after S1, which shipped
+   "STATUS done" with no sha and left the table unable to answer "which
+   commit is that?").
 8. Never run two stages that touch the same files concurrently. S10 is
    the only stage with tree-wide reach into render.c and every example;
    it gets the lane to itself.
@@ -183,7 +197,11 @@ W1 ONE FRESH AGENT PER STAGE, PLANNED ORDER KEPT.
 kind: B=build, V=verify, M=measure.  STATUS: todo / doing / done(sha)
 
 S1  B  #6  leanness 1: optional callbacks, loud diagnostics, dead-math,
-                     census follow-through                    STATUS done
+                     census follow-through             STATUS done(417cbd4)
+S1B B  #3  CI repair: the 5 inherited job failures, TSan coverage,
+                     trunk trigger                          STATUS doing
+S1C B  #12 the src/input.c device-name race (registry_add's
+                     update-in-place path)                     STATUS todo
 S2  V  #6  verify S1                                           STATUS todo
 S3  B  #6  leanness 2: value constructors (camera 101, desc 70,
                      text 29) + goldens                        STATUS todo
@@ -230,6 +248,31 @@ S30 B  #4  WP11/12 polish + release tag                        STATUS todo
 STAGE BRIEFS
 =====================================================================
 
+GOLDEN SET = 9 EXAMPLES, AND TWO OF THEM NEED A PROVISION.
+  audio_opus audio_pan audio_ray biscuit line_draw memory_game
+  raymarch_arcade text_editor tilemap_render
+  Briefs written before 2026-11-21 said "8 rendering examples". Nine
+  examples draw. The ninth, audio_opus, exits before rendering anything
+  unless it is given an Opus file, which is why S1's run captured 8.
+  Provisions, both measured during the S1 audit:
+    tilemap_render  run it with cwd = its own build directory; it reads
+                    sample.tmj relative to cwd, and CMake copies the
+                    file next to the binary.
+    audio_opus      set AME_OPUS=<path>. The repo ships no .opus file;
+                    extract one from the committed baked array in
+                    tests/assets/baked_sine_opus.h (10892 bytes there).
+  Capture recipe, per example, from build/examples/<name>/:
+    env SDL_VIDEODRIVER=offscreen SDL_AUDIO_DRIVER=dummy \
+        LIBGL_ALWAYS_SOFTWARE=1 AME_WINDOW_W=960 AME_WINDOW_H=540 \
+        AME_FIXED_FRAME_DT=0.0166667 AME_SEED=1 AME_SHOT_FRAMES=40 \
+        AME_SHOT_NOFLIP=1 AME_SHOT_PPM=out.ppm \
+        timeout -s KILL 30 ./<name>
+  Goldens are PPM (P6). "Killed" from timeout -s KILL is EXPECTED, not
+  a failure: the frame is on disk by AME_SHOT_FRAMES. Compare with cmp
+  against the previous tree, never by eye. Use a SEPARATE build
+  directory per tree - one reused directory makes the two sides
+  indistinguishable.
+
 --- S1 (BUILD, issue #6) API leanness, part 1 -----------------------
 SCOPE
  a) Weak optional callbacks app_event, app_quit, app_resize in BOTH
@@ -266,13 +309,100 @@ MUST NOT  the .pass migration (S10); camera/desc constructors (S3);
 ACCEPTANCE  the 39-line reference app drops to ~33-35 code lines by
   deleting empty hooks only; the 10 app files lose their no-op
   app_event/app_quit where they had nothing to say; ctest >= 32 with
-  new tests for (b) and (c); goldens pixel-identical for all 8
+  new tests for (b) and (c); goldens pixel-identical for all 9
   rendering examples; ASan/UBSan and TSan green (weak symbols and
   bootstrap startup are thread-adjacent); drift gate ok.
 PROOF  before/after line counts of the reference app and of
   templates/game/main.c; the loud-failure message text; the golden
   diff summary; the three ctest numbers.
 ESTIMATE  1-2 turns.
+
+--- S1B (BUILD, issue #3) CI repair ---------------------------------
+Added 2026-11-21. PR #11 was the first CI run on this lineage since
+2026-09-09, because on.push.branches never named ame-next-trunk. It came
+back 7 of 13 jobs red. All seven failures were INHERITED - none is in
+S1's diff - but a red pipeline is not a green baseline for S3 onward, so
+this stage lands before any feature work resumes.
+SCOPE
+ D1 web: web/build.sh hand-maintained an ENGINE= source list that
+    claimed to match the desktop glob and did not. Six src/ modules were
+    missing (time.c, fs.c, mesh.c, obj.c, prefab.c, debug_watch.c);
+    wasm-ld failed on the five symbols from time.c. DERIVE the list from
+    src/*.c minus a named, reasoned exclusion set instead of listing it.
+ D2 macOS: src/render.c includes <GL/glcorearb.h>, which Apple does not
+    ship. Add an __APPLE__ branch to that include block using
+    <OpenGL/gl3.h> and the existing AME_GL_DIRECT path (every function in
+    AME_GL_FUNCS is GL 3.0/3.1 core, which that header declares). Touch
+    the include block only - S10 owns render.c logic.
+ D3 MinGW cross + package: src/error.c trips GCC's -Wformat-truncation
+    at -O3 with -Werror at two sites (r->detail and g_last.detail).
+    Bound the conversion explicitly with "%.*s" and (int)sizeof - 1.
+    Do NOT add -Wno-format-truncation and do NOT weaken -Werror.
+ D4 android NDK + windows clang: SDL3's generated SDL_revision.h must sit
+    under the source prefix, so a SIBLING build dir fails configure
+    ("source_group ... is not a prefix of ...") and ninja then cannot
+    load build.ninja. The three recipes that pass nest the build dir
+    inside the source dir; make the two that fail do the same.
+ D5 linux ASan: LeakSanitizer reports leaks whose every frame is in
+    libEGL_mesa / libgallium AFTER the test prints "all 23 checks
+    passed". Add tools/lsan_suppressions.txt naming those two libraries
+    and pass it via LSAN_OPTIONS. Leak detection stays ON for engine
+    code; never suppress libSDL3 and never set detect_leaks=0 wholesale.
+ D6 TSan coverage: the job built and ran only test_snap and test_pool -
+    the two suites that cannot reach the device registry. Widen it to the
+    full ctest run, suppress libgallium frames via
+    tools/tsan_suppressions.txt, and EXCLUDE test_input until issue #12
+    is fixed, with #12 named in ci.yml so the exclusion is visibly
+    temporary.
+ D7 governance: add ame-next-trunk to on.push.branches, plus
+    workflow_dispatch, so the trunk tip is verified between PRs.
+MAY TOUCH  web/build.sh; src/render.c (include block only); src/error.c
+  (the two snprintf sites); .github/workflows/ci.yml; the two new
+  tools/*_suppressions.txt; docs/agent-sequence.txt.
+MUST NOT  fix issue #12 (that is S1C - engine code, its own PR); change
+  the public API shape or app hooks (S1/S3 lanes); change render.c logic
+  or the sort key (S10); add a suppression naming any engine symbol, any
+  ame_* symbol, any test name or libSDL3; regenerate and commit
+  docs/games/*.js as a side effect (they are publishing artifacts owned
+  by pages.yml, and a toolchain-version churn diff is not reviewable).
+ACCEPTANCE  all 13 CI jobs green on the PR, OR each remaining red job
+  explained with evidence quoted from its log; test_input excluded by
+  name with #12 referenced in ci.yml; drift gate ok; ctest >= 33.
+PROOF  D3 locally under gcc with the project's exact flags
+  (-std=c23 -O3 -Wall -Wextra -Werror, a real -c, -Igenerated): clang
+  does not implement -Wformat-truncation, so a green clang job proves
+  nothing about the GCC jobs, and -O2 does not reproduce it. D1 locally
+  with emsdk if emcc is installable, else CI. D2/D4/D5 CI only: no Apple
+  runner, no NDK parity and the local Mesa differs from the runner's
+  (25.0.7 here, 26.0.8 there), so D5's leak does not reproduce locally.
+ESTIMATE  1-2 turns.
+
+--- S1C (BUILD, issue #12) the input device-name race ----------------
+Added 2026-11-21, sequenced immediately after S1B and before S3.
+Issue #12 is the one real engine defect the S1 audit found: in
+src/input.c, registry_add's UPDATE-IN-PLACE path (reusing a slot whose
+dev_present is already 1) rewrites dev_name with a plain memcpy while
+in_device_info copies it out; the release/acquire pair on dev_present
+only orders a slot's FIRST write, and the trailing release store on the
+update path is a no-op. Result: a torn device name. Bounded by
+AME_DEV_NAME_MAX, so not an out-of-bounds write, but a real data race.
+Reachable by hotplug re-announce, a name change, or remove-then-add
+churn. Four candidate fixes are tabulated in #12; a per-slot seqlock
+matching the existing AME_SNAP_DEFINE / AME_SNAP_FENCE idiom keeps the
+lock-free read path this module was built for.
+SCOPE  fix the race; keep the registry's read path lock-free; keep the
+  public shape of include/ame/input.h.
+MAY TOUCH  src/input.c, include/ame/input.h if a seqlock field is
+  needed, tests/test_input.c.
+MUST NOT  add a mutex around the read path (it is the module's point);
+  widen scope into input semantics; touch CI again (S1B's job).
+ACCEPTANCE  test_input under TSan: 5 of 5 runs report ZERO warnings
+  (was 5 of 5 reporting 2 warnings, with all 97 checks still passing);
+  ctest >= 33; then remove the -E '^input$' exclusion from ci.yml and
+  let the widened TSan job run the suite.
+PROOF  the TSan run counts before and after; the full TSan ctest with
+  test_input included; the goldens for the input-driven examples.
+ESTIMATE  1 turn.
 
 --- S2 (VERIFY, issue #6) -------------------------------------------
 Rebuild from the remote tip. Re-measure: reference-app line counts,
@@ -310,7 +440,7 @@ MUST NOT  add .pass (S10); add defaults of any kind; change draw order
 ACCEPTANCE  the reference app (window + quad + text + ESC) is <= 30
   code lines and still compiles clean with -Wall -Wextra; ZERO
   remaining camera_desc/rp_desc_* builder calls; ctest >= 32; goldens
-  PIXEL-IDENTICAL for all 8 rendering examples (this stage must not
+  PIXEL-IDENTICAL for all 9 rendering examples (this stage must not
   change a single pixel - it changes how values are stated, not what
   they are); ASan/UBSan and TSan green; drift gate ok.
 PROOF  the reference app source and its line count; the golden diff
@@ -391,9 +521,9 @@ example at once. Nothing else runs concurrently with it.
     struct; an invalid pass FAILS LOUDLY (ae0e465). Migrate all 68
     rp_push_* call sites in the SAME commit. rp_pass_begin stays for
     genuine whole-section passes (custom post, shadow caster pre-pass).
- c) app_render becomes the exception path; the 8 examples keep their
+ c) app_render becomes the exception path; the 9 examples keep their
     output byte-identical.
-ACCEPTANCE  goldens PIXEL-IDENTICAL for all 8 rendering examples (the
+ACCEPTANCE  goldens PIXEL-IDENTICAL for all 9 rendering examples (the
   expected behaviour change is none: every in-app pass selection is
   already paired and balanced, the same measurement that made 81ef8cd
   safe); a named entity from the S6 fixture renders with NO app_render
