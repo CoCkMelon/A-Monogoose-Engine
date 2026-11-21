@@ -392,14 +392,20 @@ jobs:
           # SDL3" even though the file is on disk. Naming the directory directly
           # removes the guesswork; PREFIX_PATH stays for headers and the import
           # library.
-          cmake -S . -B build -G Ninja `
-            -DCMAKE_C_COMPILER=clang `
-            -DCMAKE_PREFIX_PATH=$env:RUNNER_TEMP/sdl-prefix `
-            -DSDL3_DIR=$env:RUNNER_TEMP/sdl-prefix/cmake `
-            -DAME_BUILD_EXAMPLES=OFF -DAME_BUILD_TESTS=OFF `
-            -DAME_BUILD_BENCHES=OFF -DAME_BUILD_ASYNCINPUT_GAME=OFF `
-            -DAME_FONT_FROM_COMMITTED=ON `
-            -DCMAKE_BUILD_TYPE=Debug
+          # Written as ONE line on purpose. -DSDL3_DIR=<prefix>/cmake is the
+          # fix (SDL3's MSVC-style install puts SDL3Config.cmake directly in
+          # <prefix>/cmake, and <prefix>/cmake is not one of the subdirs CMake's
+          # prefix search tries - unlike <prefix>/lib/cmake/<name>, which is why
+          # the macOS/Linux/Android recipes find it with PREFIX_PATH alone), but
+          # a first attempt passed it on a backtick-continued line and the
+          # runner behaved as though the variable had never been set: the same
+          # "Could not find a package configuration file provided by SDL3"
+          # error, with no mention of SDL3_DIR anywhere in CMake's output even
+          # though the echoed command line contained it. Rather than debug
+          # PowerShell line continuation on a runner nobody can inspect
+          # interactively, the whole configure is one line, which has no
+          # continuation to get wrong.
+          cmake -S . -B build -G Ninja -DCMAKE_C_COMPILER=clang -DCMAKE_PREFIX_PATH=$env:RUNNER_TEMP/sdl-prefix -DSDL3_DIR=$env:RUNNER_TEMP/sdl-prefix/cmake -DAME_BUILD_EXAMPLES=OFF -DAME_BUILD_TESTS=OFF -DAME_BUILD_BENCHES=OFF -DAME_BUILD_ASYNCINPUT_GAME=OFF -DAME_FONT_FROM_COMMITTED=ON -DCMAKE_BUILD_TYPE=Debug
           cmake --build build
 
   macos:
