@@ -32,6 +32,16 @@ option(AME_BUILD_ASYNCINPUT_GAME "Build the asyncinput-backend game variant" OFF
 # re-bakes when a font or a baker changes.
 option(AME_FONT_FROM_COMMITTED "Build ame_font from committed arrays; skip host font bakers" OFF)
 
+# Optional deps are genuinely optional FOR THE ENGINE, but a CI job that means
+# to test them must not be allowed to skip them silently. Without this gate a
+# missing libfyaml / opusfile / opus / libcglm drops whole suites - and drops
+# dialogue.c out of the engine sources entirely - while every job still prints
+# "100% tests passed". That is issue #15: three of 33 suites had never run in
+# CI on any commit. message(STATUS) is an announcement, not a gate; it scrolls
+# past in a green run. OFF by default so cross and console builds, where these
+# host packages do not exist, are unaffected.
+option(AME_REQUIRE_OPTIONAL_DEPS "Fail configure when an optional engine/test dependency is missing" OFF)
+
 # optional system deps, found ONCE before any add_subdirectory (tools
 # and tests both gate on these): libfyaml (dialogue), opusfile (opus
 # decode, engine), opus (encode, test-asset baker).
@@ -41,6 +51,19 @@ if(PkgConfig_FOUND AND NOT CMAKE_CROSSCOMPILING)
     pkg_check_modules(OPUSFILE QUIET opusfile)
     pkg_check_modules(OPUS QUIET opus)
 endif()
+
+# Every optional dep above is found through pkg-config, so a runner without
+# pkg-config would report all of them missing no matter which packages are
+# installed - the gate has to cover the finder itself, not just the results.
+function(ame_require_dep is_found name hint)
+    if(AME_REQUIRE_OPTIONAL_DEPS AND NOT CMAKE_CROSSCOMPILING AND NOT is_found)
+        message(FATAL_ERROR "ame: AME_REQUIRE_OPTIONAL_DEPS=ON but ${name} was "
+                            "not found. ${hint}")
+    endif()
+endfunction()
+ame_require_dep("${PkgConfig_FOUND}" "pkg-config"
+    "install pkg-config: without it libfyaml, opusfile, opus and cglm cannot "
+    "be found at all, so this gate would pass while testing nothing")
 
 # ---------------------------------------------------------------------------
 # FP behaviour is PINNED for determinism (principles.txt): no fast-math,
@@ -99,6 +122,9 @@ else()
                    "(install libfyaml-dev)")
     list(FILTER AME_ENGINE_SRC EXCLUDE REGEX ".*/dialogue\.c$")
 endif()
+ame_require_dep("${FYAML_FOUND}" "libfyaml"
+    "apt install libfyaml-dev: enables the dialogue module (dialogue.c is "
+    "filtered OUT of the engine sources without it) and test_dialogue")
 
 function(ame_dim_lib dim)
     add_library(ame_${dim}d STATIC ${AME_ENGINE_SRC})
@@ -217,6 +243,12 @@ if(OPUSFILE_FOUND)
 else()
     message(STATUS "ame: opusfile not found - opus decode stubbed (apt libopusfile-dev)")
 endif()
+ame_require_dep("${OPUSFILE_FOUND}" "opusfile"
+    "apt install libopusfile-dev: engine opus decode (audio_load_opus) and "
+    "test_audio_opus")
+ame_require_dep("${OPUS_FOUND}" "opus"
+    "apt install libopus-dev: tools/mkopus_sine bakes the opus asset that "
+    "test_audio_opus decodes, so the test needs the ENCODER too")
 
 # ---------------------------------------------------------------------------
 # Helper: declare an engine-consuming target with dimension + input backend.
