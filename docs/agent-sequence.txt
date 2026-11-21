@@ -403,6 +403,23 @@ RESULT (measured on PR #13, run 44900979371): 11 of 13 jobs green, up from
   get past configure, revealed D8. Both are fixed in the same branch.
   D2's status is still UNTESTED: the macOS job has never compiled a single
   engine file, so no run has yet reached src/render.c on Apple.
+
+UPDATE after the D4c fix landed (run 44902108301): macOS got past configure
+  and compiled 260 engine files, so D2 IS NOW CONFIRMED - the <OpenGL/gl3.h>
+  branch works, and the original "GL/glcorearb.h file not found" is gone. It
+  exposed one further Apple-only defect, D9: Apple deprecated the whole
+  OpenGL framework in macOS 10.14 and marks every entry point with
+  __deprecated_msg, so under -Werror the 19 GL shader/program call sites in
+  src/render.c become errors. Fixed with GL_SILENCE_DEPRECATION, defined
+  inside the __APPLE__ include branch only - the macro Apple's own headers
+  suggest - so it cannot leak into the Linux, Windows, Android or web builds,
+  where those same names resolve through a loader table to plain function
+  pointers and are not deprecated at all. This is not a weakening of -Werror,
+  which stays on for everything else.
+ D9 macOS (found only after D2 could be reached): as above. A reminder that
+  fixing one configure failure can reveal the next defect behind it, on the
+  same job, twice in a row here (D4c revealed D9 on macOS; D4 revealed D8 on
+  windows).
 PROOF  D3 locally under gcc with the project's exact flags
   (-std=c23 -O3 -Wall -Wextra -Werror, a real -c, -Igenerated): clang
   does not implement -Wformat-truncation, so a green clang job proves

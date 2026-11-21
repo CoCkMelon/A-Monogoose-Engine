@@ -22,7 +22,23 @@
  * AME_GL_FUNCS is GL 3.0/3.1 core, which <OpenGL/gl3.h> declares; nothing
  * in the list needs the 3.3+ names that Apple only exposes as ARB
  * extensions. This job is COMPILE-ONLY coverage (ci.yml): no runtime claim
- * is made for Apple. */
+ * is made for Apple.
+ *
+ * GL_SILENCE_DEPRECATION is required on this path and only on this path.
+ * Apple deprecated the whole OpenGL framework in macOS 10.14 and marks every
+ * entry point with __deprecated_msg, so under the project's -Werror the 19
+ * call sites in this file become errors:
+ *   error: 'glCreateShader' is deprecated: first deprecated in macOS 10.14
+ *          [-Werror,-Wdeprecated-declarations]
+ * The macro is the one Apple's own headers suggest ("Define
+ * GL_SILENCE_DEPRECATION to silence these warnings"). It is not a weakening
+ * of -Werror, which stays on for everything else: the deprecation is a
+ * statement about Apple's future SDKs, not a defect in a call, and the
+ * alternative - dropping the GL calls - is not available. It is defined here
+ * rather than in CMakeLists.txt so it cannot leak into the Linux, Windows,
+ * Android or web builds, where these same names resolve through a loader
+ * table to plain function pointers and are not deprecated at all. */
+#define GL_SILENCE_DEPRECATION 1
 #define AME_GL_DIRECT 1
 #include <OpenGL/gl3.h>
 #else
