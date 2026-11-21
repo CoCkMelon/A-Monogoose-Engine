@@ -351,15 +351,11 @@ jobs:
       - uses: ilammy/msvc-dev-cmd@v1
       - name: toolchain
         shell: pwsh
-        # FreeType is needed because this job builds NATIVELY (windows-latest,
-        # clang targeting Windows), so CMAKE_CROSSCOMPILING is FALSE and
-        # tools/CMakeLists.txt reaches its find_package(Freetype REQUIRED) for
-        # the host font bakers. The MinGW-w64 job does not need it: that one
-        # really is cross-compiling from ubuntu, so tools/ gates itself off and
-        # compiles the COMMITTED generated arrays instead. This defect was
-        # masked until now because the job died earlier, at the sibling-build-dir
-        # configure failure, and never reached the engine configure step.
-        run: choco install llvm ninja freetype -y --no-progress
+        # No freetype here, and that is deliberate - see the configure step's
+        # -DAME_FONT_FROM_COMMITTED=ON below. (choco has no `freetype` package
+        # at all: "freetype not installed. The package was not found with the
+        # source(s) listed.", so the obvious fix is not available.)
+        run: choco install llvm ninja -y --no-progress
       - name: SDL3 from source
         shell: pwsh
         run: |
@@ -372,11 +368,23 @@ jobs:
       - name: configure + compile engine
         shell: pwsh
         run: |
+          # -DAME_FONT_FROM_COMMITTED=ON: this job's purpose is that the SAME
+          # C23 engine sources COMPILE natively for Windows (examples, tests and
+          # benches are already OFF). The host font bakers are not part of that
+          # claim - they are build-time tools, and the arrays they produce are
+          # COMMITTED, which is exactly why a cross build can skip them.
+          # This job builds NATIVELY, so CMAKE_CROSSCOMPILING is FALSE and tools/
+          # used to reach find_package(Freetype REQUIRED) for bakers that nothing
+          # here needs. The MinGW-w64 job never hit this because it really is
+          # cross-compiling from ubuntu. The defect was masked until the
+          # sibling-build-dir failure above was fixed, because this job died at
+          # configure and never got here.
           cmake -S . -B build -G Ninja `
             -DCMAKE_C_COMPILER=clang `
             -DCMAKE_PREFIX_PATH=$env:RUNNER_TEMP/sdl-prefix `
             -DAME_BUILD_EXAMPLES=OFF -DAME_BUILD_TESTS=OFF `
             -DAME_BUILD_BENCHES=OFF -DAME_BUILD_ASYNCINPUT_GAME=OFF `
+            -DAME_FONT_FROM_COMMITTED=ON `
             -DCMAKE_BUILD_TYPE=Debug
           cmake --build build
 

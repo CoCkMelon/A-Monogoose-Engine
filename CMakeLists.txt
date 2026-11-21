@@ -23,6 +23,14 @@ option(AME_BUILD_TESTS    "Build tests"    ON)
 option(AME_BUILD_BENCHES  "Build microbenchmarks" ON)
 option(AME_ENABLE_ASAN    "ASan/UBSan debug build" OFF)
 option(AME_BUILD_ASYNCINPUT_GAME "Build the asyncinput-backend game variant" OFF)
+# Compile ame_font from the COMMITTED generated arrays and skip the host font
+# bakers (which need FreeType). Implied under a cross build, where the host
+# bakers cannot run anyway; this makes it available to a native build that has
+# no host FreeType and no need for the bakers - the windows clang CI job, whose
+# claim is that the engine sources compile natively, not that the host tools
+# build. Opt-in only: a normal desktop build still requires FreeType and still
+# re-bakes when a font or a baker changes.
+option(AME_FONT_FROM_COMMITTED "Build ame_font from committed arrays; skip host font bakers" OFF)
 
 # optional system deps, found ONCE before any add_subdirectory (tools
 # and tests both gate on these): libfyaml (dialogue), opusfile (opus

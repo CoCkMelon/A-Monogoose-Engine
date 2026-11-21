@@ -352,8 +352,24 @@ SCOPE
     has no FreeType, so configure fails with "Could NOT find Freetype".
     The MinGW-w64 job does not hit this: it really is cross-compiling from
     ubuntu, so tools/ gates itself off and compiles the COMMITTED generated
-    arrays. Install freetype in the native job's toolchain step. This was
-    masked until D4 was fixed, because the job previously died earlier.
+    arrays. This was masked until D4 was fixed, because the job previously
+    died earlier.
+    THE OBVIOUS FIX IS NOT AVAILABLE: chocolatey has no `freetype` package
+    ("freetype not installed. The package was not found with the source(s)
+    listed."), so it cannot be added to the toolchain step. The real fix is
+    to make the committed-arrays path an explicit opt-in
+    (-DAME_FONT_FROM_COMMITTED=ON, gate widened from
+    `if(CMAKE_CROSSCOMPILING)` to `if(CMAKE_CROSSCOMPILING OR
+    AME_FONT_FROM_COMMITTED)`) and have this job pass it. The job's claim is
+    that the ENGINE's C23 sources compile natively for Windows - examples,
+    tests and benches are already OFF - and the host bakers are build-time
+    tools outside that claim, which is the same reasoning that lets a cross
+    build skip them. Opt-in, not a silent fallback: a normal desktop build
+    still requires FreeType and still re-bakes when a font or a baker
+    changes. Prove it with an A/B, because FreeType being installed locally
+    makes the ON case look like it worked for the wrong reason:
+    -DCMAKE_DISABLE_FIND_PACKAGE_Freetype=ON with the option ON builds clean;
+    with the option OFF it fails at tools/CMakeLists.txt find_package.
  D5 linux ASan: LeakSanitizer reports leaks whose every frame is in
     libEGL_mesa / libgallium AFTER the test prints "all 23 checks
     passed". Add tools/lsan_suppressions.txt naming those two libraries
