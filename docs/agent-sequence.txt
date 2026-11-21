@@ -199,9 +199,9 @@ kind: B=build, V=verify, M=measure.  STATUS: todo / doing / done(sha)
 S1  B  #6  leanness 1: optional callbacks, loud diagnostics, dead-math,
                      census follow-through             STATUS done(417cbd4)
 S1B B  #3  CI repair: the 5 inherited job failures, TSan coverage,
-                     trunk trigger                          STATUS done
+                     trunk trigger                          STATUS done(8a0b753)
 S1C B  #12 the src/input.c device-name race (registry_add's
-                     update-in-place path)                     STATUS todo
+                     update-in-place path)                     STATUS done
 S2  V  #6  verify S1                                           STATUS todo
 S3  B  #6  leanness 2: value constructors (camera 101, desc 70,
                      text 29) + goldens                        STATUS todo
@@ -553,6 +553,24 @@ UPDATE after the D4c fix landed (run 44902108301): macOS got past configure
    catches them: after adding a platform shim, compile the affected file under
    EVERY toolchain that shares the predicate, and for a link-time symbol,
    actually LINK something rather than only compiling it.
+ LESSON, added after S1B merged and cost a wrong claim published on PR #13:
+   a SANITIZER TREE IS ONLY EVIDENCE ABOUT THE CONFIGURATION CI RUNS. While
+   re-measuring S1B I rebuilt the three trees with rm -rf and re-specified the
+   build type and the sanitizer flags but NOT the compiler, so CMake fell back
+   to /usr/bin/cc - gcc - while every linux job in ci.yml passes
+   -DCMAKE_C_COMPILER=clang-19. On the gcc tree test_input passed 8/8 with zero
+   TSan warnings and I concluded, in print, that the -E '^input$' exclusion was
+   not load-bearing. On a clang-19 tree at the SAME sha it fails 5/5 with rc=66
+   and 2 warnings naming registry_add at src/input.c:428 - issue #12, exactly
+   as reported. The exclusion was load-bearing; without it the TSan job is red.
+   Two things follow. The check that a sanitizer tree is instrumented must be
+   compiler-sensitive: grep -c fsanitize=thread build.ninja and ldd | grep tsan
+   BOTH PASS under gcc, so neither catches the switch, whereas the __tsan
+   symbol count moved 137 -> 21 and was the real tell - it was seen, and then
+   explained away as "a different binary" instead of investigated. And after
+   any rm -rf, assert CMAKE_C_COMPILER from CMakeCache.txt before believing a
+   single number that comes out of the tree. Instrumentation is a property of
+   the whole configuration, not of the flag you remembered to pass.
   A pattern worth naming, and the depth here is worth stating exactly because
   the first draft of this paragraph said "three layers" and was wrong: fixing
   one failure reveals the next defect behind it. The windows clang job alone
