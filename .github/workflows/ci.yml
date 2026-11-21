@@ -405,7 +405,34 @@ jobs:
           # PowerShell line continuation on a runner nobody can inspect
           # interactively, the whole configure is one line, which has no
           # continuation to get wrong.
-          cmake -S . -B build -G Ninja -DCMAKE_C_COMPILER=clang -DCMAKE_PREFIX_PATH=$env:RUNNER_TEMP/sdl-prefix -DSDL3_DIR=$env:RUNNER_TEMP/sdl-prefix/cmake -DAME_BUILD_EXAMPLES=OFF -DAME_BUILD_TESTS=OFF -DAME_BUILD_BENCHES=OFF -DAME_BUILD_ASYNCINPUT_GAME=OFF -DAME_FONT_FROM_COMMITTED=ON -DCMAKE_BUILD_TYPE=Debug
+          # DIAGNOSTIC STEP, added after three wrong guesses about this job.
+          # Print what the shell actually resolved and what is on disk, so the
+          # next run answers the question instead of leaving it to inference:
+          #   - $env:RUNNER_TEMP demonstrably expands in other pwsh steps here
+          #     (the clone went to D:/a/_temp/sdl3, the install wrote
+          #     D:/a/_temp/sdl-prefix/lib/SDL3.lib), yet find_package(SDL3)
+          #     reports it cannot find a config file that the SAME log shows
+          #     being installed at D:/a/_temp/sdl-prefix/cmake/SDL3Config.cmake.
+          #   - Locally the layout is not the problem: with SDL3Config.cmake in
+          #     <prefix>/cmake, both CMake 3.31.6 and CMake 4.4.5 find it via
+          #     CMAKE_PREFIX_PATH alone, and also via an explicit -DSDL3_DIR,
+          #     including with mixed path separators. So the "MSVC-style install
+          #     puts the config somewhere CMake does not search" theory is
+          #     FALSE, and the earlier commits that acted on it were wrong.
+          #   - SDL3's own SDL3Config.cmake.in has no compiler or ABI guard that
+          #     could reject clang, so it is not rejecting us from inside.
+          # The remaining candidates are all about the value reaching CMake, and
+          # only the runner can distinguish them. This prints them.
+          Write-Host "RUNNER_TEMP=[$env:RUNNER_TEMP]"
+          Write-Host "prefix=[$env:RUNNER_TEMP/sdl-prefix]"
+          Write-Host "SDL3_DIR=[$env:RUNNER_TEMP/sdl-prefix/cmake]"
+          Write-Host "--- does the config file exist? ---"
+          Test-Path "$env:RUNNER_TEMP/sdl-prefix/cmake/SDL3Config.cmake"
+          Write-Host "--- what is actually in the prefix ---"
+          Get-ChildItem -Recurse "$env:RUNNER_TEMP/sdl-prefix" -Filter '*.cmake' | Select-Object -First 12 -ExpandProperty FullName
+          Write-Host "--- cmake version ---"
+          cmake --version
+          cmake -S . -B build -G Ninja -DCMAKE_C_COMPILER=clang -DCMAKE_PREFIX_PATH="$env:RUNNER_TEMP/sdl-prefix" -DSDL3_DIR="$env:RUNNER_TEMP/sdl-prefix/cmake" -DAME_BUILD_EXAMPLES=OFF -DAME_BUILD_TESTS=OFF -DAME_BUILD_BENCHES=OFF -DAME_BUILD_ASYNCINPUT_GAME=OFF -DAME_FONT_FROM_COMMITTED=ON -DCMAKE_BUILD_TYPE=Debug --debug-find-pkgmodule 2>&1 | Select-Object -Last 60
           cmake --build build
 
   macos:
