@@ -416,10 +416,21 @@ UPDATE after the D4c fix landed (run 44902108301): macOS got past configure
   where those same names resolve through a loader table to plain function
   pointers and are not deprecated at all. This is not a weakening of -Werror,
   which stays on for everything else.
- D9 macOS (found only after D2 could be reached): as above. A reminder that
-  fixing one configure failure can reveal the next defect behind it, on the
-  same job, twice in a row here (D4c revealed D9 on macOS; D4 revealed D8 on
-  windows).
+ D9 macOS (found only after D2 could be reached): as above.
+ D10 windows clang (found only after D8 could be reached): find_package(SDL3
+    REQUIRED) fails although the SDL3 install step succeeded, because SDL3's
+    install LAYOUT differs per platform. macOS/Linux/Android put the config at
+    <prefix>/lib/cmake/SDL3/SDL3Config.cmake, and <prefix>/lib/cmake/<name> is
+    one of the subdirs CMake's prefix search tries. The MSVC-style Windows
+    install puts it at <prefix>/cmake/SDL3Config.cmake - no <name> subdir - and
+    <prefix>/cmake is not in that list. So CMAKE_PREFIX_PATH alone cannot find
+    it. Fix: pass -DSDL3_DIR=<prefix>/cmake explicitly; keep PREFIX_PATH for
+    headers and the import library.
+  A pattern worth naming: fixing one configure failure reveals the next defect
+  behind it. Three layers deep on the windows job alone (sibling build dir ->
+  host FreeType -> SDL3 config layout), and two on macOS (sibling build dir ->
+  GL deprecation). A job that dies at configure tells you about exactly one
+  defect, so "the job is red" is not a count of the defects in it.
 PROOF  D3 locally under gcc with the project's exact flags
   (-std=c23 -O3 -Wall -Wextra -Werror, a real -c, -Igenerated): clang
   does not implement -Wformat-truncation, so a green clang job proves

@@ -379,9 +379,23 @@ jobs:
           # cross-compiling from ubuntu. The defect was masked until the
           # sibling-build-dir failure above was fixed, because this job died at
           # configure and never got here.
+          # -DSDL3_DIR is required on Windows and is not a redundant duplicate
+          # of CMAKE_PREFIX_PATH. SDL3's install layout differs per platform: on
+          # Linux/Android it puts SDL3Config.cmake under <prefix>/lib/cmake/SDL3
+          # (see build-android's cache: SDL3_DIR=/tmp/sdl3-android-prefix/lib/
+          # cmake/SDL3), and <prefix>/lib/cmake/<name> IS one of the subdirs
+          # CMake's prefix search tries. The MSVC-style Windows install instead
+          # puts it in <prefix>/cmake/ with no <name> subdir - the log shows
+          # "Installing: D:/a/_temp/sdl-prefix/cmake/SDL3Config.cmake" - and
+          # <prefix>/cmake is NOT in that list, so find_package(SDL3 REQUIRED)
+          # fails with "Could not find a package configuration file provided by
+          # SDL3" even though the file is on disk. Naming the directory directly
+          # removes the guesswork; PREFIX_PATH stays for headers and the import
+          # library.
           cmake -S . -B build -G Ninja `
             -DCMAKE_C_COMPILER=clang `
             -DCMAKE_PREFIX_PATH=$env:RUNNER_TEMP/sdl-prefix `
+            -DSDL3_DIR=$env:RUNNER_TEMP/sdl-prefix/cmake `
             -DAME_BUILD_EXAMPLES=OFF -DAME_BUILD_TESTS=OFF `
             -DAME_BUILD_BENCHES=OFF -DAME_BUILD_ASYNCINPUT_GAME=OFF `
             -DAME_FONT_FROM_COMMITTED=ON `
