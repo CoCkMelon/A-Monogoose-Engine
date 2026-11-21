@@ -23,6 +23,14 @@ option(AME_BUILD_TESTS    "Build tests"    ON)
 option(AME_BUILD_BENCHES  "Build microbenchmarks" ON)
 option(AME_ENABLE_ASAN    "ASan/UBSan debug build" OFF)
 option(AME_BUILD_ASYNCINPUT_GAME "Build the asyncinput-backend game variant" OFF)
+# Compile ame_font from the COMMITTED generated arrays and skip the host font
+# bakers (which need FreeType). Implied under a cross build, where the host
+# bakers cannot run anyway; this makes it available to a native build that has
+# no host FreeType and no need for the bakers - the windows clang CI job, whose
+# claim is that the engine sources compile natively, not that the host tools
+# build. Opt-in only: a normal desktop build still requires FreeType and still
+# re-bakes when a font or a baker changes.
+option(AME_FONT_FROM_COMMITTED "Build ame_font from committed arrays; skip host font bakers" OFF)
 
 # optional system deps, found ONCE before any add_subdirectory (tools
 # and tests both gate on these): libfyaml (dialogue), opusfile (opus
@@ -97,6 +105,20 @@ function(ame_dim_lib dim)
     target_include_directories(ame_${dim}d PUBLIC
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
         $<INSTALL_INTERFACE:include>)
+    if(WIN32 AND NOT MINGW)
+        # D12: native Windows with LLVM/MSVC ships no Khronos GL headers, so
+        # render.c includes the ones vendored under external/khronos. That
+        # header does "#include <KHR/khrplatform.h>" with ANGLE brackets, which
+        # searches the -I paths only; on Linux it resolves from /usr/include, on
+        # this runner there is no system KHR directory at all. Add the vendored
+        # root to the search path so it resolves from the repo. Guarded to
+        # WIN32 AND NOT MINGW so no other target's header resolution changes:
+        # Linux, macOS, Android and web keep compiling against the exact
+        # headers their own toolchain ships, and MinGW's cross sysroot already
+        # has GL/ (that job was always green).
+        target_include_directories(ame_${dim}d PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/external/khronos)
+    endif()
     target_compile_options(ame_${dim}d PRIVATE ${AME_WARN_FLAGS} ${AME_FP_FLAGS})
     target_compile_definitions(ame_${dim}d PUBLIC AME_${dim}D=1)
     target_link_libraries(ame_${dim}d PUBLIC ${AME_SDL3_LINK})

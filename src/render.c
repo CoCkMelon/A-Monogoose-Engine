@@ -13,6 +13,47 @@
 #if defined(__EMSCRIPTEN__) || defined(__ANDROID__)
 #define AME_GL_DIRECT 1
 #include <GLES3/gl3.h> /* GLES3 entry points LINK directly; no loader */
+#elif defined(__APPLE__)
+/* Apple ships no GL/glcorearb.h: the 3.2 core profile lives in
+ * <OpenGL/gl3.h>, and its entry points LINK directly against
+ * -framework OpenGL - the same shape as the GLES3 targets above, so this
+ * reuses AME_GL_DIRECT instead of adding a third path (rp_set_gl_loader is
+ * a no-op here exactly as it is on web and Android). Every function in
+ * AME_GL_FUNCS is GL 3.0/3.1 core, which <OpenGL/gl3.h> declares; nothing
+ * in the list needs the 3.3+ names that Apple only exposes as ARB
+ * extensions. This job is COMPILE-ONLY coverage (ci.yml): no runtime claim
+ * is made for Apple.
+ *
+ * GL_SILENCE_DEPRECATION is required on this path and only on this path.
+ * Apple deprecated the whole OpenGL framework in macOS 10.14 and marks every
+ * entry point with __deprecated_msg, so under the project's -Werror the 19
+ * call sites in this file become errors:
+ *   error: 'glCreateShader' is deprecated: first deprecated in macOS 10.14
+ *          [-Werror,-Wdeprecated-declarations]
+ * The macro is the one Apple's own headers suggest ("Define
+ * GL_SILENCE_DEPRECATION to silence these warnings"). It is not a weakening
+ * of -Werror, which stays on for everything else: the deprecation is a
+ * statement about Apple's future SDKs, not a defect in a call, and the
+ * alternative - dropping the GL calls - is not available. It is defined here
+ * rather than in CMakeLists.txt so it cannot leak into the Linux, Windows,
+ * Android or web builds, where these same names resolve through a loader
+ * table to plain function pointers and are not deprecated at all. */
+#define GL_SILENCE_DEPRECATION 1
+#define AME_GL_DIRECT 1
+#include <OpenGL/gl3.h>
+#elif defined(_WIN32) && !defined(__MINGW32__)
+/* Native Windows with MSVC/LLVM: the Khronos headers are not part of the
+ * toolchain or the Windows SDK, so there is no <GL/glcorearb.h> to include -
+ * the runner has only SDL3's own SDL_opengl.h. Using that is not an option:
+ * this file takes an injected proc getter precisely so app_sdl.c owns every
+ * SDL symbol and render.c stays platform-agnostic. So the registry header is
+ * vendored under external/khronos (MIT, unedited, provenance and licence in
+ * external/khronos/README.txt), the same way external/stb is vendored.
+ * MinGW is excluded because its cross sysroot ships GL/ already, and the
+ * windows-cross job compiles this file through the generic path below.
+ * Loader path, not AME_GL_DIRECT: desktop GL entry points are resolved at
+ * runtime through the injected getter on this target, exactly as on Linux. */
+#include "../external/khronos/GL/glcorearb.h"
 #else
 #include <GL/glcorearb.h> /* Khronos core typedefs+enums; fns via loader */
 #endif

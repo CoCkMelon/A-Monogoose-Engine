@@ -19,6 +19,23 @@
 #include <SDL3/SDL_main.h>
 #include "ame/fs.h"
 #include <stdio.h>
+
+/* MSVC's UCRT deprecates bare fopen in favour of fopen_s, which under the
+ * project's -Werror is a hard error on the windows clang job. SDL3 has no
+ * FILE*-returning wrapper to lean on here (SDL_IOFromFile returns an
+ * SDL_IOStream, and the PPM writer below needs fprintf/fputc on a real FILE*),
+ * so this file gets the same thin shim src/fs.c uses. Not
+ * _CRT_SECURE_NO_WARNINGS: defining that globally would hide every genuinely
+ * unsafe use the deprecation exists to flag. */
+#ifdef _WIN32
+static FILE *ame_shot_fopen(const char *path, const char *mode) {
+    FILE *f = NULL;
+    return fopen_s(&f, path, mode) == 0 ? f : NULL;
+}
+#define AME_SHOT_FOPEN(p, m) ame_shot_fopen((p), (m))
+#else
+#define AME_SHOT_FOPEN(p, m) fopen((p), (m))
+#endif
 #include <string.h>
 #include <stdlib.h> /* generates main() -> SDL_App* callbacks */
 
@@ -664,10 +681,19 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
     if (!atomic_load_explicit(&g_run, memory_order_relaxed))
         return SDL_APP_SUCCESS;
     if (g_shot_left < 0) {
-        const char *p = getenv("AME_SHOT_PPM");
+        /* SDL_getenv, not getenv: this file already reads every other AME_*
+         * variable through SDL_getenv (the loop policy, log path, window
+         * geometry, fixed-dt), and MSVC's UCRT deprecates bare getenv in
+         * favour of _dupenv_s, which under the project's -Werror is a hard
+         * error on the windows clang job. Using the SDL wrapper keeps this
+         * file consistent and needs no shim of its own - app_sdl.c is the one
+         * place SDL symbols are allowed, so leaning on SDL here costs nothing,
+         * unlike in src/fs.c or src/render.c where a _WIN32 shim is the price
+         * of staying platform-agnostic. */
+        const char *p = SDL_getenv("AME_SHOT_PPM");
         if (p && p[0]) {
             snprintf(g_shot_path, sizeof g_shot_path, "%s", p);
-            const char *fr = getenv("AME_SHOT_FRAMES");
+            const char *fr = SDL_getenv("AME_SHOT_FRAMES");
             g_shot_left = fr ? (int)SDL_strtol(fr, NULL, 0) : 5;
             if (g_shot_left < 1)
                 g_shot_left = 1;
@@ -711,14 +737,14 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
             uint8_t *rgba = (uint8_t *)malloc((size_t)w * h * 4);
             uint8_t *row = (uint8_t *)malloc((size_t)w * 3);
             if (rgba && row && rp_read_pixels(rgba, w, h)) {
-                FILE *f = fopen(g_shot_path, "wb");
+                FILE *f = AME_SHOT_FOPEN(g_shot_path, "wb");
                 if (f) {
                     fprintf(f, "P6\n%d %d\n255\n", w, h);
                     /* default: flip GL bottom-origin rows to top-down.
                      * AME_SHOT_NOFLIP=1 cancels it for TOP-LEFT-origin
                      * offscreen pbuffers (SDL offscreen + EGL pbuffer),
                      * whose reads already come back top-down. */
-                    int noflip = getenv("AME_SHOT_NOFLIP") != NULL;
+                    int noflip = SDL_getenv("AME_SHOT_NOFLIP") != NULL;
                     for (int y = noflip ? 0 : h - 1;
                          noflip ? y < h : y >= 0;
                          noflip ? y++ : y--) {

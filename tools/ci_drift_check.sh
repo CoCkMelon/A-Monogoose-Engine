@@ -61,7 +61,31 @@ fi
 # must be documented there. Undocumented env vars are hidden state - the
 # exact class state-audit.txt exists to remove - so the table is checked
 # rather than trusted.
-envs=$(grep -rhoE 'getenv\("[A-Z0-9_]+"\)' src/*.c 2>/dev/null \
+# Matches every form the engine actually uses to read an environment variable:
+#   getenv("X")        the plain call
+#   SDL_getenv("X")    src/app_sdl.c, which leans on the SDL wrapper (it always
+#                      did for the loop policy, log path, window geometry and
+#                      fixed-dt; the shot-capture hook joined them when bare
+#                      getenv became a hard -Werror failure under MSVC's UCRT
+#                      deprecation)
+#   AME_GETENV("X")    the _WIN32 shim in src/fs.c, same reason
+# A gate that matched only the bare form silently stopped seeing variables as
+# soon as the call form changed - the count fell from 12 to 11 with no failure,
+# which is precisely how an undocumented env var slips through. Any new wrapper
+# or shim around getenv MUST be added to this pattern in the same change, and
+# the count printed below is the check that it was.
+# The alternation is case-EXPLICIT rather than a blanket -i, because the three
+# forms differ in case: getenv and SDL_getenv are lowercase, the fs.c shim macro
+# is AME_GETENV in capitals. A case-insensitive pattern would also pick up the
+# two "#define AME_GETENV(n)" lines, which is harmless but noise.
+# Read src AT $head, not from the working tree - the docs side below already
+# did (git show "$head:docs/env.txt") and the two must agree on which commit is
+# being judged, or a dirty checkout can pass a gate that the pushed commit
+# fails (and vice versa). git grep with a tree-ish prefixes its output, which
+# the sed strips along with the call syntax. If $head is not a valid object
+# (an all-zero sha on a branch-created push) this yields nothing and the gate
+# passes, matching how the range check at the top of this file already behaves.
+envs=$(git grep -hoE '(SDL_getenv|AME_GETENV|getenv)\("[A-Z0-9_]+"\)' "$head" -- 'src/*.c' 2>/dev/null \
        | sed 's/.*("//; s/")//' | sort -u || true)
 envexists=$(git ls-tree -r --name-only "$head" docs/ | grep -c '^docs/env\.txt$' || true)
 missing=''

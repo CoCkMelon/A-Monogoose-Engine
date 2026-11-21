@@ -1,0 +1,20 @@
+# ThreadSanitizer suppressions - DRIVER FRAMES ONLY.
+#
+# Why this file exists: test_render, under TSan, intermittently reports a race
+# whose frames are entirely inside libgallium - pthread_mutex_destroy on the
+# main thread during GL teardown versus an atomic pthread_mutex_lock by a
+# gallium worker thread. Measured over 20 runs per tree: 1/20 on 417cbd4 and
+# 2/20 on its parent 2850fd6, the same low rate on both, with
+# tests/test_render.c byte-identical between them. Every reported frame is in
+# the driver; the test's own 101 checks pass in every run, including the ones
+# that report. It is a Mesa teardown artifact, not engine code.
+#
+# What must never appear here: an engine symbol, an ame_* symbol, or a test
+# name. In particular src/input.c's registry_add/in_device_info race (issue
+# #12) is a REAL engine data race and must NOT be suppressed - it is fixed by
+# stage S1C, and until then the TSan job excludes that one suite by name
+# (ctest -E '^input$') so the exclusion is visible in the workflow file.
+#
+# Syntax: race:<substring matched against function and module names>.
+race:libgallium
+mutex:libgallium

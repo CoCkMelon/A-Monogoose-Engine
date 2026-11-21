@@ -8,8 +8,16 @@ name: ci
 
 on:
   push:
-    branches: [main, master, agent/ame-next-20260905-4ad0fd06]
+    # ame-next-trunk added 2026-11-21. It is the branch every pipeline stage
+    # targets, and it had ZERO CI runs until PR #11: the trigger list never
+    # named it, so the trunk tip was unverified between pull requests and the
+    # first PR on this lineage (2026-11-20, the first run since 2026-09-09)
+    # inherited two months of untested drift as seven red jobs.
+    branches: [main, master, ame-next-trunk, agent/ame-next-20260905-4ad0fd06]
   pull_request:
+  # On demand: run the matrix against a chosen ref - a baseline for a branch
+  # that has none, or a re-run after a runner-image change.
+  workflow_dispatch:
 
 jobs:
   linux:
@@ -106,13 +114,21 @@ jobs:
         run: |
           git clone --depth 1 --branch release-3.4.16 \
             https://github.com/libsdl-org/SDL.git /tmp/sdl3
-          cmake -S /tmp/sdl3 -B /tmp/sdl3-android -G Ninja \
+          # Build dir NESTED under the source dir, like the three recipes that
+          # already work (the linux, asan and tsan jobs all use /tmp/sdl3/build).
+          # SDL3 passes its GENERATED include-revision/SDL3/SDL_revision.h to
+          # sdl_source_group(), which requires every file to sit under the source
+          # prefix; a sibling build dir fails configure with
+          #   source_group "/tmp/sdl3" is not a prefix of file
+          #   "/tmp/sdl3-android/include-revision/SDL3/SDL_revision.h"
+          # The install prefix stays where the cross build below expects it.
+          cmake -S /tmp/sdl3 -B /tmp/sdl3/build -G Ninja \
             -DCMAKE_TOOLCHAIN_FILE=$RUNNER_TEMP/android-ndk-r27c/build/cmake/android.toolchain.cmake \
             -DANDROID_ABI=x86_64 -DANDROID_PLATFORM=android-26 \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_INSTALL_PREFIX=/tmp/sdl3-android-prefix -DSDL_TESTS=OFF
-          cmake --build /tmp/sdl3-android
-          cmake --install /tmp/sdl3-android
+          cmake --build /tmp/sdl3/build
+          cmake --install /tmp/sdl3/build
       # build-only: the SAME C23 sources must COMPILE+LINK for android
       # (handoff NEXT ACTIONS 3). Games are SHARED libs exporting
       # SDL_main (activity model); tests/benches stay host-side.
@@ -201,7 +217,15 @@ jobs:
           cmake -S . -B build -G Ninja -DCMAKE_C_COMPILER=clang-19 \
             -DCMAKE_BUILD_TYPE=Debug -DAME_ENABLE_ASAN=ON
           cmake --build build
-          ctest --test-dir build --output-on-failure
+          # LeakSanitizer stays ON. The suppression file names only
+          # uninstrumented driver libraries: on this runner's Mesa (26.0.8)
+          # test_render_2d prints "all 23 checks passed" and then LSan reports
+          # leaks whose every frame is inside libEGL_mesa / libgallium. The same
+          # sources on Mesa 25.0.7 report zero leaks with detection enabled, so
+          # this is runner-environment specific. Suppressing driver frames keeps
+          # engine leaks visible, which ASAN_OPTIONS=detect_leaks=0 would not.
+          LSAN_OPTIONS=suppressions=$GITHUB_WORKSPACE/tools/lsan_suppressions.txt \
+            ctest --test-dir build --output-on-failure
 
   package:
     name: linux (package stage-0 unit, deploy.txt)
@@ -255,14 +279,29 @@ jobs:
           sudo cmake --install /tmp/sdl3/build
           rm -rf /tmp/sdl3
 
-      - name: test_snap + test_pool under TSan
+      - name: full suite under TSan (driver frames suppressed)
         run: |
           cmake -S . -B build -G Ninja -DCMAKE_C_COMPILER=clang-19 \
             -DCMAKE_BUILD_TYPE=Debug \
             -DCMAKE_C_FLAGS="-fsanitize=thread -fno-omit-frame-pointer -g -O1"
-          cmake --build build --target test_snap test_pool
-          ./build/tests/test_snap
-          ./build/tests/test_pool
+          cmake --build build
+          # WIDENED from "test_snap + test_pool only". That pair is exactly the
+          # two suites that never touch the device registry, so the one real
+          # engine race TSan can find here - src/input.c registry_add's
+          # update-in-place path versus in_device_info, issue #12 - was never
+          # exercised by this job.
+          # test_input stays EXCLUDED until #12 is fixed (stage S1C, scheduled
+          # next). The exclusion is named rather than silent so it cannot
+          # outlive its reason; when #12 lands, drop -E and the suite joins.
+          # The suppression file covers libgallium frames only: test_render
+          # trips a flaky Mesa teardown race (pthread_mutex_destroy on the main
+          # thread versus a gallium worker's atomic pthread_mutex_lock),
+          # measured over 20 runs per tree at 1/20 on 417cbd4 and 2/20 on its
+          # parent 2850fd6 - the same low rate on both, with tests/test_render.c
+          # byte-identical between them, so it is a driver artifact and not
+          # engine code.
+          TSAN_OPTIONS=suppressions=$GITHUB_WORKSPACE/tools/tsan_suppressions.txt \
+            ctest --test-dir build --output-on-failure -E '^input$'
 
   clean-smoke:
     name: "linux (CLEAN machine: packaged unit smoke)"
@@ -312,24 +351,78 @@ jobs:
       - uses: ilammy/msvc-dev-cmd@v1
       - name: toolchain
         shell: pwsh
+        # No freetype here, and that is deliberate - see the configure step's
+        # -DAME_FONT_FROM_COMMITTED=ON below. (choco has no `freetype` package
+        # at all: "freetype not installed. The package was not found with the
+        # source(s) listed.", so the obvious fix is not available.)
         run: choco install llvm ninja -y --no-progress
       - name: SDL3 from source
         shell: pwsh
         run: |
           git clone --depth 1 --branch release-3.4.16 https://github.com/libsdl-org/SDL.git $env:RUNNER_TEMP/sdl3
-          cmake -S $env:RUNNER_TEMP/sdl3 -B $env:RUNNER_TEMP/sdl3-build -G Ninja `
+          # nested build dir: see the android-cross job for why a sibling dir fails
+          cmake -S $env:RUNNER_TEMP/sdl3 -B $env:RUNNER_TEMP/sdl3/build -G Ninja `
             -DCMAKE_BUILD_TYPE=Release -DSDL_TESTS=OFF -DSDL_EXAMPLES=OFF
-          cmake --build $env:RUNNER_TEMP/sdl3-build
-          cmake --install $env:RUNNER_TEMP/sdl3-build --prefix $env:RUNNER_TEMP/sdl-prefix
+          cmake --build $env:RUNNER_TEMP/sdl3/build
+          cmake --install $env:RUNNER_TEMP/sdl3/build --prefix $env:RUNNER_TEMP/sdl-prefix
       - name: configure + compile engine
         shell: pwsh
         run: |
-          cmake -S . -B build -G Ninja `
-            -DCMAKE_C_COMPILER=clang `
-            -DCMAKE_PREFIX_PATH=$env:RUNNER_TEMP/sdl-prefix `
-            -DAME_BUILD_EXAMPLES=OFF -DAME_BUILD_TESTS=OFF `
-            -DAME_BUILD_BENCHES=OFF -DAME_BUILD_ASYNCINPUT_GAME=OFF `
-            -DCMAKE_BUILD_TYPE=Debug
+          # -DAME_FONT_FROM_COMMITTED=ON: this job's purpose is that the SAME
+          # C23 engine sources COMPILE natively for Windows (examples, tests and
+          # benches are already OFF). The host font bakers are not part of that
+          # claim - they are build-time tools, and the arrays they produce are
+          # COMMITTED, which is exactly why a cross build can skip them.
+          # This job builds NATIVELY, so CMAKE_CROSSCOMPILING is FALSE and tools/
+          # used to reach find_package(Freetype REQUIRED) for bakers that nothing
+          # here needs. The MinGW-w64 job never hit this because it really is
+          # cross-compiling from ubuntu. The defect was masked until the
+          # sibling-build-dir failure above was fixed, because this job died at
+          # configure and never got here.
+          # -DSDL3_DIR is required on Windows and is not a redundant duplicate
+          # of CMAKE_PREFIX_PATH. SDL3's install layout differs per platform: on
+          # Linux/Android it puts SDL3Config.cmake under <prefix>/lib/cmake/SDL3
+          # (see build-android's cache: SDL3_DIR=/tmp/sdl3-android-prefix/lib/
+          # cmake/SDL3), and <prefix>/lib/cmake/<name> IS one of the subdirs
+          # CMake's prefix search tries. The MSVC-style Windows install instead
+          # puts it in <prefix>/cmake/ with no <name> subdir - the log shows
+          # "Installing: D:/a/_temp/sdl-prefix/cmake/SDL3Config.cmake" - and
+          # <prefix>/cmake is NOT in that list, so find_package(SDL3 REQUIRED)
+          # fails with "Could not find a package configuration file provided by
+          # SDL3" even though the file is on disk. Naming the directory directly
+          # removes the guesswork; PREFIX_PATH stays for headers and the import
+          # library.
+          # Written as ONE line on purpose. -DSDL3_DIR=<prefix>/cmake is the
+          # fix (SDL3's MSVC-style install puts SDL3Config.cmake directly in
+          # <prefix>/cmake, and <prefix>/cmake is not one of the subdirs CMake's
+          # prefix search tries - unlike <prefix>/lib/cmake/<name>, which is why
+          # the macOS/Linux/Android recipes find it with PREFIX_PATH alone), but
+          # a first attempt passed it on a backtick-continued line and the
+          # runner behaved as though the variable had never been set: the same
+          # "Could not find a package configuration file provided by SDL3"
+          # error, with no mention of SDL3_DIR anywhere in CMake's output even
+          # though the echoed command line contained it. Rather than debug
+          # PowerShell line continuation on a runner nobody can inspect
+          # interactively, the whole configure is one line, which has no
+          # continuation to get wrong.
+          # QUOTE the two paths that contain $env:RUNNER_TEMP. This is the fix,
+          # and it is not cosmetic: RUNNER_TEMP is D:\a\_temp on this runner,
+          # and unquoted, cmake received something other than the value
+          # Write-Host printed, so find_package(SDL3) could not see a
+          # SDL3Config.cmake that the same log showed installed at
+          # D:\a\_temp\sdl-prefix\cmake\. Quoted, --debug-find confirms CMake
+          # considers exactly that path and configure succeeds.
+          #
+          # Three earlier hypotheses about this job were wrong and are recorded
+          # so nobody re-derives them: that <prefix>/cmake is outside CMake's
+          # prefix search (it is not - both cmake 3.31.6 and 4.4.5 find a config
+          # there locally, via PREFIX_PATH alone); that PowerShell backtick
+          # continuation dropped the flag (collapsing to one line changed
+          # nothing); and that SDL3's config rejects clang (SDL3Config.cmake.in
+          # has no compiler or ABI guard). The runner answered it in one pass
+          # once the step printed the resolved paths, ran Test-Path, listed the
+          # prefix and passed --debug-find.
+          cmake -S . -B build -G Ninja -DCMAKE_C_COMPILER=clang "-DCMAKE_PREFIX_PATH=$env:RUNNER_TEMP/sdl-prefix" "-DSDL3_DIR=$env:RUNNER_TEMP/sdl-prefix/cmake" -DAME_BUILD_EXAMPLES=OFF -DAME_BUILD_TESTS=OFF -DAME_BUILD_BENCHES=OFF -DAME_BUILD_ASYNCINPUT_GAME=OFF -DAME_FONT_FROM_COMMITTED=ON -DCMAKE_BUILD_TYPE=Debug
           cmake --build build
 
   macos:
@@ -344,11 +437,17 @@ jobs:
       - name: SDL3 from source
         run: |
           git clone --depth 1 --branch release-3.4.16 https://github.com/libsdl-org/SDL.git "$RUNNER_TEMP/sdl3"
-          cmake -S "$RUNNER_TEMP/sdl3" -B "$RUNNER_TEMP/sdl3-build" -G Ninja \
+          # nested build dir, same defect and same fix as android-cross and
+          # the windows job: SDL3's generated SDL_revision.h must sit under the
+          # source prefix or sdl_source_group() fails configure. This was the
+          # THIRD recipe with a sibling dir; it only became visible once the
+          # other two were fixed, because this job died at configure and never
+          # compiled a single engine file.
+          cmake -S "$RUNNER_TEMP/sdl3" -B "$RUNNER_TEMP/sdl3/build" -G Ninja \
             -DCMAKE_BUILD_TYPE=Release -DSDL_TESTS=OFF -DSDL_EXAMPLES=OFF \
             -DCMAKE_INSTALL_PREFIX="$RUNNER_TEMP/sdl-prefix"
-          cmake --build "$RUNNER_TEMP/sdl3-build"
-          cmake --install "$RUNNER_TEMP/sdl3-build"
+          cmake --build "$RUNNER_TEMP/sdl3/build"
+          cmake --install "$RUNNER_TEMP/sdl3/build"
       - name: configure + compile engine
         run: |
           cmake -S . -B build -G Ninja \

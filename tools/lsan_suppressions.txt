@@ -1,0 +1,18 @@
+# LeakSanitizer suppressions - UNINSTRUMENTED DRIVER LIBRARIES ONLY.
+#
+# Why this file exists: the ASan/UBSan CI job runs on a runner whose Mesa
+# (26.0.8, libgallium-26.0.8-1ubuntu0.3) leaves allocations behind at GL
+# teardown. test_render_2d prints "all 23 checks passed" and then LSan reports
+# leaks whose EVERY frame is inside libEGL_mesa.so.0 / libgallium. The same
+# sources on Mesa 25.0.7 report zero leaks with detection enabled, so the
+# reports are a property of the runner's driver, not of this engine.
+#
+# What must never appear here: an engine symbol, an ame_* symbol, a test name,
+# or libSDL3. Suppressing libSDL3 in particular would hide real engine leaks -
+# a texture, window or buffer this engine creates and never destroys is
+# attributed to SDL frames, so it has to stay visible. Leak detection stays ON
+# for everything the engine owns; only the two Mesa libraries are named.
+#
+# Syntax: leak:<substring matched against function and module names>.
+leak:libEGL_mesa
+leak:libgallium

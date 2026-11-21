@@ -31,7 +31,7 @@ be written into a file, a commit, a comment or a log.
        git ls-remote https://github.com/CoCkMelon/A-Monogoose-Engine \
          ame-next-trunk
      and reset --hard onto that sha BEFORE editing anything. Sandboxes
-     are rewound without warning (24 recorded); a rewind also wipes
+     are rewound without warning (26 recorded); a rewind also wipes
      installed packages, build/ and file exec bits, so afterwards run
      chmod +x tools/*.sh web/build.sh. Anything never pushed is gone.
   2. Install the build dependencies: the exact apt list is in
@@ -53,22 +53,31 @@ be written into a file, a commit, a comment or a log.
   5. End green: build OK, ctest at or above the baseline, the sanitizer
      trees and goldens your brief requires, and
        tools/ci_drift_check.sh HEAD~1 HEAD
-     printing "drift: ok". Then commit and push:
+     printing "drift: ok". Then commit on YOUR OWN BRANCH and open a
+     pull request into ame-next-trunk (recorded 2026-11-20: every stage
+     gets a branch + PR; the verify stage checks it and merges it, so
+     trunk never receives an unverified direct push):
        R=https://github.com/CoCkMelon/A-Monogoose-Engine
-       git push "https://x-access-token:<TOKEN>@${R#https://}" \
-         ame-next-trunk
-     and VERIFY THE REMOTE SHA THROUGH THE BRANCHES API afterwards -
-     push output alone is not proof, and a push made while HEAD was
-     rewound has already published a stale tip once.
-  6. Post your stage report as a comment in your issue (<TOKEN> works
-     for the API too), and set your stage's STATUS line in
-     docs/agent-sequence.txt in the same commit as the work.
+       A=https://x-access-token:<TOKEN>@github.com/CoCkMelon/A-Monogoose-Engine
+       git checkout -b s<N>-<slug>            # off the remote tip
+       git commit -am "<stage>: <what landed>"
+       git push "$A" s<N>-<slug>
+     Verify the branch sha through the API afterwards - push output
+     alone is not proof, and a push made while HEAD was rewound has
+     already published a stale tip once. The <TOKEN> goes in the push
+     URL and the API header ONLY: never in .git/config, a credential
+     file, a commit, a comment, a doc or a log.
+  6. Open the pull request into ame-next-trunk, then post your stage
+     report as a comment in your issue (<TOKEN> works for the API too),
+     and set your stage's STATUS line in docs/agent-sequence.txt in the
+     same commit as the work. The verify stage merges the PR; you do
+     not merge your own.
 
 =====================================================================
 RULES FOR EVERY STAGE
 =====================================================================
 1. The remote branch ame-next-trunk is the source of truth. Sandboxes
-   are rewound without warning (23 recorded): fetch, compare the tip,
+   are rewound without warning (26 recorded): fetch, compare the tip,
    and reset --hard onto the remote tip BEFORE working. Local commits
    that were never pushed are gone after a rollback.
 2. Dependencies vanish with the sandbox. Reinstall list is in the hub
@@ -91,8 +100,13 @@ RULES FOR EVERY STAGE
    re-runs the previous stage's claims with the same commands, and
    either confirms them with numbers or files the defect in the issue.
    Fixing a defect it finds is in scope; growing scope is not.
-7. Update this file: every stage has a STATUS line, set by the agent
-   that finishes it, in the same commit as the work.
+7. Update this file: every stage has a STATUS line. The BUILD agent
+   sets done in the same commit as the work; the VERIFY agent that
+   checks it fills in the sha (done(<sha>)) once it has confirmed the
+   merge, because the build agent cannot know its own merge commit
+   before the merge happens (amended 2026-11-21 after S1, which shipped
+   "STATUS done" with no sha and left the table unable to answer "which
+   commit is that?").
 8. Never run two stages that touch the same files concurrently. S10 is
    the only stage with tree-wide reach into render.c and every example;
    it gets the lane to itself.
@@ -183,7 +197,11 @@ W1 ONE FRESH AGENT PER STAGE, PLANNED ORDER KEPT.
 kind: B=build, V=verify, M=measure.  STATUS: todo / doing / done(sha)
 
 S1  B  #6  leanness 1: optional callbacks, loud diagnostics, dead-math,
-                     census follow-through                    STATUS done
+                     census follow-through             STATUS done(417cbd4)
+S1B B  #3  CI repair: the 5 inherited job failures, TSan coverage,
+                     trunk trigger                          STATUS done
+S1C B  #12 the src/input.c device-name race (registry_add's
+                     update-in-place path)                     STATUS todo
 S2  V  #6  verify S1                                           STATUS todo
 S3  B  #6  leanness 2: value constructors (camera 101, desc 70,
                      text 29) + goldens                        STATUS todo
@@ -230,6 +248,31 @@ S30 B  #4  WP11/12 polish + release tag                        STATUS todo
 STAGE BRIEFS
 =====================================================================
 
+GOLDEN SET = 9 EXAMPLES, AND TWO OF THEM NEED A PROVISION.
+  audio_opus audio_pan audio_ray biscuit line_draw memory_game
+  raymarch_arcade text_editor tilemap_render
+  Briefs written before 2026-11-21 said "8 rendering examples". Nine
+  examples draw. The ninth, audio_opus, exits before rendering anything
+  unless it is given an Opus file, which is why S1's run captured 8.
+  Provisions, both measured during the S1 audit:
+    tilemap_render  run it with cwd = its own build directory; it reads
+                    sample.tmj relative to cwd, and CMake copies the
+                    file next to the binary.
+    audio_opus      set AME_OPUS=<path>. The repo ships no .opus file;
+                    extract one from the committed baked array in
+                    tests/assets/baked_sine_opus.h (10892 bytes there).
+  Capture recipe, per example, from build/examples/<name>/:
+    env SDL_VIDEODRIVER=offscreen SDL_AUDIO_DRIVER=dummy \
+        LIBGL_ALWAYS_SOFTWARE=1 AME_WINDOW_W=960 AME_WINDOW_H=540 \
+        AME_FIXED_FRAME_DT=0.0166667 AME_SEED=1 AME_SHOT_FRAMES=40 \
+        AME_SHOT_NOFLIP=1 AME_SHOT_PPM=out.ppm \
+        timeout -s KILL 30 ./<name>
+  Goldens are PPM (P6). "Killed" from timeout -s KILL is EXPECTED, not
+  a failure: the frame is on disk by AME_SHOT_FRAMES. Compare with cmp
+  against the previous tree, never by eye. Use a SEPARATE build
+  directory per tree - one reused directory makes the two sides
+  indistinguishable.
+
 --- S1 (BUILD, issue #6) API leanness, part 1 -----------------------
 SCOPE
  a) Weak optional callbacks app_event, app_quit, app_resize in BOTH
@@ -266,13 +309,295 @@ MUST NOT  the .pass migration (S10); camera/desc constructors (S3);
 ACCEPTANCE  the 39-line reference app drops to ~33-35 code lines by
   deleting empty hooks only; the 10 app files lose their no-op
   app_event/app_quit where they had nothing to say; ctest >= 32 with
-  new tests for (b) and (c); goldens pixel-identical for all 8
+  new tests for (b) and (c); goldens pixel-identical for all 9
   rendering examples; ASan/UBSan and TSan green (weak symbols and
   bootstrap startup are thread-adjacent); drift gate ok.
 PROOF  before/after line counts of the reference app and of
   templates/game/main.c; the loud-failure message text; the golden
   diff summary; the three ctest numbers.
 ESTIMATE  1-2 turns.
+
+--- S1B (BUILD, issue #3) CI repair ---------------------------------
+Added 2026-11-21. PR #11 was the first CI run on this lineage since
+2026-09-09, because on.push.branches never named ame-next-trunk. It came
+back 7 of 13 jobs red. All seven failures were INHERITED - none is in
+S1's diff - but a red pipeline is not a green baseline for S3 onward, so
+this stage lands before any feature work resumes.
+SCOPE
+ D1 web: web/build.sh hand-maintained an ENGINE= source list that
+    claimed to match the desktop glob and did not. Six src/ modules were
+    missing (time.c, fs.c, mesh.c, obj.c, prefab.c, debug_watch.c);
+    wasm-ld failed on the five symbols from time.c. DERIVE the list from
+    src/*.c minus a named, reasoned exclusion set instead of listing it.
+ D2 macOS: src/render.c includes <GL/glcorearb.h>, which Apple does not
+    ship. Add an __APPLE__ branch to that include block using
+    <OpenGL/gl3.h> and the existing AME_GL_DIRECT path (every function in
+    AME_GL_FUNCS is GL 3.0/3.1 core, which that header declares). Touch
+    the include block only - S10 owns render.c logic.
+ D3 MinGW cross + package: src/error.c trips GCC's -Wformat-truncation
+    at -O3 with -Werror at two sites (r->detail and g_last.detail).
+    Bound the conversion explicitly with "%.*s" and (int)sizeof - 1.
+    Do NOT add -Wno-format-truncation and do NOT weaken -Werror.
+ D4 android NDK + windows clang + macOS: SDL3's generated SDL_revision.h
+    must sit under the source prefix, so a SIBLING build dir fails
+    configure ("source_group ... is not a prefix of ...") and ninja then
+    cannot load build.ninja. THREE recipes had this, not two - macOS as
+    well - and the third only became visible after the first two were
+    fixed, because that job died at configure and never compiled a single
+    engine file. Check every `cmake -S <sdl3> -B <dir>` in the file, not
+    just the jobs whose names appear in a failure list.
+ D8 windows clang: that job builds NATIVELY on windows-latest, so
+    CMAKE_CROSSCOMPILING is FALSE and tools/CMakeLists.txt reaches
+    find_package(Freetype REQUIRED) for the host font bakers. The runner
+    has no FreeType, so configure fails with "Could NOT find Freetype".
+    The MinGW-w64 job does not hit this: it really is cross-compiling from
+    ubuntu, so tools/ gates itself off and compiles the COMMITTED generated
+    arrays. This was masked until D4 was fixed, because the job previously
+    died earlier.
+    THE OBVIOUS FIX IS NOT AVAILABLE: chocolatey has no `freetype` package
+    ("freetype not installed. The package was not found with the source(s)
+    listed."), so it cannot be added to the toolchain step. The real fix is
+    to make the committed-arrays path an explicit opt-in
+    (-DAME_FONT_FROM_COMMITTED=ON, gate widened from
+    `if(CMAKE_CROSSCOMPILING)` to `if(CMAKE_CROSSCOMPILING OR
+    AME_FONT_FROM_COMMITTED)`) and have this job pass it. The job's claim is
+    that the ENGINE's C23 sources compile natively for Windows - examples,
+    tests and benches are already OFF - and the host bakers are build-time
+    tools outside that claim, which is the same reasoning that lets a cross
+    build skip them. Opt-in, not a silent fallback: a normal desktop build
+    still requires FreeType and still re-bakes when a font or a baker
+    changes. Prove it with an A/B, because FreeType being installed locally
+    makes the ON case look like it worked for the wrong reason:
+    -DCMAKE_DISABLE_FIND_PACKAGE_Freetype=ON with the option ON builds clean;
+    with the option OFF it fails at tools/CMakeLists.txt find_package.
+ D5 linux ASan: LeakSanitizer reports leaks whose every frame is in
+    libEGL_mesa / libgallium AFTER the test prints "all 23 checks
+    passed". Add tools/lsan_suppressions.txt naming those two libraries
+    and pass it via LSAN_OPTIONS. Leak detection stays ON for engine
+    code; never suppress libSDL3 and never set detect_leaks=0 wholesale.
+ D6 TSan coverage: the job built and ran only test_snap and test_pool -
+    the two suites that cannot reach the device registry. Widen it to the
+    full ctest run, suppress libgallium frames via
+    tools/tsan_suppressions.txt, and EXCLUDE test_input until issue #12
+    is fixed, with #12 named in ci.yml so the exclusion is visibly
+    temporary.
+ D7 governance: add ame-next-trunk to on.push.branches, plus
+    workflow_dispatch, so the trunk tip is verified between PRs.
+MAY TOUCH  web/build.sh; src/render.c (include block only); src/error.c
+  (the two snprintf sites); .github/workflows/ci.yml; the two new
+  tools/*_suppressions.txt; docs/agent-sequence.txt.
+MUST NOT  fix issue #12 (that is S1C - engine code, its own PR); change
+  the public API shape or app hooks (S1/S3 lanes); change render.c logic
+  or the sort key (S10); add a suppression naming any engine symbol, any
+  ame_* symbol, any test name or libSDL3; regenerate and commit
+  docs/games/*.js as a side effect (they are publishing artifacts owned
+  by pages.yml, and a toolchain-version churn diff is not reviewable).
+ACCEPTANCE  all 13 CI jobs green on the PR, OR each remaining red job
+  explained with evidence quoted from its log; test_input excluded by
+  name with #12 referenced in ci.yml; drift gate ok; ctest >= 33.
+RESULT (measured on PR #13, run 44900979371): 11 of 13 jobs green, up from
+  6 of 13. D1, D3, D5, D6 and D7 are CONFIRMED FIXED BY CI. The two
+  remaining red jobs are macOS and windows clang, and both are new
+  information rather than leftovers: macOS turned out to have the same D4
+  sibling-build-dir defect (D4c), and windows clang, once it could finally
+  get past configure, revealed D8. Both are fixed in the same branch.
+  D2's status is still UNTESTED: the macOS job has never compiled a single
+  engine file, so no run has yet reached src/render.c on Apple.
+
+UPDATE after the D4c fix landed (run 44902108301): macOS got past configure
+  and compiled 260 engine files, so D2 IS NOW CONFIRMED - the <OpenGL/gl3.h>
+  branch works, and the original "GL/glcorearb.h file not found" is gone. It
+  exposed one further Apple-only defect, D9: Apple deprecated the whole
+  OpenGL framework in macOS 10.14 and marks every entry point with
+  __deprecated_msg, so under -Werror the 19 GL shader/program call sites in
+  src/render.c become errors. Fixed with GL_SILENCE_DEPRECATION, defined
+  inside the __APPLE__ include branch only - the macro Apple's own headers
+  suggest - so it cannot leak into the Linux, Windows, Android or web builds,
+  where those same names resolve through a loader table to plain function
+  pointers and are not deprecated at all. This is not a weakening of -Werror,
+  which stays on for everything else.
+ D9 macOS (found only after D2 could be reached): as above.
+ D10 windows clang: find_package(SDL3 REQUIRED) failed although the SDL3
+    install step succeeded and the log showed it writing
+    D:\a\_temp\sdl-prefix\cmake\SDL3Config.cmake. THE CAUSE WAS UNQUOTED
+    PowerShell ARGUMENTS: $env:RUNNER_TEMP is D:\a\_temp, and unquoted,
+    cmake received something other than what Write-Host printed. Quoting both
+    -D arguments fixed it; --debug-find then confirmed CMake considers exactly
+    that path and configure succeeds. -DSDL3_DIR is kept (harmless, explicit).
+    Three wrong hypotheses are recorded in ci.yml so nobody re-derives them:
+    that <prefix>/cmake is outside CMake's prefix search (it is not - cmake
+    3.31.6 and 4.4.5 both find a config there locally via PREFIX_PATH alone),
+    that backtick continuation dropped the flag (one line changed nothing),
+    and that SDL3's config rejects clang (SDL3Config.cmake.in has no compiler
+    or ABI guard). LESSON: when a runner disagrees with a local reproduction,
+    make the runner print the resolved values instead of guessing a fourth
+    time - one diagnostic pass (Write-Host the paths, Test-Path the file, list
+    the prefix, cmake --debug-find) settled it.
+ D11 windows clang (found only after D10 could be reached): MSVC's UCRT marks
+    strncpy and fopen deprecated, which under -Werror is a hard error:
+    'strncpy' is deprecated ... Consider using strncpy_s instead
+    [-Werror,-Wdeprecated-declarations]. Two engine call sites:
+    src/debug_watch.c:43 and src/fs.c (two fopen calls).
+    strncpy: replaced by memcpy of an explicitly clamped length plus an
+    explicit terminator, ONE path for all platforms - keeping strncpy for
+    POSIX is not available either, because with a strlen-derived bound gcc
+    reports -Werror=stringop-truncation ("specified bound depends on the
+    length of the source argument"). So strncpy is out on both sides, for
+    different reasons, and the single memcpy path is warning-clean everywhere.
+    fopen: a _WIN32 shim (fopen_s wrapped to keep the POSIX shape) matching the
+    AME_MKDIR/AME_STAT shims already in fs.c, with plain fopen on the POSIX
+    branch where it is not deprecated.
+    NOT _CRT_SECURE_NO_WARNINGS: defining that globally would hide every
+    genuinely unsafe use the deprecation exists to flag, and this project's
+    rule is thin per-platform shims, one C codebase.
+    ALSO in this class, found in the same pass: getenv is deprecated too
+    (_dupenv_s), hitting src/fs.c:119 (AME_PREF_PATH) and the shot-capture
+    hook in src/app_sdl.c. fs.c gets an AME_GETENV shim - _dupenv_s returns a
+    caller-owned copy that must be free()d, so it cannot stand in for getenv's
+    borrowed pointer without changing the call site's lifetime contract, and
+    the value is read and copied out, never retained. app_sdl.c switches to
+    SDL_getenv, which it already used for every other AME_* variable, and to a
+    local AME_SHOT_FOPEN shim for its fopen (SDL3 has no FILE*-returning
+    wrapper; SDL_IOFromFile returns an SDL_IOStream and the PPM writer needs
+    fprintf/fputc on a real FILE*).
+ D12 windows clang: with configure and the CRT deprecations fixed, the job
+    reached src/render.c and failed with "fatal error: 'GL/glcorearb.h' file
+    not found" - the SAME error class as D2 on macOS, from the opposite cause.
+    Native Windows with LLVM/MSVC ships no Khronos GL headers at all; the
+    runner had only SDL3's own SDL_opengl.h. Every other target gets the
+    declarations from its toolchain (Linux libgl-dev, the NDK and emscripten
+    sysroots via GLES3/gl3.h, Apple via OpenGL/gl3.h, and the MinGW cross
+    sysroot, which is why the windows-cross job was always green).
+    Using SDL3's header is NOT an option: render.c takes an injected proc
+    getter precisely so app_sdl.c owns every SDL symbol and render.c stays
+    platform-agnostic, and CI greps examples/ for SDL_ to hold that line. So
+    the Khronos registry headers are VENDORED under external/khronos
+    (glcorearb.h + the KHR/khrplatform.h it includes; both MIT, copied
+    verbatim from libgl-dev, provenance and licence recorded in
+    external/khronos/README.txt), the same way external/stb is vendored, and
+    a new _WIN32 && !__MINGW32__ branch in render.c includes them. Loader
+    path, not AME_GL_DIRECT: desktop GL entry points still resolve at runtime
+    through the injected getter on Windows, exactly as on Linux.
+    Verified locally as far as a Linux box can: the vendored header compiles
+    clean under -Wall -Wextra -Werror and supplies all 64 PFNGL*PROC typedefs
+    in AME_GL_FUNCS plus every GL type render.c names. That is not a Windows
+    compile and is not claimed as one.
+ D13 the drift gate itself: tools/ci_drift_check.sh grepped only bare
+    getenv("X"), so the moment D11 moved calls to SDL_getenv and AME_GETENV
+    the gate STOPPED SEEING THEM - the documented count fell from 12 to 11 and
+    it still printed "drift: ok". A gate that silently narrows when the code
+    changes shape is worse than no gate. The pattern now matches all three
+    forms, case-explicit (getenv and SDL_getenv lowercase, AME_GETENV capital),
+    and the count is back to 12 with AME_PREF_PATH recovered.
+    BOTH negative paths were tested, because a widened grep proves nothing
+    until it fails when it should: an undocumented AME_GETENV variable and an
+    undocumented SDL_getenv variable each produce "ENV FAIL ... missing from
+    docs/env.txt". Any new wrapper or shim around getenv must be added to that
+    pattern in the same change.
+ D14 MinGW cannot LINK _dupenv_s - a direct consequence of D11's AME_GETENV.
+    The windows-cross job, green since the branch opened, went red the moment
+    the shim landed: four examples failed with
+      libame_2d.a(fs.c.obj):fs.c:(.text+0x1ce): undefined reference to
+      `__imp__dupenv_s'
+    MinGW-w64's headers DECLARE _dupenv_s, so it compiles clean; its default
+    msvcrt runtime does not EXPORT it, so every executable that links the
+    engine fails. A deprecation shim is a COMPILER problem and this was a
+    RUNTIME-LIBRARY problem - two different things that happen to share the
+    symbol name, and only the second one is visible at link time.
+    Fix: gate AME_GETENV with the same _WIN32 && !__MINGW32__ predicate D12
+    uses, so MinGW takes plain getenv. That is not a compromise: MinGW's gcc
+    never deprecated getenv in the first place, so there is no warning to
+    satisfy there. _dupenv_s was only ever needed by MSVC's UCRT.
+    The asymmetry with AME_FOPEN is the instructive part and was verified
+    rather than assumed: fopen_s DOES link under MinGW, which is exactly why
+    the fopen shim committed earlier left this job green and only the getenv
+    shim broke it. Reproduced locally with x86_64-w64-mingw32-gcc 14-win32 -
+    a four-line program calling _dupenv_s fails to link with the byte-identical
+    CI message, the same program calling fopen_s links fine, and after the gate
+    src/fs.c compiles clean under MinGW with zero dupenv imports and a plain
+    Ugetenv. The CI log listed _dupenv_s as the ONLY undefined reference (4
+    occurrences, one per failing example), so nothing hides behind it.
+ D15 the vendored header needs its own directory on the include path - a
+    direct consequence of D12. glcorearb.h line 63 does
+      #include <KHR/khrplatform.h>
+    with ANGLE brackets, which searches the -I paths only and never the
+    including file's own directory. On Linux that resolves from /usr/include;
+    on the windows runner there is no system KHR directory at all, so the
+    vendored glcorearb.h could not find the vendored khrplatform.h sitting
+    beside it:
+      external/khronos/GL/glcorearb.h:63:10: fatal error:
+      'KHR/khrplatform.h' file not found
+    Hand-editing the vendored header to a relative include was rejected - it is
+    upstream Khronos text copied verbatim, and a local edit breaks the
+    provenance recorded in external/khronos/README.txt and every future refresh
+    of it. Fix: CMakeLists.txt adds external/khronos to the engine target's
+    include path, guarded by if(WIN32 AND NOT MINGW).
+    The guard matters more than the fix. Verified by exporting
+    compile_commands.json on Linux: of the 2 entries that compile src/render.c,
+    ZERO carry -Iexternal/khronos, and a preprocessor trace still shows Linux
+    resolving /usr/include/GL/glcorearb.h. Every other target keeps compiling
+    against the exact headers its own toolchain ships; only the one target on
+    the one platform that has no Khronos headers gets the vendored root.
+    Verified the mechanism locally: with -Iexternal/khronos, a TU including the
+    vendored glcorearb.h compiles clean under -Wall -Wextra -Werror and the
+    dependency file shows khrplatform.h resolving to
+    external/khronos/KHR/khrplatform.h, not /usr/include/KHR.
+ LESSON across D14 and D15, and it generalises past this repo: a fix aimed at
+   one platform is a CHANGE to every platform that shares the predicate.
+   #ifdef _WIN32 is not "MSVC" - MinGW matches it too, and the two disagree on
+   both which deprecations exist and which CRT symbols their runtime exports.
+   Likewise a header vendored for one platform still has to resolve its OWN
+   includes there, which a relative include from the .c file does not arrange.
+   Both were invisible to every local check available when D11 and D12 were
+   written, because Linux matches neither predicate. The cheap insurance that
+   catches them: after adding a platform shim, compile the affected file under
+   EVERY toolchain that shares the predicate, and for a link-time symbol,
+   actually LINK something rather than only compiling it.
+  A pattern worth naming, and the depth here is worth stating exactly because
+  the first draft of this paragraph said "three layers" and was wrong: fixing
+  one failure reveals the next defect behind it. The windows clang job alone
+  ran SEVEN deep - sibling build dir -> host FreeType -> SDL3 config layout ->
+  strncpy -> getenv -> missing Khronos headers -> the vendored header's own
+  include path - and the windows-cross job then added an eighth (D14) caused by
+  the fix for the fifth. macOS ran two (sibling build dir -> GL deprecation).
+  A job that dies at configure tells you about exactly one defect, and a job
+  that dies at compile tells you about exactly one more, so "the job is red" is
+  never a count of the defects in it. Budget for the chain, not the head of it.
+PROOF  D3 locally under gcc with the project's exact flags
+  (-std=c23 -O3 -Wall -Wextra -Werror, a real -c, -Igenerated): clang
+  does not implement -Wformat-truncation, so a green clang job proves
+  nothing about the GCC jobs, and -O2 does not reproduce it. D1 locally
+  with emsdk if emcc is installable, else CI. D2/D4/D5 CI only: no Apple
+  runner, no NDK parity and the local Mesa differs from the runner's
+  (25.0.7 here, 26.0.8 there), so D5's leak does not reproduce locally.
+ESTIMATE  1-2 turns.
+
+--- S1C (BUILD, issue #12) the input device-name race ----------------
+Added 2026-11-21, sequenced immediately after S1B and before S3.
+Issue #12 is the one real engine defect the S1 audit found: in
+src/input.c, registry_add's UPDATE-IN-PLACE path (reusing a slot whose
+dev_present is already 1) rewrites dev_name with a plain memcpy while
+in_device_info copies it out; the release/acquire pair on dev_present
+only orders a slot's FIRST write, and the trailing release store on the
+update path is a no-op. Result: a torn device name. Bounded by
+AME_DEV_NAME_MAX, so not an out-of-bounds write, but a real data race.
+Reachable by hotplug re-announce, a name change, or remove-then-add
+churn. Four candidate fixes are tabulated in #12; a per-slot seqlock
+matching the existing AME_SNAP_DEFINE / AME_SNAP_FENCE idiom keeps the
+lock-free read path this module was built for.
+SCOPE  fix the race; keep the registry's read path lock-free; keep the
+  public shape of include/ame/input.h.
+MAY TOUCH  src/input.c, include/ame/input.h if a seqlock field is
+  needed, tests/test_input.c.
+MUST NOT  add a mutex around the read path (it is the module's point);
+  widen scope into input semantics; touch CI again (S1B's job).
+ACCEPTANCE  test_input under TSan: 5 of 5 runs report ZERO warnings
+  (was 5 of 5 reporting 2 warnings, with all 97 checks still passing);
+  ctest >= 33; then remove the -E '^input$' exclusion from ci.yml and
+  let the widened TSan job run the suite.
+PROOF  the TSan run counts before and after; the full TSan ctest with
+  test_input included; the goldens for the input-driven examples.
+ESTIMATE  1 turn.
 
 --- S2 (VERIFY, issue #6) -------------------------------------------
 Rebuild from the remote tip. Re-measure: reference-app line counts,
@@ -310,7 +635,7 @@ MUST NOT  add .pass (S10); add defaults of any kind; change draw order
 ACCEPTANCE  the reference app (window + quad + text + ESC) is <= 30
   code lines and still compiles clean with -Wall -Wextra; ZERO
   remaining camera_desc/rp_desc_* builder calls; ctest >= 32; goldens
-  PIXEL-IDENTICAL for all 8 rendering examples (this stage must not
+  PIXEL-IDENTICAL for all 9 rendering examples (this stage must not
   change a single pixel - it changes how values are stated, not what
   they are); ASan/UBSan and TSan green; drift gate ok.
 PROOF  the reference app source and its line count; the golden diff
@@ -391,9 +716,9 @@ example at once. Nothing else runs concurrently with it.
     struct; an invalid pass FAILS LOUDLY (ae0e465). Migrate all 68
     rp_push_* call sites in the SAME commit. rp_pass_begin stays for
     genuine whole-section passes (custom post, shadow caster pre-pass).
- c) app_render becomes the exception path; the 8 examples keep their
+ c) app_render becomes the exception path; the 9 examples keep their
     output byte-identical.
-ACCEPTANCE  goldens PIXEL-IDENTICAL for all 8 rendering examples (the
+ACCEPTANCE  goldens PIXEL-IDENTICAL for all 9 rendering examples (the
   expected behaviour change is none: every in-app pass selection is
   already paired and balanced, the same measurement that made 81ef8cd
   safe); a named entity from the S6 fixture renders with NO app_render

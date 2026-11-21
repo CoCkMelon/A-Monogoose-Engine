@@ -12,11 +12,70 @@
 #include <sys/stat.h>
 #define AME_MKDIR(p) _mkdir(p)
 #define AME_STAT _stat
+/* MSVC's UCRT deprecates fopen in favour of fopen_s, which under -Werror is a
+ * hard error on the windows clang job. Same reasoning as AME_COPY_N in
+ * debug_watch.c: shim the one call rather than define _CRT_SECURE_NO_WARNINGS,
+ * which would hide every genuinely unsafe use the deprecation exists to flag.
+ * fopen_s wants an extra out-parameter and returns an errno_t, so wrap it to
+ * keep the two call sites unchanged and the POSIX shape intact. */
+static FILE *ame_fopen_shim(const char *path, const char *mode) {
+    FILE *f = NULL;
+    return fopen_s(&f, path, mode) == 0 ? f : NULL;
+}
+#define AME_FOPEN(p, m) ame_fopen_shim((p), (m))
+#ifndef __MINGW32__
+/* MSVC's UCRT deprecates getenv in favour of _dupenv_s, which under -Werror is
+ * a hard error on the windows clang job (src/fs.c:119, reading AME_PREF_PATH).
+ * _dupenv_s returns a CALLER-OWNED COPY that must be free()d, so it cannot
+ * stand in for getenv's borrowed pointer without changing the call site's
+ * lifetime contract - the value here is read, measured with strlen and then
+ * copied out, never retained. Duplicate into a static buffer instead: the
+ * lookup happens once per pref-path resolution, the buffer is bounded, and the
+ * caller still gets a plain const char * it does not own. Not
+ * _CRT_SECURE_NO_WARNINGS, for the reason given at AME_FOPEN.
+ *
+ * NOT RE-ENTRANT, and deliberately so: there is one static buffer, so two
+ * concurrent ame_fs_pref_path() calls on this path would race on it. That is
+ * safe today because pref-path resolution happens once at startup, before any
+ * engine thread exists, and the value is copied out rather than retained. The
+ * POSIX branch below has the same one-value-at-a-time shape (getenv returns a
+ * pointer into the environment block, which a concurrent setenv can
+ * invalidate), so this shim does not make the contract worse - but if
+ * ame_fs_pref_path() ever gains a caller on a worker thread, this needs a
+ * caller-supplied buffer or a lock first. Do not widen the call sites without
+ * fixing it. */
+static char g_env_buf[4096];
+static const char *ame_getenv_shim(const char *name) {
+    char *v = NULL;
+    size_t len = 0;
+    if (_dupenv_s(&v, &len, name) != 0 || !v)
+        return NULL;
+    if (len >= sizeof g_env_buf)
+        len = sizeof g_env_buf - 1;
+    memcpy(g_env_buf, v, len);
+    g_env_buf[len] = '\0';
+    free(v);
+    return g_env_buf;
+}
+#define AME_GETENV(n) ame_getenv_shim((n))
+#else
+/* MinGW-w64 declares _dupenv_s in its headers but its default msvcrt runtime
+ * does not export it, so this file compiles and then every example fails to
+ * link with "undefined reference to `__imp__dupenv_s'". MinGW's gcc does not
+ * deprecate getenv in the first place - that is an MSVC/UCRT rule - so MinGW
+ * takes the plain path, exactly as it did before the shim existed. Note the
+ * asymmetry with AME_FOPEN just above: fopen_s DOES link under MinGW, which is
+ * why the windows-cross job was green with that shim and only this one broke
+ * it. Same _WIN32 && !__MINGW32__ predicate render.c uses for D12. */
+#define AME_GETENV(n) getenv((n))
+#endif
 #else
 #include <sys/stat.h>
 #include <sys/types.h>
 #define AME_MKDIR(p) mkdir((p), 0777)
 #define AME_STAT stat
+#define AME_FOPEN(p, m) fopen((p), (m))
+#define AME_GETENV(n) getenv((n))
 #endif
 
 static ame_fs_ops g_ops; /* zeroed = builtin */
@@ -48,7 +107,7 @@ static int is_abs(const char *p)
 
 static int exists(const char *p)
 {
-    FILE *f = fopen(p, "rb");
+    FILE *f = AME_FOPEN(p, "rb");
     if (!f)
         return 0;
     fclose(f);
@@ -104,7 +163,7 @@ const char *ame_fs_pref_path(void)
     if (g_ops.pref_path)
         base = g_ops.pref_path();
     if (!base || !base[0])
-        base = getenv("AME_PREF_PATH");
+        base = AME_GETENV("AME_PREF_PATH");
     if (!base || !base[0])
         base = "./";
     size_t n = strlen(base);
@@ -209,5 +268,5 @@ FILE *ame_fs_fopen(const char *rel, const char *mode)
         p = ame_fs_write_path(rel, buf, sizeof(buf));
     if (!p)
         return NULL;
-    return fopen(p, mode);
+    return AME_FOPEN(p, mode);
 }

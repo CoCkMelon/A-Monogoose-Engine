@@ -5,7 +5,16 @@
 # Under a CROSS build (e.g. MinGW-w64 CI job) the host bakers cannot run:
 # the generated arrays are COMMITTED, so ame_font below compiles them
 # directly and every bake executable/custom command stays out.
-if(CMAKE_CROSSCOMPILING)
+#
+# AME_FONT_FROM_COMMITTED makes that same path available to a NATIVE build
+# that has no host FreeType and does not need the bakers. The windows clang CI
+# job is exactly that case: its claim is that the engine's C23 sources compile
+# natively for Windows, and the bakers are build-time tools outside that claim.
+# It is an opt-in rather than a silent fallback, so a real desktop build still
+# gets find_package(Freetype REQUIRED) and still re-bakes when a font or a
+# baker changes - the committed arrays are a deliberate choice, never a way for
+# a missing dependency to pass unnoticed.
+if(CMAKE_CROSSCOMPILING OR AME_FONT_FROM_COMMITTED)
     add_library(ame_font STATIC ${CMAKE_SOURCE_DIR}/generated/font_atlas.c)
     set_target_properties(ame_font PROPERTIES EXPORT_NAME font)
     target_include_directories(ame_font PUBLIC

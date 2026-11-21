@@ -10,6 +10,26 @@
 #include <stdio.h>
 #include <string.h>
 
+/* A bounded name copy that is warning-clean on every toolchain this project
+ * builds with, written as one path rather than a platform split.
+ *
+ * MSVC's UCRT marks strncpy deprecated in favour of strncpy_s, and under the
+ * project's -Werror that is a hard error on the windows clang job:
+ *   error: 'strncpy' is deprecated: This function or variable may be unsafe.
+ *          Consider using strncpy_s instead. [-Werror,-Wdeprecated-declarations]
+ * Keeping strncpy for POSIX instead is not available either: once the bound is
+ * derived from strlen(src), gcc reports
+ *   error: 'strncpy' specified bound depends on the length of the source
+ *          argument [-Werror=stringop-truncation]
+ * which is the same class of GCC-only -Werror failure as src/error.c's
+ * format-truncation. So strncpy is out on both sides, for different reasons.
+ *
+ * memcpy of an explicitly clamped length plus an explicit terminator has
+ * exactly the semantics this call wants, is not deprecated anywhere, and
+ * triggers neither warning. No _CRT_SECURE_NO_WARNINGS: suppressing that
+ * globally would hide the genuinely unsafe uses the deprecation exists to
+ * flag. */
+
 typedef struct {
     char name[AME_DEBUG_NAME_MAX];
     const float *f;
@@ -40,8 +60,11 @@ static int watch_add(const char *name, const float *f, const int *i)
     int k = watch_slot(name);
     if (k < 0 || (!f && !i))
         return -1;
-    strncpy(g_watch[k].name, name, AME_DEBUG_NAME_MAX - 1);
-    g_watch[k].name[AME_DEBUG_NAME_MAX - 1] = '\0';
+    size_t nlen = strlen(name);
+    if (nlen > AME_DEBUG_NAME_MAX - 1)
+        nlen = AME_DEBUG_NAME_MAX - 1;
+    memcpy(g_watch[k].name, name, nlen);
+    g_watch[k].name[nlen] = '\0';
     g_watch[k].f = f;
     g_watch[k].i = i;
     g_watch[k].used = true;
