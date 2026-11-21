@@ -432,7 +432,14 @@ jobs:
           Get-ChildItem -Recurse "$env:RUNNER_TEMP/sdl-prefix" -Filter '*.cmake' | Select-Object -First 12 -ExpandProperty FullName
           Write-Host "--- cmake version ---"
           cmake --version
-          cmake -S . -B build -G Ninja -DCMAKE_C_COMPILER=clang -DCMAKE_PREFIX_PATH="$env:RUNNER_TEMP/sdl-prefix" -DSDL3_DIR="$env:RUNNER_TEMP/sdl-prefix/cmake" -DAME_BUILD_EXAMPLES=OFF -DAME_BUILD_TESTS=OFF -DAME_BUILD_BENCHES=OFF -DAME_BUILD_ASYNCINPUT_GAME=OFF -DAME_FONT_FROM_COMMITTED=ON -DCMAKE_BUILD_TYPE=Debug --debug-find-pkgmodule 2>&1 | Select-Object -Last 60
+          # --debug-find-pkgmodule does not exist (cmake 4.5.0: "Unknown
+          # argument"), and it aborted the step before configure ran, so the
+          # previous run produced no CMake output at all. --debug-find is the
+          # real flag and prints every path find_package considers.
+          # Quoting both paths: RUNNER_TEMP is D:\a\_temp, and an unquoted
+          # backslash inside a pwsh argument is the one thing that could make
+          # the value CMake receives differ from the value printed above.
+          cmake --debug-find -S . -B build -G Ninja -DCMAKE_C_COMPILER=clang "-DCMAKE_PREFIX_PATH=$env:RUNNER_TEMP/sdl-prefix" "-DSDL3_DIR=$env:RUNNER_TEMP/sdl-prefix/cmake" -DAME_BUILD_EXAMPLES=OFF -DAME_BUILD_TESTS=OFF -DAME_BUILD_BENCHES=OFF -DAME_BUILD_ASYNCINPUT_GAME=OFF -DAME_FONT_FROM_COMMITTED=ON -DCMAKE_BUILD_TYPE=Debug 2>&1 | Select-String -Pattern 'SDL3|find_package|Searching|CMAKE_PREFIX|CMAKE_SYSTEM_PREFIX|error' | Select-Object -First 80
           cmake --build build
 
   macos:
