@@ -290,9 +290,14 @@ jobs:
           # engine race TSan can find here - src/input.c registry_add's
           # update-in-place path versus in_device_info, issue #12 - was never
           # exercised by this job.
-          # test_input stays EXCLUDED until #12 is fixed (stage S1C, scheduled
-          # next). The exclusion is named rather than silent so it cannot
-          # outlive its reason; when #12 lands, drop -E and the suite joins.
+          # test_input WAS excluded here with -E '^input$' while issue #12 was
+          # open, on the explicit instruction that the exclusion be named rather
+          # than silent so it could not outlive its reason. This branch is the
+          # fix for #12, so the -E comes out and the suite joins: the job now
+          # runs all 33 suites with nothing excluded. Dropping it in the same
+          # change as the fix is the whole point - an exclusion that outlives
+          # its reason is indistinguishable from one that never had a reason,
+          # and the TSan job's coverage quietly stays two suites short.
           # The suppression file covers libgallium frames only: test_render
           # trips a flaky Mesa teardown race (pthread_mutex_destroy on the main
           # thread versus a gallium worker's atomic pthread_mutex_lock),
@@ -301,7 +306,7 @@ jobs:
           # byte-identical between them, so it is a driver artifact and not
           # engine code.
           TSAN_OPTIONS=suppressions=$GITHUB_WORKSPACE/tools/tsan_suppressions.txt \
-            ctest --test-dir build --output-on-failure -E '^input$'
+            ctest --test-dir build --output-on-failure
 
   clean-smoke:
     name: "linux (CLEAN machine: packaged unit smoke)"

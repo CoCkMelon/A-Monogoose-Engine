@@ -7,6 +7,28 @@
 #define IN_CLICK_CAP 32u
 #define IN_CLICK_MASK (IN_CLICK_CAP - 1u)
 
+/* One device-registry row, published through the project's existing seqlock
+ * (AME_SNAP_DEFINE / AME_SNAP_FENCE in ame/ame.h, the same idiom
+ * tests/test_snap.c exercises).
+ *
+ * Why a seqlock and not a plain release/acquire pair: a device row is THREE
+ * values - kind, slot and a 48-byte name - and only the name is multi-byte.
+ * A release store on dev_present orders the writes that precede it, but it
+ * says nothing about a row that is ALREADY published. registry_add reuses a
+ * slot whose dev_present is already 1 whenever the same (kind, slot) is
+ * announced again - a hotplug re-announce, a name change, or remove-then-add
+ * churn - and on that path the name is rewritten in place while the trailing
+ * release store is a no-op, so a concurrent in_device_info() memcpy can read
+ * half the old name and half the new one. Bounded by AME_DEV_NAME_MAX, so
+ * never out of bounds, but torn, and TSan reports it (issue #12).
+ *
+ * Publishing the whole row as one snapshot makes tearing impossible: the
+ * reader copies to a temporary and validates the version counter, so it
+ * either sees the entire previous row or the entire new one, never a mix.
+ * The read path stays LOCK-FREE - that is the point of this module - and the
+ * retry loop is bounded at 64 attempts by the macro. */
+AME_SNAP_DEFINE(ame_input_device)
+
 typedef struct {
     /* shared: written by the input backend thread(s), read by logic.
      * exactly ONE backend feeds any given key/button atomic. */
@@ -65,21 +87,29 @@ typedef struct {
     _Atomic uint64_t sens_ts[AME_SENSOR_COUNT];
     _Atomic uint8_t  sens_on[AME_SENSOR_COUNT];
 
-    /* device registry: backend writes; the present flag publishes the
-     * row (name bytes land BEFORE it, release/acquire pairs below) */
-    _Atomic uint8_t dev_present[AME_DEV_MAX];
-    _Atomic int32_t dev_kind[AME_DEV_MAX], dev_slot[AME_DEV_MAX];
-    char            dev_name[AME_DEV_MAX][AME_DEV_NAME_MAX];
+    /* device registry: backend writes; the present flag publishes the row.
+     * The row itself (kind + slot + name) goes through the seqlock above so
+     * an update-in-place cannot be read torn - see ame_input_device_snap. */
+    _Atomic uint8_t        dev_present[AME_DEV_MAX];
+    ame_input_device_snap  dev_row[AME_DEV_MAX];
 } input_state;
 
 static const ame_input_backend *g_backend;
 
 static void registry_add(int kind, int slot, const char *name);
+static bool registry_row_is(int i, int kind, int slot);
 
 static input_state S;
 
 void in_reset(void) {
     memset(&S, 0, sizeof S);
+    /* The memset above already zeroes each seqlock gate (version 0 = "not
+     * mid-publish"), but initializing through the macro is what both other
+     * AME_SNAP_DEFINE users do (tests/test_snap.c, tests/test_math.c), and it
+     * keeps the invariant stated where the rows are reset rather than implied
+     * by a byte pattern. */
+    for (int i = 0; i < AME_DEV_MAX; i++)
+        ame_input_device_snap_init(&S.dev_row[i]);
     for (int i = 0; i < AME_TOUCH_MAX; i++)
         atomic_store_explicit(&S.t_id[i], -1, memory_order_relaxed);
     for (int i = 0; i < AME_KEYS_MAX; i++)
@@ -401,14 +431,24 @@ float in_axis(int axis) {
 
 /* --- device registry -------------------------------------------------------- */
 
+/* The kind/slot pair a row holds, read out of its published snapshot. Used
+ * for the lookup scans, which need to match a row without copying its name.
+ * A row that has never been published reads back zeroed (kind 0 is
+ * AME_DEV_KEYBOARD), which is why every scan gates on dev_present first. */
+static bool registry_row_is(int i, int kind, int slot) {
+    ame_input_device row;
+    if (!ame_input_device_latest_copy(&S.dev_row[i], &row))
+        return false; /* every attempt overlapped a publish: no match */
+    return row.kind == kind && row.slot == slot;
+}
+
 static void registry_add(int kind, int slot, const char *name) {
     if (kind < 0 || kind >= AME_DEV_KIND_COUNT)
         return;
     int free_slot = -1;
     for (int i = 0; i < AME_DEV_MAX; i++) {
         if (atomic_load_explicit(&S.dev_present[i], memory_order_relaxed)
-            && atomic_load_explicit(&S.dev_kind[i], memory_order_relaxed) == kind
-            && atomic_load_explicit(&S.dev_slot[i], memory_order_relaxed) == slot) {
+            && registry_row_is(i, kind, slot)) {
             free_slot = i; /* update in place */
             break;
         }
@@ -420,13 +460,19 @@ static void registry_add(int kind, int slot, const char *name) {
         ame_set_errorf(AME_ERR_INPUT, "device registry full (%d)", AME_DEV_MAX);
         return;
     }
-    atomic_store_explicit(&S.dev_kind[free_slot], kind, memory_order_relaxed);
-    atomic_store_explicit(&S.dev_slot[free_slot], slot, memory_order_relaxed);
+    /* Build the whole row locally, then publish it in one step. Writing
+     * straight into the shared row is what made the update-in-place path
+     * tear (issue #12). */
+    ame_input_device row = { .kind = kind, .slot = slot, .name = { 0 } };
     size_t n = name ? strlen(name) : 0;
     if (n >= AME_DEV_NAME_MAX)
         n = AME_DEV_NAME_MAX - 1;
-    memcpy(S.dev_name[free_slot], name ? name : "", n);
-    S.dev_name[free_slot][n] = '\0';
+    memcpy(row.name, name ? name : "", n);
+    row.name[n] = '\0';
+    ame_input_device_publish(&S.dev_row[free_slot], &row);
+    /* present stays the publication flag for the LOOKUP scans and for
+     * in_device_count/in_device_present, so removal is unchanged: clearing
+     * it retires the row without touching the snapshot. */
     atomic_store_explicit(&S.dev_present[free_slot], 1, memory_order_release);
 }
 
@@ -437,8 +483,7 @@ void in_on_device_add(int kind, int slot, const char *name) {
 void in_on_device_remove(int kind, int slot) {
     for (int i = 0; i < AME_DEV_MAX; i++)
         if (atomic_load_explicit(&S.dev_present[i], memory_order_relaxed)
-            && atomic_load_explicit(&S.dev_kind[i], memory_order_relaxed) == kind
-            && atomic_load_explicit(&S.dev_slot[i], memory_order_relaxed) == slot)
+            && registry_row_is(i, kind, slot))
             atomic_store_explicit(&S.dev_present[i], 0, memory_order_release);
     /* Hunt 2026-11-14: a yanked gamepad must not leave ghost state --
      * a stick pulled while tilted (or a held button) would drive binds
@@ -470,9 +515,11 @@ bool in_device_info(int idx, ame_input_device *out) {
             continue;
         if (idx-- > 0)
             continue;
-        out->kind = atomic_load_explicit(&S.dev_kind[i], memory_order_acquire);
-        out->slot = atomic_load_explicit(&S.dev_slot[i], memory_order_acquire);
-        memcpy(out->name, S.dev_name[i], AME_DEV_NAME_MAX);
+        /* One validated snapshot copy: either the whole previous row or the
+         * whole new one. *out is left unchanged if every attempt overlapped a
+         * publish, so the caller never sees a half-written row. */
+        if (!ame_input_device_latest_copy(&S.dev_row[i], out))
+            return false;
         out->name[AME_DEV_NAME_MAX - 1] = '\0';
         return true;
     }
@@ -482,8 +529,7 @@ bool in_device_info(int idx, ame_input_device *out) {
 bool in_device_present(int kind, int slot) {
     for (int i = 0; i < AME_DEV_MAX; i++)
         if (atomic_load_explicit(&S.dev_present[i], memory_order_acquire)
-            && atomic_load_explicit(&S.dev_kind[i], memory_order_acquire) == kind
-            && atomic_load_explicit(&S.dev_slot[i], memory_order_acquire) == slot)
+            && registry_row_is(i, kind, slot))
             return true;
     return false;
 }
