@@ -61,15 +61,6 @@ fi
 # must be documented there. Undocumented env vars are hidden state - the
 # exact class state-audit.txt exists to remove - so the table is checked
 # rather than trusted.
-# Matches BOTH getenv("X") and SDL_getenv("X"). The SDL_ form matters because
-# src/app_sdl.c reads its variables through the SDL wrapper - it always did for
-# the loop policy, log path, window geometry and fixed-dt, and the shot-capture
-# hook joined them when bare getenv became a hard -Werror failure under MSVC's
-# UCRT deprecation. A gate that only matched the bare form silently stopped
-# seeing those variables, which is exactly how an undocumented env var would
-# slip through: the count dropped from 12 to 11 the moment the call form
-# changed, with no failure. Grepping the call, not the wrapper, keeps the gate
-# honest about what the engine reads.
 # Matches every form the engine actually uses to read an environment variable:
 #   getenv("X")        the plain call
 #   SDL_getenv("X")    src/app_sdl.c, which leans on the SDL wrapper (it always
@@ -87,7 +78,14 @@ fi
 # forms differ in case: getenv and SDL_getenv are lowercase, the fs.c shim macro
 # is AME_GETENV in capitals. A case-insensitive pattern would also pick up the
 # two "#define AME_GETENV(n)" lines, which is harmless but noise.
-envs=$(grep -rhoE '(SDL_getenv|AME_GETENV|getenv)\("[A-Z0-9_]+"\)' src/*.c 2>/dev/null \
+# Read src AT $head, not from the working tree - the docs side below already
+# did (git show "$head:docs/env.txt") and the two must agree on which commit is
+# being judged, or a dirty checkout can pass a gate that the pushed commit
+# fails (and vice versa). git grep with a tree-ish prefixes its output, which
+# the sed strips along with the call syntax. If $head is not a valid object
+# (an all-zero sha on a branch-created push) this yields nothing and the gate
+# passes, matching how the range check at the top of this file already behaves.
+envs=$(git grep -hoE '(SDL_getenv|AME_GETENV|getenv)\("[A-Z0-9_]+"\)' "$head" -- 'src/*.c' 2>/dev/null \
        | sed 's/.*("//; s/")//' | sort -u || true)
 envexists=$(git ls-tree -r --name-only "$head" docs/ | grep -c '^docs/env\.txt$' || true)
 missing=''

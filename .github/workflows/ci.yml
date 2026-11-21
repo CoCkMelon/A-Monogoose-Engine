@@ -424,7 +424,6 @@ jobs:
           # prefix and passed --debug-find.
           cmake -S . -B build -G Ninja -DCMAKE_C_COMPILER=clang "-DCMAKE_PREFIX_PATH=$env:RUNNER_TEMP/sdl-prefix" "-DSDL3_DIR=$env:RUNNER_TEMP/sdl-prefix/cmake" -DAME_BUILD_EXAMPLES=OFF -DAME_BUILD_TESTS=OFF -DAME_BUILD_BENCHES=OFF -DAME_BUILD_ASYNCINPUT_GAME=OFF -DAME_FONT_FROM_COMMITTED=ON -DCMAKE_BUILD_TYPE=Debug
           cmake --build build
-          cmake --build build
 
   macos:
     name: macOS (Clang C23 compile)

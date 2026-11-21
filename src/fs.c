@@ -32,7 +32,18 @@ static FILE *ame_fopen_shim(const char *path, const char *mode) {
  * copied out, never retained. Duplicate into a static buffer instead: the
  * lookup happens once per pref-path resolution, the buffer is bounded, and the
  * caller still gets a plain const char * it does not own. Not
- * _CRT_SECURE_NO_WARNINGS, for the reason given at AME_FOPEN. */
+ * _CRT_SECURE_NO_WARNINGS, for the reason given at AME_FOPEN.
+ *
+ * NOT RE-ENTRANT, and deliberately so: there is one static buffer, so two
+ * concurrent ame_fs_pref_path() calls on this path would race on it. That is
+ * safe today because pref-path resolution happens once at startup, before any
+ * engine thread exists, and the value is copied out rather than retained. The
+ * POSIX branch below has the same one-value-at-a-time shape (getenv returns a
+ * pointer into the environment block, which a concurrent setenv can
+ * invalidate), so this shim does not make the contract worse - but if
+ * ame_fs_pref_path() ever gains a caller on a worker thread, this needs a
+ * caller-supplied buffer or a lock first. Do not widen the call sites without
+ * fixing it. */
 static char g_env_buf[4096];
 static const char *ame_getenv_shim(const char *name) {
     char *v = NULL;

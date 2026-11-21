@@ -199,7 +199,7 @@ kind: B=build, V=verify, M=measure.  STATUS: todo / doing / done(sha)
 S1  B  #6  leanness 1: optional callbacks, loud diagnostics, dead-math,
                      census follow-through             STATUS done(417cbd4)
 S1B B  #3  CI repair: the 5 inherited job failures, TSan coverage,
-                     trunk trigger                          STATUS doing
+                     trunk trigger                          STATUS done
 S1C B  #12 the src/input.c device-name race (registry_add's
                      update-in-place path)                     STATUS todo
 S2  V  #6  verify S1                                           STATUS todo
