@@ -338,11 +338,22 @@ SCOPE
     at -O3 with -Werror at two sites (r->detail and g_last.detail).
     Bound the conversion explicitly with "%.*s" and (int)sizeof - 1.
     Do NOT add -Wno-format-truncation and do NOT weaken -Werror.
- D4 android NDK + windows clang: SDL3's generated SDL_revision.h must sit
-    under the source prefix, so a SIBLING build dir fails configure
-    ("source_group ... is not a prefix of ...") and ninja then cannot
-    load build.ninja. The three recipes that pass nest the build dir
-    inside the source dir; make the two that fail do the same.
+ D4 android NDK + windows clang + macOS: SDL3's generated SDL_revision.h
+    must sit under the source prefix, so a SIBLING build dir fails
+    configure ("source_group ... is not a prefix of ...") and ninja then
+    cannot load build.ninja. THREE recipes had this, not two - macOS as
+    well - and the third only became visible after the first two were
+    fixed, because that job died at configure and never compiled a single
+    engine file. Check every `cmake -S <sdl3> -B <dir>` in the file, not
+    just the jobs whose names appear in a failure list.
+ D8 windows clang: that job builds NATIVELY on windows-latest, so
+    CMAKE_CROSSCOMPILING is FALSE and tools/CMakeLists.txt reaches
+    find_package(Freetype REQUIRED) for the host font bakers. The runner
+    has no FreeType, so configure fails with "Could NOT find Freetype".
+    The MinGW-w64 job does not hit this: it really is cross-compiling from
+    ubuntu, so tools/ gates itself off and compiles the COMMITTED generated
+    arrays. Install freetype in the native job's toolchain step. This was
+    masked until D4 was fixed, because the job previously died earlier.
  D5 linux ASan: LeakSanitizer reports leaks whose every frame is in
     libEGL_mesa / libgallium AFTER the test prints "all 23 checks
     passed". Add tools/lsan_suppressions.txt naming those two libraries
@@ -368,6 +379,14 @@ MUST NOT  fix issue #12 (that is S1C - engine code, its own PR); change
 ACCEPTANCE  all 13 CI jobs green on the PR, OR each remaining red job
   explained with evidence quoted from its log; test_input excluded by
   name with #12 referenced in ci.yml; drift gate ok; ctest >= 33.
+RESULT (measured on PR #13, run 44900979371): 11 of 13 jobs green, up from
+  6 of 13. D1, D3, D5, D6 and D7 are CONFIRMED FIXED BY CI. The two
+  remaining red jobs are macOS and windows clang, and both are new
+  information rather than leftovers: macOS turned out to have the same D4
+  sibling-build-dir defect (D4c), and windows clang, once it could finally
+  get past configure, revealed D8. Both are fixed in the same branch.
+  D2's status is still UNTESTED: the macOS job has never compiled a single
+  engine file, so no run has yet reached src/render.c on Apple.
 PROOF  D3 locally under gcc with the project's exact flags
   (-std=c23 -O3 -Wall -Wextra -Werror, a real -c, -Igenerated): clang
   does not implement -Wformat-truncation, so a green clang job proves

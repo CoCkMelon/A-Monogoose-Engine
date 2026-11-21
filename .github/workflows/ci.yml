@@ -351,7 +351,15 @@ jobs:
       - uses: ilammy/msvc-dev-cmd@v1
       - name: toolchain
         shell: pwsh
-        run: choco install llvm ninja -y --no-progress
+        # FreeType is needed because this job builds NATIVELY (windows-latest,
+        # clang targeting Windows), so CMAKE_CROSSCOMPILING is FALSE and
+        # tools/CMakeLists.txt reaches its find_package(Freetype REQUIRED) for
+        # the host font bakers. The MinGW-w64 job does not need it: that one
+        # really is cross-compiling from ubuntu, so tools/ gates itself off and
+        # compiles the COMMITTED generated arrays instead. This defect was
+        # masked until now because the job died earlier, at the sibling-build-dir
+        # configure failure, and never reached the engine configure step.
+        run: choco install llvm ninja freetype -y --no-progress
       - name: SDL3 from source
         shell: pwsh
         run: |
@@ -384,11 +392,17 @@ jobs:
       - name: SDL3 from source
         run: |
           git clone --depth 1 --branch release-3.4.16 https://github.com/libsdl-org/SDL.git "$RUNNER_TEMP/sdl3"
-          cmake -S "$RUNNER_TEMP/sdl3" -B "$RUNNER_TEMP/sdl3-build" -G Ninja \
+          # nested build dir, same defect and same fix as android-cross and
+          # the windows job: SDL3's generated SDL_revision.h must sit under the
+          # source prefix or sdl_source_group() fails configure. This was the
+          # THIRD recipe with a sibling dir; it only became visible once the
+          # other two were fixed, because this job died at configure and never
+          # compiled a single engine file.
+          cmake -S "$RUNNER_TEMP/sdl3" -B "$RUNNER_TEMP/sdl3/build" -G Ninja \
             -DCMAKE_BUILD_TYPE=Release -DSDL_TESTS=OFF -DSDL_EXAMPLES=OFF \
             -DCMAKE_INSTALL_PREFIX="$RUNNER_TEMP/sdl-prefix"
-          cmake --build "$RUNNER_TEMP/sdl3-build"
-          cmake --install "$RUNNER_TEMP/sdl3-build"
+          cmake --build "$RUNNER_TEMP/sdl3/build"
+          cmake --install "$RUNNER_TEMP/sdl3/build"
       - name: configure + compile engine
         run: |
           cmake -S . -B build -G Ninja \
