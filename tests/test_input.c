@@ -152,6 +152,70 @@ static int utest_devices_tail(void) {
     in_on_device_remove(AME_DEV_GAMEPAD, 0);
     UT_ASSERT(!in_device_present(AME_DEV_GAMEPAD, 0));
 
+    /* Issue #12: announcing the SAME (kind, slot) again reuses its slot and
+     * rewrites the row in place. Before the seqlock fix that in-place rewrite
+     * was a plain memcpy racing in_device_info()'s read, so a concurrent
+     * reader could see half the old name and half the new one (bounded by
+     * AME_DEV_NAME_MAX, never out of bounds, but torn). Serially the defect is
+     * invisible - which is why it needed TSan to find - so these assertions pin
+     * the OBSERVABLE contract the fix guarantees: a re-announce replaces the
+     * row whole, adds no device, and never leaves a stale or mixed name. */
+    UT_CASE("registry: re-announcing a device replaces its row whole (#12)");
+    in_reset();
+    in_on_device_add(AME_DEV_GAMEPAD, 1, "pad");
+    int n1 = in_device_count();
+    /* longer name into the same slot: the tail of the old name must not
+     * survive, and the row count must not grow */
+    in_on_device_add(AME_DEV_GAMEPAD, 1, "a-much-longer-pad-name");
+    UT_ASSERT(in_device_count() == n1);
+    UT_ASSERT(in_device_present(AME_DEV_GAMEPAD, 1));
+    bool seen = false, exact = false;
+    for (int i = 0; i < in_device_count(); i++) {
+        ame_input_device r;
+        if (!in_device_info(i, &r) || r.kind != AME_DEV_GAMEPAD
+            || r.slot != 1)
+            continue;
+        seen = true;
+        exact = strcmp(r.name, "a-much-longer-pad-name") == 0;
+    }
+    UT_ASSERT(seen && exact);
+    /* shorter name over a longer one: no bytes of the old name may remain
+     * past the new terminator */
+    in_on_device_add(AME_DEV_GAMEPAD, 1, "x");
+    for (int i = 0; i < in_device_count(); i++) {
+        ame_input_device r;
+        if (!in_device_info(i, &r) || r.kind != AME_DEV_GAMEPAD
+            || r.slot != 1)
+            continue;
+        exact = strcmp(r.name, "x") == 0;
+    }
+    UT_ASSERT(exact);
+    /* remove-then-add churn, the third reachable path: the slot is reused and
+     * the device count stays put across many cycles */
+    for (int i = 0; i < 64; i++) {
+        in_on_device_remove(AME_DEV_GAMEPAD, 1);
+        UT_ASSERT(!in_device_present(AME_DEV_GAMEPAD, 1));
+        in_on_device_add(AME_DEV_GAMEPAD, 1, "churn");
+        UT_ASSERT(in_device_present(AME_DEV_GAMEPAD, 1));
+        UT_ASSERT(in_device_count() == n1);
+    }
+    /* a name at the cap must be truncated to AME_DEV_NAME_MAX-1 and still
+     * NUL-terminated, not torn */
+    char long_name[AME_DEV_NAME_MAX * 2];
+    memset(long_name, 'z', sizeof long_name - 1);
+    long_name[sizeof long_name - 1] = '\0';
+    in_on_device_add(AME_DEV_GAMEPAD, 1, long_name);
+    for (int i = 0; i < in_device_count(); i++) {
+        ame_input_device r;
+        if (!in_device_info(i, &r) || r.kind != AME_DEV_GAMEPAD
+            || r.slot != 1)
+            continue;
+        exact = strlen(r.name) == AME_DEV_NAME_MAX - 1
+                && r.name[AME_DEV_NAME_MAX - 1] == '\0';
+    }
+    UT_ASSERT(exact);
+    in_on_device_remove(AME_DEV_GAMEPAD, 1);
+
     UT_CASE("gamepad button binds into the action system");
     UT_ASSERT(in_bind_gamepad(AME_ACT_JUMP, 0, AME_GP_A));
     in_begin_step();
