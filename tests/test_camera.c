@@ -156,6 +156,102 @@ int main(void) {
         }
     }
 
+    /* Regression: a camera that cannot be divided by must fail loudly instead
+     * of raising SIGFPE. AME_CAM_ORTHO2D is 0, so a zero-initialised
+     * ame_camera is a "valid" ortho camera with vw = vh = zoom = 0, and every
+     * query below used to reach `c->vw / c->zoom` as 0 / 0 and kill the
+     * process. Nine integer divisions across five functions; no golden image
+     * can catch it, because the process dies before writing one. */
+    UT_CASE("degenerate camera: all six entry points refuse instead of dividing by zero");
+    {
+        ame_camera z;
+        memset(&z, 0, sizeof z);
+        float ox = -1, oy = -1, out[2] = { -1, -1 };
+        float o[3] = { -1, -1, -1 }, d[3] = { -1, -1, -1 };
+
+        ame_clear_error();
+        camera_world_origin_y_up(&z, &ox, &oy);
+        UT_ASSERT(ame_last_error_code() == AME_ERR_INVALID_ARGUMENT);
+        UT_ASSERTF(ox == 0 && oy == 0, "origin not zeroed: (%.2f,%.2f)",
+                   (double)ox, (double)oy);
+
+        ox = oy = -1;
+        ame_clear_error();
+        camera_world_top_left_y_up(&z, &ox, &oy);
+        UT_ASSERT(ame_last_error_code() == AME_ERR_INVALID_ARGUMENT);
+        UT_ASSERTF(ox == 0 && oy == 0, "top-left not zeroed: (%.2f,%.2f)",
+                   (double)ox, (double)oy);
+
+        out[0] = out[1] = -1;
+        ame_clear_error();
+        camera_screen_y_down_to_world_y_up(&z, 10, 20, out);
+        UT_ASSERT(ame_last_error_code() == AME_ERR_INVALID_ARGUMENT);
+        UT_ASSERTF(out[0] == 0 && out[1] == 0, "screen->world not zeroed: (%.2f,%.2f)",
+                   (double)out[0], (double)out[1]);
+
+        out[0] = out[1] = -1;
+        ame_clear_error();
+        camera_world_y_up_to_screen_y_down(&z, 10, 20, out);
+        UT_ASSERT(ame_last_error_code() == AME_ERR_INVALID_ARGUMENT);
+        UT_ASSERTF(out[0] == 0 && out[1] == 0, "world->screen not zeroed: (%.2f,%.2f)",
+                   (double)out[0], (double)out[1]);
+
+        ame_clear_error();
+        camera_screen_ray(&z, 10, 20, o, d);
+        UT_ASSERT(ame_last_error_code() == AME_ERR_INVALID_ARGUMENT);
+        UT_ASSERTF(o[0] == 0 && o[1] == 0 && o[2] == 0 && d[0] == 0 && d[1] == 0
+                   && d[2] == 0, "ray not zeroed: o(%.2f,%.2f,%.2f) d(%.2f,%.2f,%.2f)",
+                   (double)o[0], (double)o[1], (double)o[2],
+                   (double)d[0], (double)d[1], (double)d[2]);
+
+        ame_clear_error();
+        camera_build(&z);   /* the ortho branch divided by zoom twice as well */
+        UT_ASSERT(ame_last_error_code() == AME_ERR_INVALID_ARGUMENT);
+    }
+
+    /* The guard must not change anything a real camera does: same vp bytes,
+     * no error, and zoom = 0 reached by bypassing camera_zoom()'s clamp is
+     * still refused. */
+    UT_CASE("guard is inert for a valid camera and refuses zoom = 0 set directly");
+    {
+        ame_camera c;
+        camera_viewport(camera_ortho2d(camera_desc(&c)), 800, 600);
+        camera_pos(&c, 400.0f, 300.0f, 0.0f);
+        ame_clear_error();
+        camera_build(&c);
+        UT_ASSERT(ame_last_error_code() == AME_ERR_OK);
+        ame_m4 good_vp = c.vp, good_inv = c.vp_inv;
+
+        float ox = 12345.0f, oy = 12345.0f;
+        ame_clear_error();
+        camera_world_origin_y_up(&c, &ox, &oy);
+        UT_ASSERT(ame_last_error_code() == AME_ERR_OK);
+        /* snapped, pos at the exact view centre: w*0.5 - floor(pos) floors to 0.
+         * Assert the CONTRACT (integral, and the untouched sentinel is gone),
+         * not a literal - the same reason the odd-viewport case above does. */
+        UT_ASSERTF(ox != 12345.0f && oy != 12345.0f, "origin was not written");
+        UT_ASSERTF(ox == floorf(ox) && oy == floorf(oy),
+                   "valid camera lost integrality: origin (%.2f,%.2f)",
+                   (double)ox, (double)oy);
+        UT_ASSERTF(ox == 0.0f && oy == 0.0f,
+                   "snapped centred camera should origin at (0,0), got (%.2f,%.2f)",
+                   (double)ox, (double)oy);
+
+        c.zoom = 0;   /* camera_zoom() would clamp this; a direct write does not */
+        ame_clear_error();
+        camera_world_origin_y_up(&c, &ox, &oy);
+        UT_ASSERT(ame_last_error_code() == AME_ERR_INVALID_ARGUMENT);
+        UT_ASSERTF(ox == 0 && oy == 0, "zoom = 0 not refused: (%.2f,%.2f)",
+                   (double)ox, (double)oy);
+
+        c.zoom = 1;
+        ame_clear_error();
+        camera_build(&c);
+        UT_ASSERT(ame_last_error_code() == AME_ERR_OK);
+        UT_ASSERT(memcmp(&c.vp, &good_vp, sizeof c.vp) == 0
+                  && memcmp(&c.vp_inv, &good_inv, sizeof c.vp_inv) == 0);
+    }
+
     UT_OK();
     return ut_done("test_camera");
 }

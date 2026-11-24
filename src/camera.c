@@ -54,6 +54,30 @@ ame_camera *camera_viewport(ame_camera *c, int w, int h) {
     return c;
 }
 
+/* Can this camera be divided by? The nine `c->vw / c->zoom` and `c->vh / c->zoom`
+ * expressions below (eight lines - camera_screen_ray's declares w and h on one)
+ * are INTEGER division before the (float) cast, so zoom == 0 raises SIGFPE and
+ * kills the process: no pixel, no message, no way for a golden image to catch it.
+ * The six remaining float divisions by vw/vh/zoom do not crash but produce
+ * inf/NaN, which is the same wrong answer one step later; the two aspect
+ * ratios already guard themselves with `c->vh > 0 ?`.
+ *
+ * This is reachable WITHOUT deleting a single builder: AME_CAM_ORTHO2D is 0, so a
+ * zero-initialised ame_camera is a "valid" ortho camera with vw = vh = zoom = 0,
+ * and every query below divides by it. The builder chain hides it only because
+ * camera_desc() sets zoom = 1 and camera_zoom() clamps (zoom < 1 ? 1 : zoom).
+ *
+ * Failing loudly is the house rule (docs/errors.txt): set the error, write a
+ * defined value, and let the process live so the caller can report it. */
+static bool cam_usable(const ame_camera *c) {
+    if (c && (c->kind == AME_CAM_ORTHO2D || c->kind == AME_CAM_PERSP3D)
+        && c->vw > 0 && c->vh > 0 && c->zoom >= 1)
+        return true;
+    ame_set_error(AME_ERR_INVALID_ARGUMENT,
+                  "camera: needs a real kind, vw/vh > 0 and zoom >= 1 to divide by");
+    return false;
+}
+
 /* ortho2d view translation: world_y_up px -> view px is x+tx, y+ty (times
  * zoom), where view px is [0,w]x[0,h] with (0,0) at the view's LOWER-LEFT.
  * With snap on, BOTH the position and the translation are integral, so
@@ -62,6 +86,7 @@ ame_camera *camera_viewport(ame_camera *c, int w, int h) {
  * scene by half a pixel (the tx below floors the .5 away: the leftover
  * half px falls at the far edge, never under every glyph). */
 static void ortho_tx_ty(const ame_camera *c, float *tx, float *ty) {
+    if (!cam_usable(c)) { *tx = 0; *ty = 0; return; }
     float w = (float)(c->vw / c->zoom);
     float h = (float)(c->vh / c->zoom);
     float tX = w * 0.5f - c->pos.x, tY = h * 0.5f - c->pos.y;
@@ -89,6 +114,7 @@ void camera_world_origin_y_up(const ame_camera *c, float *ox, float *oy) {
 /* world_y_up px of the view's TOP-LEFT corner (what px_y_down callers mean
  * by "the window corner"). */
 void camera_world_top_left_y_up(const ame_camera *c, float *ox, float *oy) {
+    if (!cam_usable(c)) { if (ox) *ox = 0; if (oy) *oy = 0; return; }
     float tx, ty;
     ortho_tx_ty(c, &tx, &ty);
     float h = (float)(c->vh / c->zoom);
@@ -97,6 +123,8 @@ void camera_world_top_left_y_up(const ame_camera *c, float *ox, float *oy) {
 }
 
 void camera_build(ame_camera *c) {
+    if (!cam_usable(c))
+        return;   /* vp/vp_inv left as they were: refuse, do not invent a matrix */
     if (c->kind == AME_CAM_ORTHO2D) {
         /* pixel-perfect: snap position to whole world px, integer zoom.
          * pos = CENTER of the view; world is world_y_up (coords.txt), so a
@@ -123,6 +151,7 @@ void camera_build(ame_camera *c) {
  * a screen y of 0 is the view's TOP, which is world y = h - ty. */
 void camera_screen_y_down_to_world_y_up(const ame_camera *c, float sx, float sy,
                                        float out[2]) {
+    if (!cam_usable(c)) { out[0] = 0; out[1] = 0; return; }
     float tx, ty;
     ortho_tx_ty(c, &tx, &ty); /* SAME mapping camera_build bakes */
     float h = (float)(c->vh / c->zoom);
@@ -133,6 +162,7 @@ void camera_screen_y_down_to_world_y_up(const ame_camera *c, float sx, float sy,
 /* inverse: world_y_up point -> px_y_down window pixels */
 void camera_world_y_up_to_screen_y_down(const ame_camera *c, float wx, float wy,
                                        float out[2]) {
+    if (!cam_usable(c)) { out[0] = 0; out[1] = 0; return; }
     float tx, ty;
     ortho_tx_ty(c, &tx, &ty);
     float h = (float)(c->vh / c->zoom);
@@ -142,6 +172,11 @@ void camera_world_y_up_to_screen_y_down(const ame_camera *c, float wx, float wy,
 
 void camera_screen_ray(const ame_camera *c, float sx, float sy,
                        float out_origin[3], float out_dir[3]) {
+    if (!cam_usable(c)) {
+        out_origin[0] = 0; out_origin[1] = 0; out_origin[2] = 0;
+        out_dir[0] = 0; out_dir[1] = 0; out_dir[2] = 0;
+        return;
+    }
     /* px -> ndc (y flipped: px space is y-down, NDC y-up) */
     float nx = (sx / (float)c->vw) * 2.0f - 1.0f;
     float ny = 1.0f - (sy / (float)c->vh) * 2.0f;
