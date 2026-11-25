@@ -54,6 +54,103 @@ ame_camera *camera_viewport(ame_camera *c, int w, int h) {
     return c;
 }
 
+/* Can this camera be divided by? The nine `c->vw / c->zoom` and `c->vh / c->zoom`
+ * expressions below (eight lines - camera_screen_ray's declares w and h on one)
+ * are INTEGER division before the (float) cast, so zoom == 0 raises SIGFPE and
+ * kills the process: no pixel, no message, no way for a golden image to catch it.
+ * The six remaining float divisions by vw/vh/zoom do not crash but produce
+ * inf/NaN, which is the same wrong answer one step later; the two aspect
+ * ratios already guard themselves with `c->vh > 0 ?`.
+ *
+ * This is reachable WITHOUT deleting a single builder: AME_CAM_ORTHO2D is 0, so a
+ * zero-initialised ame_camera is a "valid" ortho camera with vw = vh = zoom = 0,
+ * and every query below divides by it. The builder chain hides it only because
+ * camera_desc() sets zoom = 1 and camera_zoom() clamps (zoom < 1 ? 1 : zoom).
+ *
+ * Failing loudly is the house rule (docs/errors.txt): set the error, write a
+ * defined value, and let the process live so the caller can report it. */
+/* The perspective branch needs one more field: ame_m4_perspective computes
+ * 1.0f / tanf(fov_y * 0.5f) with no guard, so fov_y == 0 bakes inf into c->vp
+ * and NaN into c->vp_inv (ame_m4_inverse of an inf matrix), which then goes
+ * straight to glUniformMatrix4fv at render.c:1364. camera_screen_ray's analytic
+ * path multiplies by tanf(fov_y * 0.5f) == 0 instead, so the ray silently
+ * collapses to the view axis and every pick returns the same point.
+ *
+ * The bound is (0, pi): tanf(fov/2) == 0 at both ends, and it goes NEGATIVE past
+ * pi, which flips the handedness of the projection rather than merely degenerating
+ * it. Same reasoning as the fov_y > 0 clause in the S3 validation list, with the
+ * upper bound made explicit because a degrees/radians mixup (writing 50.0f where
+ * 0.872665f was meant) lands at 50 rad and is otherwise accepted silently.
+ *
+ * The view direction gets the same treatment, and it is the one case that is
+ * genuinely degenerate rather than merely omitted: with look == pos,
+ * ame_v3_norm's own guard (math.h:53, l > 1e-12f) returns (0,0,0), so look_at
+ * builds an all-zero view matrix. Measured: c->vp ends up with ONE non-zero
+ * entry out of 16, ame_m4_inverse of that singular matrix returns the IDENTITY
+ * rather than NaN, camera_screen_ray returns dir=(0,0,0), and
+ * ame_last_error_code() stays AME_ERR_OK. The whole world projects to a point,
+ * unprojecting through vp_inv says screen == world, and nothing anywhere
+ * reports it. The threshold mirrors ame_v3_norm exactly because that is the
+ * mechanism: below 1e-12f the normaliser gives up and returns zeros. Measured
+ * sweep - |look-pos| of 1e-1, 1e-3, 1e-5, 1e-7 and 1e-9 all build a correct
+ * vp[0]=0.974279 and a correct corner ray; only exact equality collapses, so no
+ * epsilon tuning is involved and no legitimate near-coincident camera is lost.
+ *
+ * Only PERSP3D is checked, so every ortho camera - all 8 of the 9 examples - is
+ * bit-identical to before. Ortho never calls look_at (its view is a translate),
+ * so look/up/fov_y are unused in 2D and a 2D camera with look == pos builds
+ * vp[0]=0.00208333 vp[5]=0.0037037 exactly as before. */
+static bool cam_usable(const ame_camera *c) {
+    if (!c || (c->kind != AME_CAM_ORTHO2D && c->kind != AME_CAM_PERSP3D)
+        || c->vw <= 0 || c->vh <= 0 || c->zoom < 1) {
+        ame_set_error(AME_ERR_INVALID_ARGUMENT,
+                      "camera: needs a real kind, vw/vh > 0 and zoom >= 1 to divide by");
+        return false;
+    }
+    if (c->kind == AME_CAM_PERSP3D
+        && !(c->fov_y > 0.0f && c->fov_y < (float)AME_PI)) {
+        ame_set_error(AME_ERR_INVALID_ARGUMENT,
+                      "camera: perspective fov_y must be in (0, pi) RADIANS");
+        return false;
+    }
+    if (c->kind == AME_CAM_PERSP3D
+        && ame_v3_len(ame_v3_sub(c->look, c->pos)) <= 1e-12f) {
+        ame_set_error(AME_ERR_INVALID_ARGUMENT,
+                      "camera: perspective look must differ from pos (a zero view "
+                      "direction normalises to zeros and collapses vp)");
+        return false;
+    }
+    /* up is deliberately NOT checked here. A zero or f-parallel up does not
+     * degenerate anything: ame_m4_look_at substitutes a fallback axis
+     * (math.h:186-195) and cam_ray_up mirrors it, so both paths agree and a
+     * top-down camera with the world-up convention keeps working. Rejecting
+     * `.up == 0` as an OMISSION is a descriptor rule for stage S3's
+     * camera_make(), where the caller names every field; it is not a validity
+     * rule for a camera the engine can still build correctly. */
+    return true;
+}
+
+/* camera_screen_ray must build the SAME basis ame_m4_look_at baked into c->vp.
+ * math.h:186-195 substitutes a fallback axis when forward is parallel to up -
+ * a top-down 3D camera using the world-up convention - and promises that every
+ * non-degenerate case is bit-identical. The analytic ray path had no such
+ * substitution: ame_v3_norm's own zero guard (math.h:53) turned cross(f,up)==0
+ * into s=(0,0,0), hence u=(0,0,0), hence d=norm(f) for EVERY pixel. The frame
+ * rendered correctly while picking returned the same point everywhere, with no
+ * diagnostic anywhere. Measured at 960x540 for a top-down camera (pos 0,10,0 /
+ * look origin / up 0,1,0) and for a zeroed up: the analytic dir is identical at
+ * the centre and all three corners, while unprojecting those same pixels through
+ * the baked c->vp_inv gives four distinct directions, the corners 0.647 apart
+ * (about 50 degrees). This mirrors the header's rule verbatim - same 1e-8f
+ * threshold, same fabsf(f.z) < 0.9f axis choice - so the two paths agree by
+ * construction and the non-degenerate case is untouched. */
+static ame_v3 cam_ray_up(ame_v3 f, ame_v3 up) {
+    ame_v3 cr = ame_v3_cross(f, up);
+    if (cr.x * cr.x + cr.y * cr.y + cr.z * cr.z < 1e-8f)
+        return fabsf(f.z) < 0.9f ? ame_v3_(0, 0, 1) : ame_v3_(0, 1, 0);
+    return up;
+}
+
 /* ortho2d view translation: world_y_up px -> view px is x+tx, y+ty (times
  * zoom), where view px is [0,w]x[0,h] with (0,0) at the view's LOWER-LEFT.
  * With snap on, BOTH the position and the translation are integral, so
@@ -62,6 +159,7 @@ ame_camera *camera_viewport(ame_camera *c, int w, int h) {
  * scene by half a pixel (the tx below floors the .5 away: the leftover
  * half px falls at the far edge, never under every glyph). */
 static void ortho_tx_ty(const ame_camera *c, float *tx, float *ty) {
+    if (!cam_usable(c)) { *tx = 0; *ty = 0; return; }
     float w = (float)(c->vw / c->zoom);
     float h = (float)(c->vh / c->zoom);
     float tX = w * 0.5f - c->pos.x, tY = h * 0.5f - c->pos.y;
@@ -89,6 +187,7 @@ void camera_world_origin_y_up(const ame_camera *c, float *ox, float *oy) {
 /* world_y_up px of the view's TOP-LEFT corner (what px_y_down callers mean
  * by "the window corner"). */
 void camera_world_top_left_y_up(const ame_camera *c, float *ox, float *oy) {
+    if (!cam_usable(c)) { if (ox) *ox = 0; if (oy) *oy = 0; return; }
     float tx, ty;
     ortho_tx_ty(c, &tx, &ty);
     float h = (float)(c->vh / c->zoom);
@@ -97,6 +196,8 @@ void camera_world_top_left_y_up(const ame_camera *c, float *ox, float *oy) {
 }
 
 void camera_build(ame_camera *c) {
+    if (!cam_usable(c))
+        return;   /* vp/vp_inv left as they were: refuse, do not invent a matrix */
     if (c->kind == AME_CAM_ORTHO2D) {
         /* pixel-perfect: snap position to whole world px, integer zoom.
          * pos = CENTER of the view; world is world_y_up (coords.txt), so a
@@ -123,6 +224,7 @@ void camera_build(ame_camera *c) {
  * a screen y of 0 is the view's TOP, which is world y = h - ty. */
 void camera_screen_y_down_to_world_y_up(const ame_camera *c, float sx, float sy,
                                        float out[2]) {
+    if (!cam_usable(c)) { out[0] = 0; out[1] = 0; return; }
     float tx, ty;
     ortho_tx_ty(c, &tx, &ty); /* SAME mapping camera_build bakes */
     float h = (float)(c->vh / c->zoom);
@@ -133,6 +235,7 @@ void camera_screen_y_down_to_world_y_up(const ame_camera *c, float sx, float sy,
 /* inverse: world_y_up point -> px_y_down window pixels */
 void camera_world_y_up_to_screen_y_down(const ame_camera *c, float wx, float wy,
                                        float out[2]) {
+    if (!cam_usable(c)) { out[0] = 0; out[1] = 0; return; }
     float tx, ty;
     ortho_tx_ty(c, &tx, &ty);
     float h = (float)(c->vh / c->zoom);
@@ -142,6 +245,11 @@ void camera_world_y_up_to_screen_y_down(const ame_camera *c, float wx, float wy,
 
 void camera_screen_ray(const ame_camera *c, float sx, float sy,
                        float out_origin[3], float out_dir[3]) {
+    if (!cam_usable(c)) {
+        out_origin[0] = 0; out_origin[1] = 0; out_origin[2] = 0;
+        out_dir[0] = 0; out_dir[1] = 0; out_dir[2] = 0;
+        return;
+    }
     /* px -> ndc (y flipped: px space is y-down, NDC y-up) */
     float nx = (sx / (float)c->vw) * 2.0f - 1.0f;
     float ny = 1.0f - (sy / (float)c->vh) * 2.0f;
@@ -149,7 +257,7 @@ void camera_screen_ray(const ame_camera *c, float sx, float sy,
         /* analytic unprojection through the camera basis - no matrix
          * inverse involved (exact and cheap) */
         ame_v3 f = ame_v3_norm(ame_v3_sub(c->look, c->pos));
-        ame_v3 s = ame_v3_norm(ame_v3_cross(f, c->up));
+        ame_v3 s = ame_v3_norm(ame_v3_cross(f, cam_ray_up(f, c->up)));
         ame_v3 u = ame_v3_cross(s, f);
         float tan_f = tanf(c->fov_y * 0.5f);
         float aspect = c->vh > 0 ? (float)c->vw / (float)c->vh : 1.0f;

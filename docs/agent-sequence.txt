@@ -130,12 +130,38 @@ Mandatory hooks per the linker: app_init, app_event, app_loop,
 Hook definitions across the 10 app files: app_event, app_quit,
   app_resize, app_init, app_render, app_loop in all 10; app_fixed in 9;
   app_step in 1.
-Call sites a constructor migration must patch (measured):
-  camera builder chain (camera_desc/ortho2d/persp3d/viewport/pos/build)
-    101 calls in 13 files
-  rp_desc_* builder chain                           70 calls in 13 files
-  text_draw_screen / text_draw_world                29 calls in 6 files
-  rp_push_* (the S10 explicit-target migration)     68 call sites
+Call sites a constructor migration must patch. Measured on TRUNK at
+8a0b7530df, .c files, examples/ + tests/ + templates/ = "app-side"; the
++src column adds the engine's own calls, which a migration must patch too.
+camera builder chain, all twelve functions          184 app-side, 196 +src
+rp_desc_* builder chain                              67 calls in 14 files,  75 +src
+text_draw_screen / text_draw_world                   25 calls in  4 files,  29 +src
+rp_push_* (the S10 explicit-target migration)        60 calls in 11 files,  74 +src
+CORRECTION: the four figures above were 101/13, 70/13, 29/6 and 68, and
+none of the four reproduces. Two separate causes, both worth remembering:
+  (1) the searched set contained the DEFINITION file. rp_desc_* is 75 with
+      src/render.c and 67 without; text_draw is 29 with src/text.c and 25
+      without. The two src/text.c hits are definitions, but the two
+      src/debug_watch.c hits are real CALLS (the debug HUD), so "29 - 2 = 27
+      call sites" and "25 app-side" are different metrics, not one corrected
+      into the other. Say which column you mean.
+  (2) "101" named six functions while the chain has twelve; the six give 160
+      app-side / 166 +src at trunk. Nothing gives 101.
+The trailing '(' in each pattern is load-bearing: without it the camera count
+at trunk is 197, the extra hit being a COMMENT on src/camera.c's ortho_tx_ty
+call line.
+Take every count in the tree you MEAN, and name that tree - "a clean HEAD" is
+not enough, because your own branch is a clean HEAD too. The camera chain reads
+196 (+src) on trunk 8a0b7530df, and on the branch that fixes the four camera
+bugs it reads 207 after the first commit, 218 after the second, 225 after the
+third and 244 after the fourth: four correct numbers for one branch and not one
+of them trunk, because each commit adds test call sites (+46 in tests/ across
+the four) while src/ moves by only +2 - and those two are not calls at all but
+PROSE, the fixes' rationale comments naming camera_desc() and camera_zoom(),
+which a word-boundary pattern counts exactly like a call. Only the camera row
+moves this way; rp_desc_*, text_draw and rp_push_* are the same on trunk and on
+that branch, which is why three of the four figures above were already right
+and the fourth was not.
 API census. Method: the identifier immediately before the first '(' on
   each line of include/ame/*.h ending in ');' , then a word-boundary
   search of examples/, templates/, tests/, src/, tools/, benches/.
@@ -146,9 +172,22 @@ API census. Method: the identifier immediately before the first '(' on
      5 (2%) declared with NO consumer and NO test anywhere, all in
        include/ame/math.h: ame_m3_identity, ame_quat_identity,
        ame_quat_norm, ame_v2_scale, ame_v4_add
-  CORRECTION: "238 function declarations" was published in issue #6
-  before the method was pinned down. 238 is the declaration LINE count;
-  215 is the distinct-name count. Both are recorded here.
+CORRECTION: "238 function declarations" was published in issue #6
+before the method was pinned down. 238 is the declaration LINE count;
+215 is the distinct-name count. Both are recorded here.
+RE-BASED at 8a0b7530df: the same method now gives 334 declaration lines
+and 229 distinct names, because error.h, fs.h and debug_watch.h arrived
+after the count was taken. 238/215 is kept above as the historical
+figure, NOT as a gate.
+  grep -h ');$' include/ame/*.h | wc -l                       -> 334
+  grep -h ');$' include/ame/*.h | sed -E 's/\(.*//' \
+    | grep -oE '[A-Za-z_][A-Za-z0-9_]*$' | sort -u | wc -l    -> 229
+Do not gate a stage on an absolute census number. The method is prose,
+125 of those 334 lines are indented continuation lines (where "the
+identifier before the first '('" is a PARAMETER, not the function), and
+four defensible readings of it give 228 / 229 / 237 / 248 / 256. Gate
+the DELTA produced by one committed command run before and after the
+stage; that is recipe-robust, and the diff is the acceptance evidence.
 Render facts a draw-target change rests on: the batch sort key is
   pass*8192 + tex*256 + layer (src/render.c:223,243); tex and layer
   come from the push struct, pass comes from ambient S.cur_pass
@@ -613,9 +652,20 @@ SCOPE
  a) ame_cam_desc + camera_make() returning ame_camera BY VALUE: kind
     (ORTHO2D / PERSP3D), the named space from coords.txt, width/height,
     centre or eye/target. Invalid or zero fields fail loudly naming the
-    field. Replace the 101-call builder chain (camera_desc, ortho2d,
-    persp3d, viewport, pos, build) - two ways to build a camera is what
-    leanness removes, so the chain goes, in this stage, not later.
+   field. Replace the builder chain (camera_desc, ortho2d,
+   persp3d, viewport, pos, build) - two ways to build a camera is what
+   leanness removes, so the chain goes, in this stage, not later.
+   COUNT: this said "101-call"; nothing reproduces 101 at 8a0b7530df.
+   Those six names give 174 occurrences (.c, examples+tests+templates+src)
+   and 167 app-side; the full twelve-function camera chain gives 207 / 193.
+   Use the recipe, not the figure:
+     grep -rnoE '\b(camera_desc|camera_ortho2d|camera_persp3d|camera_pos|\
+   camera_look|camera_up|camera_fov_deg|camera_depth_range|camera_zoom|\
+   camera_snap|camera_viewport|camera_build)\(' --include='*.c' \
+     examples tests templates src | wc -l                     -> 207
+   The trailing '(' is load-bearing: without it the count is 208, the
+   extra hit being the COMMENT on src/camera.c's ortho_tx_ty call line.
+   Count at a clean HEAD - a branch that adds camera tests moves it.
  b) ame_rp_desc filled as a struct literal with every field named;
     rp_init validates and fails loudly naming the missing field. Remove
     the rp_desc_* builder chain (70 calls) - rp_desc_begin is a
