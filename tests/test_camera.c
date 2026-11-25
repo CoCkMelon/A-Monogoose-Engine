@@ -22,6 +22,26 @@ static float ray_miss(const ame_camera *c, ame_v3 world, float sx, float sy) {
     return ame_v3_dist(ame_v3_add(ov, ame_v3_scale(dv, t)), world);
 }
 
+/* ORACLE for camera_screen_ray's analytic path: unproject the SAME pixel through
+ * the c->vp_inv that camera_build baked and take the direction from the eye. If
+ * the analytic basis and the baked matrix ever disagree, this says so - which is
+ * exactly how the degenerate-up collapse was found. There is no m4*v4 in the
+ * public math API (the engine uploads the matrix and lets the shader transform),
+ * so the multiply is hand-rolled, column-major per ame_m4_look_at's layout. The
+ * 2D-style defaults use a NEGATIVE zn, so the NDC z=-1 plane sits behind the eye
+ * and pos - world is the forward direction. */
+static ame_v3 unproj_dir(const ame_camera *c, float sx, float sy) {
+    const float *m = c->vp_inv.m;
+    float nx = (sx / (float)c->vw) * 2.0f - 1.0f;
+    float ny = 1.0f - (sy / (float)c->vh) * 2.0f;
+    float px = m[0] * nx + m[4] * ny + m[8] * -1.0f + m[12];
+    float py = m[1] * nx + m[5] * ny + m[9] * -1.0f + m[13];
+    float pz = m[2] * nx + m[6] * ny + m[10] * -1.0f + m[14];
+    float pw = m[3] * nx + m[7] * ny + m[11] * -1.0f + m[15];
+    if (pw != 0.0f) { px /= pw; py /= pw; pz /= pw; }
+    return ame_v3_norm(ame_v3_sub(c->pos, ame_v3_(px, py, pz)));
+}
+
 int main(void) {
     printf("=== test_camera ===\n");
 
@@ -311,6 +331,69 @@ int main(void) {
         UT_ASSERTF(ame_last_error_code() == AME_ERR_OK,
                    "179 deg is inside (0, pi) and must build");
         UT_ASSERTF(isfinite(c.vp.m[5]), "179 deg produced a non-finite vp");
+    }
+
+    UT_CASE("degenerate up: the analytic ray still matches the baked vp");
+    {
+        /* ame_m4_look_at substitutes a fallback axis when forward is parallel to
+         * up (math.h:186-195), so a top-down 3D camera RENDERS - but
+         * camera_screen_ray had no matching substitution. ame_v3_norm's own zero
+         * guard (math.h:53) turned cross(f,up)==0 into s=(0,0,0), hence
+         * u=(0,0,0), hence dir=norm(f) for EVERY pixel. The frame was right,
+         * picking returned the same point everywhere, and nothing reported it.
+         * Refusing these cameras would be wrong: a top-down camera with the
+         * world-up convention is legitimate and works today, so the ray path has
+         * to mirror the header's rule instead of rejecting the input. */
+        const float px[4][2] = { { 480, 270 }, { 0, 0 }, { 960, 0 }, { 0, 540 } };
+        const char *why[4] = { "baseline, up not parallel to f",
+                               "top-down, f PARALLEL to up",
+                               "zeroed up (a descriptor that omits .up)",
+                               "top-down, up ANTIPARALLEL to f" };
+        ame_v3 pos[4], look[4], up[4];
+        pos[0] = ame_v3_(0, 0, 0);   look[0] = ame_v3_(0, 0, -1); up[0] = ame_v3_(0, 1, 0);
+        pos[1] = ame_v3_(0, 10, 0);  look[1] = ame_v3_(0, 0, 0);  up[1] = ame_v3_(0, 1, 0);
+        pos[2] = ame_v3_(0, 0, 0);   look[2] = ame_v3_(0, 0, -1); up[2] = ame_v3_(0, 0, 0);
+        pos[3] = ame_v3_(0, 10, 0);  look[3] = ame_v3_(0, 0, 0);  up[3] = ame_v3_(0, -1, 0);
+        for (int i = 0; i < 4; i++) {
+            ame_camera c;
+            camera_desc(&c);
+            camera_persp3d(&c);
+            camera_viewport(&c, 960, 540);
+            camera_pos(&c, pos[i].x, pos[i].y, pos[i].z);
+            camera_look(&c, look[i].x, look[i].y, look[i].z);
+            camera_up(&c, up[i].x, up[i].y, up[i].z);
+            ame_clear_error();
+            camera_build(&c);
+            UT_ASSERTF(ame_last_error_code() == AME_ERR_OK,
+                       "%s: a degenerate up must still BUILD (look_at substitutes)",
+                       why[i]);
+            UT_ASSERTF(isfinite(c.vp.m[0]) && isfinite(c.vp.m[5])
+                       && isfinite(c.vp_inv.m[5]),
+                       "%s: build produced a non-finite vp/vp_inv", why[i]);
+            ame_v3 centre = ame_v3_(0, 0, 0);
+            int off_centre = 0;
+            for (int p = 0; p < 4; p++) {
+                float o[3], d[3];
+                camera_screen_ray(&c, px[p][0], px[p][1], o, d);
+                UT_ASSERTF(isfinite(d[0]) && isfinite(d[1]) && isfinite(d[2]),
+                           "%s: ray dir not finite at px %g,%g",
+                           why[i], (double)px[p][0], (double)px[p][1]);
+                ame_v3 dv = ame_v3_(d[0], d[1], d[2]);
+                float agree = ame_v3_dot(dv, unproj_dir(&c, px[p][0], px[p][1]));
+                UT_ASSERTF(agree > 0.9999f,
+                           "%s: analytic ray diverges from the baked vp at px %g,%g"
+                           " (dot %g)", why[i], (double)px[p][0], (double)px[p][1],
+                           (double)agree);
+                if (p == 0) centre = dv;
+                else if (ame_v3_dist(dv, centre) > 1e-4f) off_centre++;
+            }
+            /* the collapse detector: before the fix all three off-centre pixels
+             * returned the CENTRE ray (dot 0.647, about 50 degrees off) */
+            UT_ASSERTF(off_centre == 3,
+                       "%s: rays COLLAPSED onto the view axis - only %d of 3 "
+                       "off-centre pixels differ from the centre ray",
+                       why[i], off_centre);
+        }
     }
 
     UT_OK();

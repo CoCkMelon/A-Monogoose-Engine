@@ -100,6 +100,27 @@ static bool cam_usable(const ame_camera *c) {
     return true;
 }
 
+/* camera_screen_ray must build the SAME basis ame_m4_look_at baked into c->vp.
+ * math.h:186-195 substitutes a fallback axis when forward is parallel to up -
+ * a top-down 3D camera using the world-up convention - and promises that every
+ * non-degenerate case is bit-identical. The analytic ray path had no such
+ * substitution: ame_v3_norm's own zero guard (math.h:53) turned cross(f,up)==0
+ * into s=(0,0,0), hence u=(0,0,0), hence d=norm(f) for EVERY pixel. The frame
+ * rendered correctly while picking returned the same point everywhere, with no
+ * diagnostic anywhere. Measured at 960x540 for a top-down camera (pos 0,10,0 /
+ * look origin / up 0,1,0) and for a zeroed up: the analytic dir is identical at
+ * the centre and all three corners, while unprojecting those same pixels through
+ * the baked c->vp_inv gives four distinct directions, the corners 0.647 apart
+ * (about 50 degrees). This mirrors the header's rule verbatim - same 1e-8f
+ * threshold, same fabsf(f.z) < 0.9f axis choice - so the two paths agree by
+ * construction and the non-degenerate case is untouched. */
+static ame_v3 cam_ray_up(ame_v3 f, ame_v3 up) {
+    ame_v3 cr = ame_v3_cross(f, up);
+    if (cr.x * cr.x + cr.y * cr.y + cr.z * cr.z < 1e-8f)
+        return fabsf(f.z) < 0.9f ? ame_v3_(0, 0, 1) : ame_v3_(0, 1, 0);
+    return up;
+}
+
 /* ortho2d view translation: world_y_up px -> view px is x+tx, y+ty (times
  * zoom), where view px is [0,w]x[0,h] with (0,0) at the view's LOWER-LEFT.
  * With snap on, BOTH the position and the translation are integral, so
@@ -206,7 +227,7 @@ void camera_screen_ray(const ame_camera *c, float sx, float sy,
         /* analytic unprojection through the camera basis - no matrix
          * inverse involved (exact and cheap) */
         ame_v3 f = ame_v3_norm(ame_v3_sub(c->look, c->pos));
-        ame_v3 s = ame_v3_norm(ame_v3_cross(f, c->up));
+        ame_v3 s = ame_v3_norm(ame_v3_cross(f, cam_ray_up(f, c->up)));
         ame_v3 u = ame_v3_cross(s, f);
         float tan_f = tanf(c->fov_y * 0.5f);
         float aspect = c->vh > 0 ? (float)c->vw / (float)c->vh : 1.0f;

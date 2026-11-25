@@ -133,9 +133,7 @@ Hook definitions across the 10 app files: app_event, app_quit,
 Call sites a constructor migration must patch. Measured on TRUNK at
 8a0b7530df, .c files, examples/ + tests/ + templates/ = "app-side"; the
 +src column adds the engine's own calls, which a migration must patch too.
-These are trunk numbers: a branch that adds camera tests moves them (the
-branch fixing the zoom SIGFPE adds 13 camera_* calls of its own).
-camera builder chain, all twelve functions          193 app-side, 207 +src
+camera builder chain, all twelve functions          184 app-side, 196 +src
 rp_desc_* builder chain                              67 calls in 14 files,  75 +src
 text_draw_screen / text_draw_world                   25 calls in  4 files,  29 +src
 rp_push_* (the S10 explicit-target migration)        60 calls in 11 files,  74 +src
@@ -147,13 +145,21 @@ none of the four reproduces. Two separate causes, both worth remembering:
       src/debug_watch.c hits are real CALLS (the debug HUD), so "29 - 2 = 27
       call sites" and "25 app-side" are different metrics, not one corrected
       into the other. Say which column you mean.
-  (2) "101" named six functions while the chain has twelve; the six give 167
-      app-side / 174 +src. Nothing gives 101.
+  (2) "101" named six functions while the chain has twelve; the six give 160
+      app-side / 166 +src at trunk. Nothing gives 101.
 The trailing '(' in each pattern is load-bearing: without it the camera count
-is 208, the extra hit being a COMMENT on src/camera.c's ortho_tx_ty call line.
-Take every count at a CLEAN HEAD of the tree you mean, and say which tree:
-12-fn chain is 207 (+src) on trunk 8a0b7530df and 218 on the branch that fixed
-the zoom SIGFPE, purely from that branch's own new test call sites.
+at trunk is 197, the extra hit being a COMMENT on src/camera.c's ortho_tx_ty
+call line.
+Take every count in the tree you MEAN, and name that tree - "a clean HEAD" is
+not enough, because your own branch is a clean HEAD too. The camera chain is
+196 (+src) on trunk 8a0b7530df, 207 at the commit that fixed the zoom SIGFPE
+and 225 with all three camera fixes: +27 from that branch's own new test call
+sites, and +2 that are not calls at all but PROSE - the fixes' rationale
+comments name camera_desc() and camera_zoom(), and a word-boundary pattern
+counts a comment mention exactly like a call. Only the camera row moves this
+way; rp_desc_*, text_draw and rp_push_* are the same on trunk and on that
+branch, which is why three of the four figures above were already right and
+the fourth was not.
 API census. Method: the identifier immediately before the first '(' on
   each line of include/ame/*.h ending in ');' , then a word-boundary
   search of examples/, templates/, tests/, src/, tools/, benches/.
