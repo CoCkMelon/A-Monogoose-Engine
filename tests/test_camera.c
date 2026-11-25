@@ -252,6 +252,67 @@ int main(void) {
                   && memcmp(&c.vp_inv, &good_inv, sizeof c.vp_inv) == 0);
     }
 
+    /* ame_m4_perspective computes 1.0f / tanf(fov_y * 0.5f) with no guard, so
+     * fov_y == 0 baked inf into vp and NaN into vp_inv; the analytic ray path
+     * multiplied by tanf(0) == 0 and silently collapsed every pick onto the view
+     * axis. tanf(fov/2) is also 0 at pi and NEGATIVE past it, which flips the
+     * projection's handedness rather than merely degenerating it - and a
+     * degrees/radians mixup (50.0f where 0.872665f was meant) lands at 50 rad,
+     * which the old `fov_y > 0` reading accepts. */
+    UT_CASE("perspective fov_y outside (0, pi) is refused, not baked into vp");
+    {
+        ame_camera c;
+        camera_desc(&c);
+        camera_persp3d(&c);
+        camera_viewport(&c, 1280, 720);
+        camera_pos(&c, 0.0f, 3.2f, 3.4f);
+        camera_look(&c, 0.0f, 0.0f, 0.0f);
+        camera_depth_range(&c, 0.1f, 100.0f);
+
+        /* the sane case first: 50 degrees, as examples/memory_game uses */
+        camera_fov_deg(&c, 50.0f);
+        ame_clear_error();
+        camera_build(&c);
+        UT_ASSERT(ame_last_error_code() == AME_ERR_OK);
+        UT_ASSERTF(isfinite(c.vp.m[0]) && isfinite(c.vp.m[5]) && isfinite(c.vp.m[10]),
+                   "valid fov produced a non-finite vp");
+        ame_m4 good_vp = c.vp;
+        float o[3], d[3];
+        camera_screen_ray(&c, 640.0f, 360.0f, o, d);
+        UT_ASSERTF(isfinite(d[0]) && isfinite(d[1]) && isfinite(d[2]),
+                   "valid fov produced a non-finite ray");
+
+        float bad[] = { 0.0f, -1.0f, (float)AME_PI, 50.0f, 6.2831853f };
+        const char *why[] = { "0 (inf through 1/tan)", "negative", "exactly pi",
+                              "50 RADIANS (degrees mixup)", "2 pi" };
+        for (int i = 0; i < 5; i++) {
+            c.vp = good_vp;             /* so a refused build cannot leave a stale pass */
+            c.fov_y = bad[i];
+            ame_clear_error();
+            camera_build(&c);
+            UT_ASSERTF(ame_last_error_code() == AME_ERR_INVALID_ARGUMENT,
+                       "fov_y %g (%s) was not refused", (double)bad[i], why[i]);
+            UT_ASSERTF(memcmp(&c.vp, &good_vp, sizeof c.vp) == 0,
+                       "fov_y %g (%s) overwrote vp despite being refused",
+                       (double)bad[i], why[i]);
+            ame_clear_error();
+            camera_screen_ray(&c, 640.0f, 360.0f, o, d);
+            UT_ASSERTF(ame_last_error_code() == AME_ERR_INVALID_ARGUMENT,
+                       "screen_ray accepted fov_y %g (%s)", (double)bad[i], why[i]);
+            UT_ASSERTF(d[0] == 0 && d[1] == 0 && d[2] == 0,
+                       "screen_ray left a non-zero direction for fov_y %g (%s)",
+                       (double)bad[i], why[i]);
+        }
+
+        /* the bound must not reject a legitimate wide fov: 179 degrees is legal */
+        camera_fov_deg(&c, 179.0f);
+        ame_clear_error();
+        camera_build(&c);
+        UT_ASSERTF(ame_last_error_code() == AME_ERR_OK,
+                   "179 deg is inside (0, pi) and must build");
+        UT_ASSERTF(isfinite(c.vp.m[5]), "179 deg produced a non-finite vp");
+    }
+
     UT_OK();
     return ut_done("test_camera");
 }

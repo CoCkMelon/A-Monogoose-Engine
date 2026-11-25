@@ -69,13 +69,35 @@ ame_camera *camera_viewport(ame_camera *c, int w, int h) {
  *
  * Failing loudly is the house rule (docs/errors.txt): set the error, write a
  * defined value, and let the process live so the caller can report it. */
+/* The perspective branch needs one more field: ame_m4_perspective computes
+ * 1.0f / tanf(fov_y * 0.5f) with no guard, so fov_y == 0 bakes inf into c->vp
+ * and NaN into c->vp_inv (ame_m4_inverse of an inf matrix), which then goes
+ * straight to glUniformMatrix4fv at render.c:1364. camera_screen_ray's analytic
+ * path multiplies by tanf(fov_y * 0.5f) == 0 instead, so the ray silently
+ * collapses to the view axis and every pick returns the same point.
+ *
+ * The bound is (0, pi): tanf(fov/2) == 0 at both ends, and it goes NEGATIVE past
+ * pi, which flips the handedness of the projection rather than merely degenerating
+ * it. Same reasoning as the fov_y > 0 clause in the S3 validation list, with the
+ * upper bound made explicit because a degrees/radians mixup (writing 50.0f where
+ * 0.872665f was meant) lands at 50 rad and is otherwise accepted silently.
+ *
+ * Only PERSP3D is checked, so every ortho camera - all 8 of the 9 examples - is
+ * bit-identical to before. */
 static bool cam_usable(const ame_camera *c) {
-    if (c && (c->kind == AME_CAM_ORTHO2D || c->kind == AME_CAM_PERSP3D)
-        && c->vw > 0 && c->vh > 0 && c->zoom >= 1)
-        return true;
-    ame_set_error(AME_ERR_INVALID_ARGUMENT,
-                  "camera: needs a real kind, vw/vh > 0 and zoom >= 1 to divide by");
-    return false;
+    if (!c || (c->kind != AME_CAM_ORTHO2D && c->kind != AME_CAM_PERSP3D)
+        || c->vw <= 0 || c->vh <= 0 || c->zoom < 1) {
+        ame_set_error(AME_ERR_INVALID_ARGUMENT,
+                      "camera: needs a real kind, vw/vh > 0 and zoom >= 1 to divide by");
+        return false;
+    }
+    if (c->kind == AME_CAM_PERSP3D
+        && !(c->fov_y > 0.0f && c->fov_y < (float)AME_PI)) {
+        ame_set_error(AME_ERR_INVALID_ARGUMENT,
+                      "camera: perspective fov_y must be in (0, pi) RADIANS");
+        return false;
+    }
+    return true;
 }
 
 /* ortho2d view translation: world_y_up px -> view px is x+tx, y+ty (times

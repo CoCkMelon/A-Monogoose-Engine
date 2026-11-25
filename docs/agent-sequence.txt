@@ -130,12 +130,30 @@ Mandatory hooks per the linker: app_init, app_event, app_loop,
 Hook definitions across the 10 app files: app_event, app_quit,
   app_resize, app_init, app_render, app_loop in all 10; app_fixed in 9;
   app_step in 1.
-Call sites a constructor migration must patch (measured):
-  camera builder chain (camera_desc/ortho2d/persp3d/viewport/pos/build)
-    101 calls in 13 files
-  rp_desc_* builder chain                           70 calls in 13 files
-  text_draw_screen / text_draw_world                29 calls in 6 files
-  rp_push_* (the S10 explicit-target migration)     68 call sites
+Call sites a constructor migration must patch. Measured on TRUNK at
+8a0b7530df, .c files, examples/ + tests/ + templates/ = "app-side"; the
++src column adds the engine's own calls, which a migration must patch too.
+These are trunk numbers: a branch that adds camera tests moves them (the
+branch fixing the zoom SIGFPE adds 13 camera_* calls of its own).
+camera builder chain, all twelve functions          193 app-side, 207 +src
+rp_desc_* builder chain                              67 calls in 14 files,  75 +src
+text_draw_screen / text_draw_world                   25 calls in  4 files,  29 +src
+rp_push_* (the S10 explicit-target migration)        60 calls in 11 files,  74 +src
+CORRECTION: the four figures above were 101/13, 70/13, 29/6 and 68, and
+none of the four reproduces. Two separate causes, both worth remembering:
+  (1) the searched set contained the DEFINITION file. rp_desc_* is 75 with
+      src/render.c and 67 without; text_draw is 29 with src/text.c and 25
+      without. The two src/text.c hits are definitions, but the two
+      src/debug_watch.c hits are real CALLS (the debug HUD), so "29 - 2 = 27
+      call sites" and "25 app-side" are different metrics, not one corrected
+      into the other. Say which column you mean.
+  (2) "101" named six functions while the chain has twelve; the six give 167
+      app-side / 174 +src. Nothing gives 101.
+The trailing '(' in each pattern is load-bearing: without it the camera count
+is 208, the extra hit being a COMMENT on src/camera.c's ortho_tx_ty call line.
+Take every count at a CLEAN HEAD of the tree you mean, and say which tree:
+12-fn chain is 207 (+src) on trunk 8a0b7530df and 218 on the branch that fixed
+the zoom SIGFPE, purely from that branch's own new test call sites.
 API census. Method: the identifier immediately before the first '(' on
   each line of include/ame/*.h ending in ');' , then a word-boundary
   search of examples/, templates/, tests/, src/, tools/, benches/.
