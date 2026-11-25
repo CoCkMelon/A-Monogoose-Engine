@@ -151,15 +151,17 @@ The trailing '(' in each pattern is load-bearing: without it the camera count
 at trunk is 197, the extra hit being a COMMENT on src/camera.c's ortho_tx_ty
 call line.
 Take every count in the tree you MEAN, and name that tree - "a clean HEAD" is
-not enough, because your own branch is a clean HEAD too. The camera chain is
-196 (+src) on trunk 8a0b7530df, 207 at the commit that fixed the zoom SIGFPE
-and 225 with all three camera fixes: +27 from that branch's own new test call
-sites, and +2 that are not calls at all but PROSE - the fixes' rationale
-comments name camera_desc() and camera_zoom(), and a word-boundary pattern
-counts a comment mention exactly like a call. Only the camera row moves this
-way; rp_desc_*, text_draw and rp_push_* are the same on trunk and on that
-branch, which is why three of the four figures above were already right and
-the fourth was not.
+not enough, because your own branch is a clean HEAD too. The camera chain reads
+196 (+src) on trunk 8a0b7530df, and on the branch that fixes the four camera
+bugs it reads 207 after the first commit, 218 after the second, 225 after the
+third and 244 after the fourth: four correct numbers for one branch and not one
+of them trunk, because each commit adds test call sites (+46 in tests/ across
+the four) while src/ moves by only +2 - and those two are not calls at all but
+PROSE, the fixes' rationale comments naming camera_desc() and camera_zoom(),
+which a word-boundary pattern counts exactly like a call. Only the camera row
+moves this way; rp_desc_*, text_draw and rp_push_* are the same on trunk and on
+that branch, which is why three of the four figures above were already right
+and the fourth was not.
 API census. Method: the identifier immediately before the first '(' on
   each line of include/ame/*.h ending in ');' , then a word-boundary
   search of examples/, templates/, tests/, src/, tools/, benches/.
