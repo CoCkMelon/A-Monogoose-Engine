@@ -396,6 +396,81 @@ int main(void) {
         }
     }
 
+    UT_CASE("perspective look == pos is refused; ortho is not, near-misses still build");
+    {
+        /* look == pos is the one genuinely degenerate camera rather than an omitted
+         * field. ame_v3_norm's guard (math.h:53) returns zeros, look_at builds an
+         * all-zero view matrix, and measured at 960x540 the result is a c->vp with
+         * ONE non-zero entry of 16, a vp_inv that comes back as the IDENTITY
+         * (ame_m4_inverse of a singular matrix, no diagnostic), dir=(0,0,0) from
+         * camera_screen_ray, and ame_last_error_code() == AME_ERR_OK throughout.
+         * The whole world projects to a point and nothing reports it. */
+        ame_camera c;
+        camera_desc(&c);
+        camera_persp3d(&c);
+        camera_viewport(&c, 960, 540);
+        camera_pos(&c, 1.0f, 2.0f, 3.0f);
+        camera_look(&c, 0.0f, 0.0f, -1.0f);
+        camera_fov_deg(&c, 50.0f);
+        ame_clear_error();
+        camera_build(&c);
+        UT_ASSERTF(ame_last_error_code() == AME_ERR_OK, "the sane baseline must build");
+        UT_ASSERTF(isfinite(c.vp.m[0]) && c.vp.m[0] != 0.0f, "baseline vp collapsed");
+        ame_m4 good_vp = c.vp;
+
+        const float pp[2][3] = { { 0, 0, 0 }, { 1.0f, 2.0f, 3.0f } };
+        for (int i = 0; i < 2; i++) {
+            c.vp = good_vp;         /* a refused build must not pass on a stale vp */
+            camera_pos(&c, pp[i][0], pp[i][1], pp[i][2]);
+            camera_look(&c, pp[i][0], pp[i][1], pp[i][2]);
+            ame_clear_error();
+            camera_build(&c);
+            UT_ASSERTF(ame_last_error_code() == AME_ERR_INVALID_ARGUMENT,
+                       "look == pos at (%g,%g,%g) was not refused",
+                       (double)pp[i][0], (double)pp[i][1], (double)pp[i][2]);
+            UT_ASSERTF(memcmp(&c.vp, &good_vp, sizeof c.vp) == 0,
+                       "look == pos at (%g,%g,%g) overwrote vp despite being refused",
+                       (double)pp[i][0], (double)pp[i][1], (double)pp[i][2]);
+            float o[3], d[3];
+            ame_clear_error();
+            camera_screen_ray(&c, 480.0f, 270.0f, o, d);
+            UT_ASSERTF(ame_last_error_code() == AME_ERR_INVALID_ARGUMENT,
+                       "screen_ray accepted look == pos at (%g,%g,%g)",
+                       (double)pp[i][0], (double)pp[i][1], (double)pp[i][2]);
+            UT_ASSERTF(d[0] == 0 && d[1] == 0 && d[2] == 0,
+                       "screen_ray left a non-zero direction for look == pos");
+        }
+
+        /* the threshold mirrors ame_v3_norm (l > 1e-12f) because that IS the
+         * mechanism, so near-coincident cameras stay legitimate: measured fine at
+         * 1e-1, 1e-3, 1e-5, 1e-7 and 1e-9, collapsing only at exact equality */
+        camera_look(&c, 0, 0, 0);
+        const float eps[3] = { 1e-5f, 1e-7f, 1e-9f };
+        for (int i = 0; i < 3; i++) {
+            camera_pos(&c, 0, 0, eps[i]);
+            ame_clear_error();
+            camera_build(&c);
+            UT_ASSERTF(ame_last_error_code() == AME_ERR_OK,
+                       "|look-pos| = %g is above ame_v3_norm's 1e-12f and must build",
+                       (double)eps[i]);
+            UT_ASSERTF(isfinite(c.vp.m[0]) && c.vp.m[0] != 0.0f,
+                       "|look-pos| = %g produced a collapsed vp", (double)eps[i]);
+        }
+
+        /* ortho is out of scope: camera_build's 2D branch never calls look_at, so
+         * look and up are unused and look == pos must keep building as before */
+        camera_desc(&c);
+        camera_ortho2d(&c);
+        camera_viewport(&c, 960, 540);
+        camera_pos(&c, 0, 0, 0);
+        camera_look(&c, 0, 0, 0);
+        ame_clear_error();
+        camera_build(&c);
+        UT_ASSERTF(ame_last_error_code() == AME_ERR_OK,
+                   "ORTHO2D must not be refused for look == pos (unused in 2D)");
+        UT_ASSERTF(isfinite(c.vp.m[0]) && c.vp.m[0] != 0.0f, "ORTHO2D vp collapsed");
+    }
+
     UT_OK();
     return ut_done("test_camera");
 }

@@ -82,8 +82,24 @@ ame_camera *camera_viewport(ame_camera *c, int w, int h) {
  * upper bound made explicit because a degrees/radians mixup (writing 50.0f where
  * 0.872665f was meant) lands at 50 rad and is otherwise accepted silently.
  *
+ * The view direction gets the same treatment, and it is the one case that is
+ * genuinely degenerate rather than merely omitted: with look == pos,
+ * ame_v3_norm's own guard (math.h:53, l > 1e-12f) returns (0,0,0), so look_at
+ * builds an all-zero view matrix. Measured: c->vp ends up with ONE non-zero
+ * entry out of 16, ame_m4_inverse of that singular matrix returns the IDENTITY
+ * rather than NaN, camera_screen_ray returns dir=(0,0,0), and
+ * ame_last_error_code() stays AME_ERR_OK. The whole world projects to a point,
+ * unprojecting through vp_inv says screen == world, and nothing anywhere
+ * reports it. The threshold mirrors ame_v3_norm exactly because that is the
+ * mechanism: below 1e-12f the normaliser gives up and returns zeros. Measured
+ * sweep - |look-pos| of 1e-1, 1e-3, 1e-5, 1e-7 and 1e-9 all build a correct
+ * vp[0]=0.974279 and a correct corner ray; only exact equality collapses, so no
+ * epsilon tuning is involved and no legitimate near-coincident camera is lost.
+ *
  * Only PERSP3D is checked, so every ortho camera - all 8 of the 9 examples - is
- * bit-identical to before. */
+ * bit-identical to before. Ortho never calls look_at (its view is a translate),
+ * so look/up/fov_y are unused in 2D and a 2D camera with look == pos builds
+ * vp[0]=0.00208333 vp[5]=0.0037037 exactly as before. */
 static bool cam_usable(const ame_camera *c) {
     if (!c || (c->kind != AME_CAM_ORTHO2D && c->kind != AME_CAM_PERSP3D)
         || c->vw <= 0 || c->vh <= 0 || c->zoom < 1) {
@@ -97,6 +113,20 @@ static bool cam_usable(const ame_camera *c) {
                       "camera: perspective fov_y must be in (0, pi) RADIANS");
         return false;
     }
+    if (c->kind == AME_CAM_PERSP3D
+        && ame_v3_len(ame_v3_sub(c->look, c->pos)) <= 1e-12f) {
+        ame_set_error(AME_ERR_INVALID_ARGUMENT,
+                      "camera: perspective look must differ from pos (a zero view "
+                      "direction normalises to zeros and collapses vp)");
+        return false;
+    }
+    /* up is deliberately NOT checked here. A zero or f-parallel up does not
+     * degenerate anything: ame_m4_look_at substitutes a fallback axis
+     * (math.h:186-195) and cam_ray_up mirrors it, so both paths agree and a
+     * top-down camera with the world-up convention keeps working. Rejecting
+     * `.up == 0` as an OMISSION is a descriptor rule for stage S3's
+     * camera_make(), where the caller names every field; it is not a validity
+     * rule for a camera the engine can still build correctly. */
     return true;
 }
 
